@@ -1,0 +1,20 @@
+{
+  "environment": "G1JoystickFlatTerrain",
+  "implementation": "jax",
+  "seed": 0,
+  "smoke_steps": 10,
+  "train_flags": {
+    "num_timesteps": 1000000,
+    "num_envs": 256,
+    "num_eval_envs": 8,
+    "num_evals": 3,
+    "batch_size": 64,
+    "num_minibatches": 4,
+    "unroll_length": 20,
+    "num_updates_per_batch": 4,
+    "num_videos": 1,
+    "domain_randomization": false,
+    "use_wandb": false,
+    "use_tb": false
+  }
+}

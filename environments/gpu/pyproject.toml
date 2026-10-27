@@ -1,0 +1,14 @@
+[project]
+name = "furniture-rehearsal-training"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "brax==0.14.2",
+    "jax[cuda12]==0.12.0.1",
+    "mujoco==3.17.0",
+    "mujoco-mjx==3.17.0",
+    "playground==0.2.0",
+]
+
+[tool.uv]
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
