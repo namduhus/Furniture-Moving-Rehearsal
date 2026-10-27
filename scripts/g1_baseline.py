@@ -134,12 +134,27 @@ def check_training_compatibility(summary, jax):
     summary["checks"]["brax_device_replication"] = True
 
 
+def checkpoint_parent(path):
+    """Validate the parent directory expected by Playground's checkpoint loader."""
+    path = path.resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"Checkpoint parent directory does not exist: {path}")
+    children = [child for child in path.iterdir() if child.is_dir()]
+    if not children or any(not child.name.isdigit() for child in children):
+        raise ValueError("Pass the checkpoints/ parent containing numeric step directories")
+    latest = max(children, key=lambda child: int(child.name))
+    if not (latest / "_CHECKPOINT_METADATA").is_file():
+        raise ValueError(f"Latest checkpoint is missing metadata: {latest}")
+    return path, latest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("gpu", "env", "train"), default="gpu")
     parser.add_argument("--gpu", type=int, default=1, help="Physical NVIDIA GPU index; expose only this GPU")
     parser.add_argument("--config", type=Path, default=ROOT / "configs/g1_baseline.json")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "outputs/g1")
+    parser.add_argument("--checkpoint-dir", type=Path, help="Parent containing numeric checkpoints; warm-start latest weights")
     parser.add_argument("--dry-run", action="store_true", help="Print the training command without running it")
     args = parser.parse_args()
     if args.gpu < 0:
@@ -158,6 +173,15 @@ def main():
             raise ValueError("This baseline requires the explicitly selected JAX implementation")
         if config["smoke_steps"] < 1:
             raise ValueError("smoke_steps must be positive")
+        if config.get("requires_checkpoint") and args.checkpoint_dir is None:
+            raise ValueError("This continuation configuration requires --checkpoint-dir")
+        if args.checkpoint_dir is not None:
+            if args.stage != "train":
+                raise ValueError("--checkpoint-dir requires --stage train")
+            parent, latest = checkpoint_parent(args.checkpoint_dir)
+            config["train_flags"]["load_checkpoint_path"] = str(parent)
+            summary["warm_start_checkpoint"] = str(latest)
+            summary["warm_start_scope"] = "policy, critic, observation normalization; fresh optimizer and step counter"
         (run_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
         summary["seed"] = config["seed"]
         command = train_command(config, run_dir)
