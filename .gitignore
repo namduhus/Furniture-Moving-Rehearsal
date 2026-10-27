@@ -1,0 +1,42 @@
+# Credentials and local environment files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Experiments, API response caches, and downloaded assets
+.cache/
+cache/
+logs/
+runs/
+outputs/
+checkpoints/
+wandb/
+data/
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+
+# Local editor and operating-system files
+.DS_Store
+.idea/
+.vscode/
+docs/
