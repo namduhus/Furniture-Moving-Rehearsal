@@ -119,6 +119,21 @@ def check_environment(config, run_dir, summary, jax, jp):
     summary["rendering_checked"] = False
 
 
+def check_training_compatibility(summary, jax):
+    """Check the replication API used by the pinned Brax PPO release."""
+    try:
+        replicate = jax.device_put_replicated
+    except AttributeError as error:
+        raise RuntimeError(
+            "The pinned Brax PPO needs jax.device_put_replicated, removed in JAX 0.10. "
+            "Sync the training project with the pinned JAX 0.9.2 before retrying."
+        ) from error
+    probe = jax.block_until_ready(replicate({"value": 1.0}, jax.local_devices()))
+    if probe["value"].shape != (1,) or float(probe["value"][0]) != 1.0:
+        raise RuntimeError("Brax-compatible device replication returned an unexpected result")
+    summary["checks"]["brax_device_replication"] = True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", choices=("gpu", "env", "train"), default="gpu")
@@ -167,6 +182,7 @@ def main():
         if args.stage == "env":
             check_environment(config, run_dir, summary, jax, jp)
         elif args.stage == "train":
+            check_training_compatibility(summary, jax)
             if not shutil.which("ffmpeg"):
                 raise RuntimeError("The upstream rollout video requires ffmpeg on PATH")
             summary["command"] = command
