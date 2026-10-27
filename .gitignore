@@ -39,4 +39,6 @@ models/
 .DS_Store
 .idea/
 .vscode/
+
+# Local planning references and development records
 docs/

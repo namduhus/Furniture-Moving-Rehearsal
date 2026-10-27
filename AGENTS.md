@@ -67,7 +67,7 @@ Start by briefly stating the mode that matches the user's intent. If the intent 
 ## 7. Technical Guidance
 
 - **Environments**: A local Mac for scene and reward debugging with CPU MuJoCo and for API calls; one remote A5000 for main training with MJX. Include device selection so the same code runs in both environments.
-- **Stack**: Prefer PyTorch; use JAX for MJX. Fix seeds, store configuration in files, and keep experiment logs.
+- **Stack**: Use JAX/Brax PPO as the G1 baseline, as selected by the user. Start with the MJX-JAX physics implementation on one remote A5000. Keep CPU MuJoCo for local scene debugging; compare alternative backends only using measured results. Fix seeds, store configuration in files, and keep experiment logs.
 - Put **Meta model calls** behind a single interface so models (Spark API / Glimmer / Spark Open) can be swapped. Call SAM 3.1 with one short noun phrase at a time. Masks alone do not provide real dimensions in centimeters; calibrate them explicitly using a reference object.
 - Use **click interaction** only through approach A: select an API-returned mask and calibrate scale using two points.
 - **Base performance claims only on measurements.** Do not invent numbers.
@@ -87,6 +87,8 @@ Start by briefly stating the mode that matches the user's intent. If the intent 
 
 - **Always respond to the user in Korean and lead with the conclusion.** Ask questions only when necessary, one at a time.
 - Write code identifiers, comments, commit messages, and the README in **English** for the judges.
+- Record development progress, experiment results, failures, decisions, and next steps in `docs/record/YYYY-MM-DD.md`, using Korea Standard Time for the date. Update the same day's record as work continues. Keep the README focused on the project overview, setup and usage, contribution attribution, and licenses; do not use it as a progress log.
+- Keep all of `docs/` local and ignored by Git. In the README's documentation section, link only to `AGENTS.md`; do not link to or advertise private planning references or development records.
 - At the end of a task, summarize in three lines: what was done / what remains / next options.
 - Do not hide failures. Report unsuccessful work with logs.
 - Put long or repetitive deliverables in files instead of pasting them into the conversation.

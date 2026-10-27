@@ -1,0 +1,11 @@
+{
+  "scene": "assets/scenes/smoke.xml",
+  "seed": 0,
+  "timestep_s": 0.002,
+  "steps": 1000,
+  "width": 640,
+  "height": 480,
+  "camera": "overview",
+  "height_tolerance_m": 0.01,
+  "velocity_tolerance": 0.01
+}
