@@ -143,8 +143,8 @@ def gpu_check(config: dict, directory: Path) -> dict:
 def g1_check(config: dict, directory: Path) -> None:
     recording = config.get("recording")
     encoder = require_ffmpeg(directory) if recording is not None else None
-    observation = config.get("observation")
-    observer = ObservationPublisher(directory, observation["max_fps"]) if observation else None
+    observation_config = config.get("observation")
+    observer = ObservationPublisher(directory, observation_config["max_fps"]) if observation_config else None
     import torch
     import warp as wp
 
@@ -214,8 +214,8 @@ def g1_check(config: dict, directory: Path) -> None:
                                  "enable_cameras": True, "kit_args": "--allow-root"}):
         env = gym.make(config["task"], cfg=cfg)
         try:
-            observation, _ = env.reset(seed=config["seed"])
-            check_finite(observation)
+            observations, _ = env.reset(seed=config["seed"])
+            check_finite(observations)
             backend = env.unwrapped.sim.physics_manager
             if not backend.__module__.startswith("isaaclab_physx."):
                 raise RuntimeError("The running physics manager is not Isaac Sim PhysX")
@@ -251,8 +251,8 @@ def g1_check(config: dict, directory: Path) -> None:
             rollout_started = time.monotonic()
             with (directory / "trajectory.jsonl").open("w") as trajectory:
                 for step in range(config["steps"]):
-                    observation, reward, terminated, truncated, _ = env.step(actions)
-                    check_finite(observation)
+                    observations, reward, terminated, truncated, _ = env.step(actions)
+                    check_finite(observations)
                     check_finite(reward)
                     check_finite(robot.data.joint_pos)
                     root_state = tensor(robot.data.root_state_w)
@@ -277,7 +277,7 @@ def g1_check(config: dict, directory: Path) -> None:
                             frame_count += 1
                     trajectory.write(json.dumps(record) + "\n")
                     evidence["steps_completed"] = step + 1
-                    if observation and observation["realtime_pacing"]:
+                    if observation_config and observation_config["realtime_pacing"]:
                         # Observation-only pacing; do not use this run for throughput claims.
                         time.sleep(max(0, rollout_started + (step + 1) * control_dt - time.monotonic()))
             torch.cuda.synchronize()
@@ -302,7 +302,7 @@ def g1_check(config: dict, directory: Path) -> None:
             if observer is not None:
                 evidence["observation"] = {"frames_published": observer.sequence,
                                             "preview_disabled": observer.disabled,
-                                            "realtime_pacing": observation["realtime_pacing"]}
+                                            "realtime_pacing": observation_config["realtime_pacing"]}
         finally:
             if observer is not None:
                 observer.phase("closing")
@@ -423,7 +423,8 @@ def main(argv: list[str] | None = None) -> int:
             worker = directory / f"{stage}-worker.json"
             evidence = json.loads(worker.read_text()) if worker.exists() else {}
             if code != 0:
-                raise RuntimeError(f"{stage} failed (exit {code}); inspect {stage}.log and worker evidence")
+                cause = f": {evidence['error']}" if evidence.get("error") else ""
+                raise RuntimeError(f"{stage} failed (exit {code}){cause}; inspect {stage}.log and worker evidence")
             validate_evidence(stage, evidence, directory, config)
             summary["stages"][stage] = "passed"
             write_json(directory / "summary.json", summary)
@@ -438,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     except BaseException as error:
         summary["status"] = "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
         summary["error_type"] = type(error).__name__
+        summary["error"] = str(error)
         (directory / "error.log").write_text(traceback.format_exc())
         raise
     finally:
