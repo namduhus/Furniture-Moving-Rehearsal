@@ -1,0 +1,21 @@
+{
+  "app_name": "fmr-ssh-dev",
+  "volume_name": "fmr-dev-workspace-v2",
+  "image": "ubuntu:24.04",
+  "python_version": "3.12",
+  "modal_version": "1.6.3",
+  "uv_version": "0.11.7",
+  "gpu": "L40S",
+  "cpu": 2,
+  "memory_mib": 8192,
+  "session_seconds": 600,
+  "cleanup_seconds": 60,
+  "startup_seconds": 90,
+  "commit_interval_seconds": 30,
+  "rates_reviewed": "2026-10-29",
+  "rates_usd_per_second": {
+    "gpu": 0.000542,
+    "cpu_core": 0.0000131,
+    "memory_gib": 0.00000222
+  }
+}

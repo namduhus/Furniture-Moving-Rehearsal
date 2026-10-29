@@ -1,0 +1,24 @@
+{
+  "isaaclab_commit": "e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4",
+  "isaaclab_lock_sha256": "2d39902630e1424ce00093d0576a2689b3606572f8b9a531330a8d8abeb1eb60",
+  "runtime_path": "/opt/isaaclab",
+  "isaaclab_release": "v3.0.0",
+  "minimum_driver": "595.58.03",
+  "versions": {
+    "isaaclab": "28.0.0",
+    "isaacsim": "6.2.0.0",
+    "torch": "2.11.0",
+    "torchvision": "0.26.0",
+    "rsl-rl-lib": "5.5.1",
+    "warp-lang": "1.17.0"
+  },
+  "torch_cuda": "13.0",
+  "task": "Isaac-Velocity-Flat-G1",
+  "physics": "isaacsim_physx",
+  "device": "cuda:0",
+  "num_envs": 1,
+  "seed": 0,
+  "steps": 64,
+  "camera": {"width": 192, "height": 128},
+  "stage_timeout_seconds": 600
+}
