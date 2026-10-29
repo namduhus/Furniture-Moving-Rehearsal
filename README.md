@@ -76,6 +76,27 @@ The second stage explicitly selects **`physics=isaacsim_physx`**, loads **`Isaac
 
 Each stage runs in a separate subprocess with a ten-minute timeout covering startup, execution and shutdown; a timeout terminates its process group. Results go to this checkout's `outputs/isaac/<run-id>/`, regardless of the shell's current working directory. With a checkout at `/workspace/repo/Furniture-Moving-Rehearsal`, the full path is `/workspace/repo/Furniture-Moving-Rehearsal/outputs/isaac/<run-id>/`. Override it explicitly with `--output-root` when needed. Existing runs under `/workspace/outputs/isaac` are not moved or deleted. Artifacts include `summary.json`, configuration/version records, GPU/Vulkan logs, per-stage stdout/error logs, `trajectory.jsonl`, `initial.png` and `final.png`. Only `passed_g1_smoke` plus inspection of the artifacts establishes this preflight's success. Empty/partial evidence or a failed shutdown cannot pass. Use `fmr-save` and `fmr-stop` after the check. Review each run's logs and images before proceeding to locomotion or manipulation; smoke-check success does not establish task performance.
 
+### Inspect the G1 manipulation asset
+
+The separate [asset profile](configs/isaac_g1_asset.json) selects Isaac Lab's existing `G1_29DOF_CFG` as a candidate for pretrained whole-body control. It expects 29 body joints and 14 three-finger-hand joints, matching the joint names in the [pinned GR00T-WBC robot description](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/control/robot_model/model_data/g1/g1_29dof_with_hand.urdf). The profile references the controller's 15-action / 516-observation contract; it does not download or run controller weights. A matching name or joint count does not establish matching axes, dynamics or policy compatibility.
+
+Inspect the plan locally using Python 3.12:
+
+```sh
+uv run --locked python scripts/isaac_g1_asset.py --dry-run
+```
+
+After pulling the code in an existing Isaac session, run from the remote project root:
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_asset.py
+fmr-save
+```
+
+This uses the existing runtime image and starts no additional Modal session. Isaac may fetch its referenced USD assets on first use. The command checks the existing pinned runtime, CUDA and Vulkan, initializes one candidate robot in PhysX, and records its actual joint names/order, limits, default positions, actuator settings, root-pose configuration and floating-base status. It requests no control rollout, policy inference or training. Each subprocess has a ten-minute limit; the existing Modal session deadline and compute charges still apply.
+
+Artifacts appear under `outputs/isaac/<run-id>-asset/`. Inspect `asset-inventory.json`, `asset-worker.json`, stage logs and `summary.json`. A fixed base, disabled gravity, different joint set, invalid limits or non-CUDA state fails the check; no alternative asset is silently substituted. `passed_asset_inventory` means structural inspection only. Balance, walking, contact behavior and pretrained-controller execution require separate validation. Use `fmr-stop` when finished; command completion does not release the GPU.
+
 ### Record a G1 motion check
 
 The separate [recording profile](configs/isaac_record.json) uses one environment, seed 0, zero actions, a 640 x 360 camera and 500 environment steps. It captures every two steps. At this task's 0.02 s control step, that produces 250 frames at 25 FPS covering 10 simulated seconds. Video timing comes from the actual environment step size, not wall-clock execution speed. This is a recording/runtime check, not a trained walking policy.
@@ -216,6 +237,8 @@ Keep this table current in the same commit as each new module or third-party add
 | Modal SSH launcher and offline checks | Created during the hackathon | Bounded development sessions, public-key validation, pinned host-key configuration, persistent workspace, save/stop helpers and local duplicate-session guard | [Launcher](scripts/modal_dev.py), [configuration](configs/modal_dev.json), [environment](environments/modal/pyproject.toml), [checks](tests/test_modal_dev.py) |
 | Isaac runtime profile, G1 preflight and recording | Created during the hackathon | Pinned source/lock verification, OS shared-library/build-cache guards, CUDA/graphics guards, bounded PhysX execution, frame/state timing, MP4 verification and shutdown checks | [Profile](configs/modal_isaac.json), [smoke configuration](configs/isaac_smoke.json), [recording configuration](configs/isaac_record.json), [preflight](scripts/isaac_preflight.py), [video verification](scripts/isaac_video.py), [preflight checks](tests/test_isaac_preflight.py), [control-flow checks](tests/test_isaac_g1_loop.py), [video checks](tests/test_isaac_video.py) |
 | Browser motion observer | Created during the hackathon | Latest-frame/state publication, read-only loopback MJPEG viewer, lifecycle/freshness labels, reconnect handling and observation-only pacing | [Observation profile](configs/isaac_observe.json), [viewer](scripts/isaac_observe.py), [HTTP/state checks](tests/test_isaac_observe.py) |
+| G1 manipulation-asset inventory | Created during the hackathon | Separate floating-base candidate profile, explicit joint-order mapping, finite state/limit guards, bounded inventory subprocess and evidence validation | [Profile](configs/isaac_g1_asset.json), [script](scripts/isaac_g1_asset.py), [checks](tests/test_isaac_g1_asset.py) |
+| GR00T-WBC reference joint and observation schema | Third-party reference metadata | Identify the reviewed G1 body/hand layout and future controller interface; no controller code or weights are bundled | [Pinned NVIDIA source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), upstream source/asset notices apply; separately obtained weights require their NVIDIA Open Model License |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
 | Modal SDK, Ubuntu, X.Org libXt, OpenSSH, Git and uv | Third-party software and services | Cloud execution, base OS/shared libraries, SSH access, version control and Python environment management | Official sources and license notices linked above |
