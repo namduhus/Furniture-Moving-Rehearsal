@@ -368,7 +368,17 @@ def create_app(config: dict):
             "OMNI_KIT_ACCEPT_EULA": "yes", "ISAACSIM_ACCEPT_EULA": "Y",
             "NVIDIA_DRIVER_CAPABILITIES": "all", "MUJOCO_GL": "disable",
             "XDG_CACHE_HOME": "/opt/fmr-build-cache", "UV_HTTP_TIMEOUT": "120",
-        }).run_commands(*runtime_build_commands(config)))
+        }).run_commands(*runtime_build_commands(config))
+        # Keep the validated upstream install layer reusable for OS-library/video tools.
+        .apt_install("libxt6t64", "ffmpeg")
+        .run_commands(
+            "python3 -c 'import ctypes; ctypes.CDLL(\"libXt.so.6\"); "
+            "print(\"libXt.so.6 load check passed\")'",
+            "ffmpeg -hide_banner -loglevel error -nostdin -f lavfi "
+            "-i testsrc2=size=16x16:rate=2 -frames:v 2 -c:v libx264 "
+            "-threads 2 -pix_fmt yuv420p -f null -",
+            mountpoint_check_command("/workspace"),
+        ))
     volume = modal.Volume.from_name(config["volume_name"], create_if_missing=True, version=2)
     app = modal.App(config["app_name"])
     function = app.function(

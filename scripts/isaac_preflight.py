@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from fractions import Fraction
 import hashlib
 import importlib.metadata
 import json
+import math
 from pathlib import Path
 import platform
 import re
@@ -16,9 +18,12 @@ import subprocess
 import sys
 import traceback
 
+from isaac_video import encode_recording, require_ffmpeg, validate_recording
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs/isaac_smoke.json"
+DEFAULT_OUTPUT_ROOT = ROOT / "outputs/isaac"
 
 
 def load_config(path: Path) -> dict:
@@ -27,7 +32,20 @@ def load_config(path: Path) -> dict:
         raise ValueError("This preflight requires Isaac Sim PhysX on CUDA device 0")
     if config["num_envs"] != 1:
         raise ValueError("The first G1 smoke check uses exactly one environment")
-    for key, limit in (("steps", 256), ("stage_timeout_seconds", 1200)):
+    recording = config.get("recording")
+    if recording is not None:
+        if not isinstance(recording, dict):
+            raise ValueError("Invalid recording configuration")
+        stride = recording.get("capture_every_steps")
+        if type(stride) is not int or not 1 <= stride <= 20:
+            raise ValueError("Invalid recording capture interval")
+        steps = config["steps"]
+        if type(steps) is not int or steps % stride or not 2 <= steps // stride <= 500:
+            raise ValueError("Recording needs 2-500 frames and a whole number of capture intervals")
+        if any(config["camera"][key] % 2 for key in ("width", "height")):
+            raise ValueError("MP4 recording needs even camera dimensions")
+    for key, limit in (("steps", 1000 if recording is not None else 256),
+                       ("stage_timeout_seconds", 1200)):
         if type(config[key]) is not int or not 1 <= config[key] <= limit:
             raise ValueError(f"Invalid {key}")
     for key in ("width", "height"):
@@ -112,6 +130,8 @@ def gpu_check(config: dict, directory: Path) -> dict:
 
 
 def g1_check(config: dict, directory: Path) -> None:
+    recording = config.get("recording")
+    encoder = require_ffmpeg(directory) if recording is not None else None
     import torch
     import warp as wp
 
@@ -124,7 +144,7 @@ def g1_check(config: dict, directory: Path) -> None:
     import gymnasium as gym
     import isaaclab_tasks  # noqa: F401: register the pinned release's task IDs
     from isaaclab_tasks.utils import parse_env_cfg
-    from PIL import Image
+    from PIL import Image, ImageDraw
 
     torch.manual_seed(config["seed"])
     cfg = parse_env_cfg(config["task"], device=config["device"], num_envs=1,
@@ -156,14 +176,22 @@ def g1_check(config: dict, directory: Path) -> None:
                 if not torch.isfinite(value).all().item():
                     raise RuntimeError("Non-finite G1 state, observation or reward")
 
-    def save_frame(camera, filename: str):
+    def save_frame(camera, filename: str, caption: str | None = None):
         rgb = tensor(camera.data.output["rgb"])[0, :, :, :3].detach().cpu().numpy()
         if rgb.shape != (config["camera"]["height"], config["camera"]["width"], 3):
             raise RuntimeError("Unexpected camera frame shape")
-        if float(rgb.std()) < 1.0:
+        deviation = float(rgb.std())
+        if not math.isfinite(deviation) or deviation < 1.0:
             raise RuntimeError("Rendered frame is blank or near-uniform")
-        Image.fromarray(rgb.astype("uint8")).save(directory / filename)
-        return {"shape": list(rgb.shape), "std": float(rgb.std())}
+        pixels = rgb.astype("uint8")
+        raw_hash = hashlib.sha256(pixels.tobytes()).hexdigest()
+        image = Image.fromarray(pixels)
+        if caption is not None:
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((0, 0, image.width, 22), fill="black")
+            draw.text((6, 4), caption, fill="white")
+        image.save(directory / filename)
+        return {"shape": list(rgb.shape), "std": deviation, "raw_sha256": raw_hash}
 
     # The selected physics and camera explicitly require Kit; no Newton fallback.
     with launch_simulation(cfg, {"device": "cuda:0", "visualizer": [],
@@ -180,6 +208,17 @@ def g1_check(config: dict, directory: Path) -> None:
             if not tensor(robot.data.joint_pos).is_cuda:
                 raise RuntimeError("Robot joint state is not on CUDA")
             camera = env.unwrapped.scene["fmr_camera"]
+            control_dt = float(env.unwrapped.step_dt)
+            if not math.isfinite(control_dt) or control_dt <= 0:
+                raise RuntimeError("Invalid environment control time step")
+            evidence["control_dt_seconds"] = control_dt
+            evidence["action_mode"] = "zero_action_runtime_check"
+            stride = recording["capture_every_steps"] if recording is not None else 0
+            fps = 1 / (Fraction(str(control_dt)) * stride) if stride else None
+            frame_count = 0
+            raw_frame_hashes = set()
+            if recording is not None:
+                (directory / "frames").mkdir()
             camera.set_world_poses_from_view(
                 torch.tensor([[2.5, 2.5, 1.7]], device="cuda:0"),
                 torch.tensor([[0.0, 0.0, 0.7]], device="cuda:0"),
@@ -199,9 +238,22 @@ def g1_check(config: dict, directory: Path) -> None:
                     root_state = tensor(robot.data.root_state_w)
                     check_finite(root_state)
                     resets += int(torch.logical_or(terminated, truncated).sum().item())
-                    trajectory.write(json.dumps({"step": step + 1,
+                    record = {"step": step + 1, "sim_time_seconds": (step + 1) * control_dt,
                         "root_state": root_state.detach().cpu().tolist(),
-                        "reward": reward.detach().cpu().tolist(), "resets_total": resets}) + "\n")
+                        "reward": reward.detach().cpu().tolist(), "resets_total": resets,
+                        "reset_this_step": bool(torch.logical_or(terminated, truncated).any().item())}
+                    if recording is not None:
+                        record.update({"video_frame_index": None, "video_time_seconds": None})
+                        if (step + 1) % stride == 0:
+                            env.unwrapped.sim.render()
+                            camera.update(cfg.sim.dt, force_recompute=True)
+                            info = save_frame(camera, f"frames/{frame_count:06d}.png",
+                                f"ZERO ACTION | step {step + 1} | t={(step + 1) * control_dt:.2f}s | resets {resets}")
+                            raw_frame_hashes.add(info["raw_sha256"])
+                            record.update({"video_frame_index": frame_count,
+                                           "video_time_seconds": frame_count / float(fps)})
+                            frame_count += 1
+                    trajectory.write(json.dumps(record) + "\n")
                     evidence["steps_completed"] = step + 1
             torch.cuda.synchronize()
             for _ in range(4):
@@ -210,6 +262,14 @@ def g1_check(config: dict, directory: Path) -> None:
             evidence["final_frame"] = save_frame(camera, "final.png")
             evidence["resets"] = resets
             evidence["interpretation"] = "Zero actions validate runtime/finite states, not learned walking."
+            if recording is not None:
+                if len(raw_frame_hashes) < 2:
+                    raise RuntimeError("Camera scene did not change before adding video captions")
+                video = encode_recording(directory, binary=encoder, count=frame_count, fps=fps,
+                                         width=config["camera"]["width"], height=config["camera"]["height"])
+                video["unique_source_frames"] = len(raw_frame_hashes)
+                write_json(directory / "video.json", video)
+                evidence["video"] = video
         finally:
             env.close()
         # Kit may exit from its close method. Parent still requires a clean process exit.
@@ -275,6 +335,8 @@ def validate_evidence(stage: str, evidence: dict, directory: Path, config: dict)
         with (directory / "trajectory.jsonl").open() as trajectory:
             if sum(1 for _ in trajectory) != config["steps"]:
                 raise RuntimeError("Incomplete G1 trajectory evidence")
+        if config.get("recording") is not None:
+            validate_recording(directory, config, evidence)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -282,14 +344,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--stage", choices=("all", "gpu", "g1"), default="all")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--output-root", type=Path, default=Path("/workspace/outputs/isaac"))
+    parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    output_root = args.output_root.expanduser().resolve()
     if args.dry_run:
         print(json.dumps({"status": "local_plan_only", "config": config,
-                          "stages": ["gpu", "g1"] if args.stage == "all" else [args.stage]}, indent=2))
+                          "output_root": str(output_root),
+                          "stages": ["gpu", "g1"] if args.stage in ("all", "g1") else ["gpu"]}, indent=2))
         return 0
     if args.worker:
         if args.stage == "all" or args.run_dir is None:
@@ -297,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_worker(args.stage, config, args.run_dir)
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         raise RuntimeError("Use --dry-run on Mac; execute inside the Modal Isaac image")
-    directory = args.output_root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    directory = output_root / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     directory.mkdir(parents=True)
     write_json(directory / "config.json", config)
     summary = {"status": "running", "stages": {}, "run_dir": str(directory)}
@@ -317,7 +381,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_evidence(stage, evidence, directory, config)
             summary["stages"][stage] = "passed"
             write_json(directory / "summary.json", summary)
-        summary["status"] = "passed_g1_smoke" if "g1" in stages else "passed_gpu_graphics_smoke"
+        summary["status"] = (("passed_g1_recording" if config.get("recording") is not None
+                              else "passed_g1_smoke") if "g1" in stages else "passed_gpu_graphics_smoke")
         return 0
     except BaseException as error:
         summary["status"] = "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"

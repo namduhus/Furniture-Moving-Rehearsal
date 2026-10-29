@@ -12,6 +12,7 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 
 
 def load_module(name, path):
@@ -97,6 +98,29 @@ class IsaacPreflightTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertEqual(json.loads(result.stdout)["status"], "local_plan_only")
 
+    def test_recording_plan_outputs_belong_to_the_project_from_any_working_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/isaac_preflight.py"), "--dry-run", "--stage", "g1",
+                 "--config", str(ROOT / "configs/isaac_record.json")],
+                cwd=directory, capture_output=True, text=True, check=True,
+            )
+        plan = json.loads(result.stdout)
+        self.assertEqual(Path(plan["output_root"]), ROOT / "outputs/isaac")
+        self.assertEqual(plan["stages"], ["gpu", "g1"])
+        self.assertEqual(plan["config"]["steps"], 500)
+
+    def test_recording_rejects_partial_intervals_excess_frames_and_odd_dimensions(self):
+        original = json.loads((ROOT / "configs/isaac_record.json").read_text())
+        for change in ({"steps": 501}, {"steps": 2000},
+                       {"recording": {"capture_every_steps": 0}},
+                       {"camera": {"width": 639, "height": 360}}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.json"
+                path.write_text(json.dumps({**original, **change}))
+                with self.assertRaises(ValueError):
+                    preflight.load_config(path)
+
     def test_source_and_lock_pins_match_the_runtime_and_probe(self):
         image = launcher.load_config(ROOT / "configs/modal_isaac.json")
         smoke = preflight.load_config(preflight.DEFAULT_CONFIG)
@@ -144,6 +168,21 @@ class IsaacPreflightTests(unittest.TestCase):
         self.assertEqual(runtime_env["XDG_CACHE_HOME"], "/workspace/.cache")
         self.assertEqual(runtime_env["UV_CACHE_DIR"], "/workspace/.cache/uv")
         self.assertIn("/workspace", app.function.call_args.kwargs["volumes"])
+        calls = image.method_calls
+        upstream_install = next(i for i, call in enumerate(calls)
+                                if call[0] == "run_commands")
+        libxt_install = next(i for i, call in enumerate(calls)
+                             if call[0] == "apt_install" and "libxt6t64" in call.args)
+        self.assertGreater(libxt_install, upstream_install)
+        self.assertIn("ffmpeg", calls[libxt_install].args)
+        final_checks = image.run_commands.call_args.args
+        self.assertIn('ctypes.CDLL("libXt.so.6")', final_checks[0])
+        self.assertIn("-c:v libx264", final_checks[1])
+        self.assertEqual(final_checks[-1], launcher.mountpoint_check_command("/workspace"))
+        for command in final_checks:
+            self.assertNotIn("\n", command)
+            syntax = subprocess.run(["sh", "-n", "-c", command], capture_output=True, text=True)
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
     def test_mount_guard_rejects_nonempty_directory_without_deleting_files(self):
         with tempfile.TemporaryDirectory(prefix="fmr-mount with spaces-") as directory:
