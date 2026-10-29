@@ -33,13 +33,15 @@ uv run --locked python -m mujoco.viewer --mjcf=assets/scenes/smoke.xml
 
 ## Isaac deployment target
 
-The selected stack is Isaac Sim / Isaac Lab with RSL-RL PPO and PyTorch, running on **Modal L40S**. Glimmer inference also targets Modal. Select compatible releases against the actual Modal worker and validate headless graphics and Isaac startup before training. A working CUDA probe alone does not validate Isaac graphics. The MuJoCo and JAX/Brax workflows below remain reference tools; the Isaac runtime has not yet been validated.
+The selected stack is Isaac Sim / Isaac Lab with RSL-RL PPO and PyTorch, running on **Modal L40S**. Glimmer inference also targets Modal. Select compatible releases against the actual Modal worker and validate headless graphics and Isaac startup before training. A working CUDA probe alone does not validate Isaac graphics. The local MuJoCo smoke check and archived JAX/Brax source remain reference tools; the Isaac runtime has not yet been validated.
 
 ## Isaac runtime profile and G1 smoke check
 
 The prepared runtime follows the official [Isaac Lab v3.0.0 release](https://github.com/isaac-sim/IsaacLab/releases/tag/v3.0.0): **Isaac Sim 6.2.0.0, Python 3.12, PyTorch 2.11.0 CUDA 13.0, Torchvision 0.26.0, RSL-RL 5.5.1 and Warp 1.17.0**. The source checkout is pinned to commit `e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4`. The image verifies its upstream `uv.lock` SHA-256 and uses `uv sync --frozen --extra isaacsim --extra rsl-rl`. Dependencies are installed during the image build, before the interactive GPU session starts. No GPU is requested for image build steps. The upstream dependency-install command is limited to 30 minutes; build, provisioning and first-launch timings have not been measured here.
 
 This is a source-checkout installation using the release's complete dependency graph and overrides. Its internal `isaaclab` workspace distribution reports version **28.0.0**, distinct from the public release tag **v3.0.0**; the preflight checks both source identity and distribution versions. Do not combine a different package-index wheel with this checkout. See the [versioned installation guide](https://isaac-sim.github.io/IsaacLab/v3.0.0/source/isaaclab/installation.html).
+
+Image-build caches stay under `/opt/fmr-build-cache`. The `/workspace` mountpoint must remain empty in the image; a final build check rejects existing image files there without deleting them. Only the running Function and SSH sessions use `/workspace/.cache`, after the persistent Volume has been mounted. Keep build-time cache paths separate when editing this image. Build-check commands occupy one physical Dockerfile `RUN` line; shell quoting alone does not make embedded newlines valid Dockerfile syntax.
 
 Inspect both plans on your Mac without GPU calls:
 
@@ -112,50 +114,17 @@ The persistent v2 Volume is named `fmr-dev-workspace-v2`. Files under `/workspac
 
 Each launch writes `summary.json`, `events.jsonl`, `ssh_config` and `known_hosts` under a unique `outputs/modal/` directory. Server logs live in `/workspace/.fmr/`. A local file lock prevents duplicate launchers from the same checkout, and each App allows one container. This is not a workspace-wide or cross-machine concurrency lock; do not launch competing sessions against the same Volume. No training, model download, persistent deployment or automatic retry loop is started by this launcher.
 
+On a local or remote failure the launcher also saves `error.log` and, when an App ID is available, prints a read-only `modal app logs` command. An empty `RemoteError` alone does not identify the underlying failure: use the runner's App logs, which can report container setup errors before any SSH event is emitted.
+
 Run the offline checks with:
 
 ```sh
 uv run --project environments/modal --locked python -m unittest discover -s tests -v
 ```
 
-## Reference GPU JAX/Brax workflow
+## Archived G1 baseline
 
-Run these commands from the cloned repository root on Linux x86_64. The training environment is a separate uv project in `environments/gpu/`; the root project is for local CPU MuJoCo. Both use the scripts and configurations in this repository.
-
-The training project uses the JAX CUDA 12 wheels with their CUDA/cuDNN runtime dependencies. JAX's documented minimum Linux driver for CUDA 12 is 525; CUDA 13 requires 580 or newer. See the [JAX installation guide](https://docs.jax.dev/en/latest/installation.html). Runtime GPU compatibility is checked by the preflight rather than inferred from `nvidia-smi` alone.
-
-Install the environment:
-
-```sh
-uv sync --project environments/gpu --no-build --default-index https://pypi.org/simple
-```
-
-The first sync generates `environments/gpu/uv.lock`; retain that file with the training environment. Once it exists, use `uv sync --project environments/gpu --locked --no-build` for subsequent installations. The root `uv.lock` belongs to the local CPU project.
-
-Check GPU computation, then G1 loading and physics steps:
-
-```sh
-env -u LD_LIBRARY_PATH uv run --project environments/gpu --locked python scripts/g1_baseline.py --stage gpu --gpu 1
-env -u LD_LIBRARY_PATH uv run --project environments/gpu --locked python scripts/g1_baseline.py --stage env --gpu 1
-```
-
-Change `--gpu` to the physical GPU index assigned to the run. The script exposes only that GPU before importing JAX, so it appears as logical device 0. Removing `LD_LIBRARY_PATH` applies only to the command and prevents a local CUDA installation from overriding wheel-provided libraries. Results and errors go into a unique directory under `outputs/g1/`. The environment stage uses zero actions to check compilation and finite physics states; it does not demonstrate walking or check rendering. The first G1 load downloads Menagerie assets using Git and needs GitHub access.
-
-Inspect the PPO pilot command without launching it:
-
-```sh
-uv run python scripts/g1_baseline.py --stage train --dry-run
-```
-
-After the GPU and environment checks pass, launch the pilot:
-
-```sh
-env -u LD_LIBRARY_PATH uv run --project environments/gpu --locked python scripts/g1_baseline.py --stage train --gpu 1
-```
-
-The pilot uses [configs/g1_baseline.json](configs/g1_baseline.json): JAX/Brax PPO, `G1JoystickFlatTerrain`, seed 0, 256 environments, and 1 million requested environment steps. These are initial validation settings, not a claim of sufficient training or a measured memory fit. The upstream training process requires `ffmpeg` on `PATH` and EGL rendering support to save its rollout video. Its log, checkpoints, and video are placed under the run's `training/` directory. `pilot_process_completed` means the upstream process exited successfully; inspect the rollout and evaluation results before claiming successful walking.
-
-For a 10-million-step continuation experiment, use `--stage train --config configs/g1_continue_10m.json --checkpoint-dir <checkpoint-parent>`. The checkpoint parent must contain the numeric step directories; the latest is selected by the upstream loader. Restoring a checkpoint warm-starts the policy, critic, and observation-normalization statistics with a fresh optimizer and step counter. The requested step budget applies to the new run. This configuration requires a checkpoint, retains the pilot's PPO and environment settings, evaluates about every million steps, and enables TensorBoard event logging through the upstream TensorBoardX dependency.
+The earlier [G1 launcher](scripts/g1_baseline.py), [pilot configuration](configs/g1_baseline.json) and [continuation configuration](configs/g1_continue_10m.json) remain as reference source for the MuJoCo Playground/JAX/Brax experiments. Their dedicated GPU environment has been retired and is no longer supplied by this checkout. Use the Modal Isaac profile above for the current GPU workflow. The root project continues to support the local CPU MuJoCo smoke check.
 
 ## Dependencies and licenses
 
@@ -163,7 +132,7 @@ Google DeepMind maintains the canonical [`mujoco` PyPI package](https://pypi.org
 
 Transitive package licenses: absl-py and etils (Apache-2.0), fsspec and websockets (BSD-3-Clause), glfw and zipp (MIT), PyOpenGL (BSD), typing-extensions (PSF-2.0), and NumPy (BSD-3-Clause, 0BSD, MIT, Zlib, and CC0-1.0). Retain the installed distributions' bundled license notices when redistributing their binaries.
 
-The training project pins JAX 0.9.2, Brax 0.14.2, MuJoCo/MJX 3.17.0, and MuJoCo Playground 0.2.0 from official PyPI distributions. Brax 0.14.2 uses a replication API removed in JAX 0.10; retain the compatible JAX pin and resolved Flax dependency in the training lock. [JAX](https://github.com/jax-ml/jax), [Brax](https://github.com/google/brax), [MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx), and [Playground](https://github.com/google-deepmind/mujoco_playground) use Apache-2.0. Use Brax's maintained training library with Playground environments. The [Menagerie G1 model](https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1) has a separate BSD-3-Clause license. CUDA/cuDNN wheels and the system `ffmpeg` distribution retain their own license notices and terms.
+The archived baseline used JAX 0.9.2, Brax 0.14.2, MuJoCo/MJX 3.17.0 and MuJoCo Playground 0.2.0. Its retired GPU environment is not part of the current setup; the following upstream attributions remain relevant to the retained reference source and earlier experiments. [JAX](https://github.com/jax-ml/jax), [Brax](https://github.com/google/brax), [MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx), and [Playground](https://github.com/google-deepmind/mujoco_playground) use Apache-2.0. The [Menagerie G1 model](https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1) has a separate BSD-3-Clause license. CUDA/cuDNN wheels and the system `ffmpeg` distribution retain their own license notices and terms.
 
 The SSH development workflow uses the official [Modal SDK](https://github.com/modal-labs/modal-client) (Apache-2.0), [uv](https://github.com/astral-sh/uv) (MIT or Apache-2.0), and [Ubuntu's official image](https://hub.docker.com/_/ubuntu). [OpenSSH](https://github.com/openssh/openssh-portable/blob/master/LICENCE) has permissive component licenses; [Git](https://github.com/git/git/blob/master/COPYING) uses GPL-2.0. Retain package-specific copyright/license notices under `/usr/share/doc` and the Python distributions' bundled notices. The SDK's transitive Python dependencies and distribution hashes are recorded in `environments/modal/uv.lock`; this attribution makes no claim of original infrastructure or SSH implementation.
 
@@ -179,12 +148,12 @@ Keep this table current in the same commit as each new module or third-party add
 | README and ignore rules | Created during the hackathon | Usage documentation and local artifact exclusions | [README](README.md), [.gitignore](.gitignore) |
 | CPU smoke script, box-drop scene, and configuration | Created during the hackathon | Check scene loading, CPU physics, contact, and rendering | [Script](scripts/smoke_mujoco.py), [scene](assets/scenes/smoke.xml), [configuration](configs/smoke.json) |
 | MuJoCo 3.17.0 and its Python dependencies | Third-party software | Physics engine, Python bindings, and rendering support | [Official package](https://pypi.org/project/mujoco/), [Apache-2.0 and bundled notices](https://pypi.org/project/mujoco/#license-and-disclaimer), [lock file](uv.lock) |
-| G1 preflight and PPO launcher | Created during the hackathon | GPU and learner API checks, pilot and checkpoint continuation configuration, and local run logs | [Launcher](scripts/g1_baseline.py), [pilot](configs/g1_baseline.json), [continuation](configs/g1_continue_10m.json), [training environment](environments/gpu/pyproject.toml) |
+| Archived G1 preflight and PPO launcher | Created during the hackathon | Reference source/configurations for the earlier GPU baseline; dedicated runtime retired | [Launcher](scripts/g1_baseline.py), [pilot](configs/g1_baseline.json), [continuation](configs/g1_continue_10m.json) |
 | Modal SSH launcher and offline checks | Created during the hackathon | Bounded development sessions, public-key validation, pinned host-key configuration, persistent workspace, save/stop helpers and local duplicate-session guard | [Launcher](scripts/modal_dev.py), [configuration](configs/modal_dev.json), [environment](environments/modal/pyproject.toml), [checks](tests/test_modal_dev.py) |
 | Isaac runtime profile and G1 preflight | Created during the hackathon | Pinned source/lock verification, CUDA/graphics guards, bounded PhysX G1 execution, finite-state/render evidence and shutdown checks | [Profile](configs/modal_isaac.json), [smoke configuration](configs/isaac_smoke.json), [preflight](scripts/isaac_preflight.py), [offline checks](tests/test_isaac_preflight.py) |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
 | Modal SDK, Ubuntu, OpenSSH, Git and uv | Third-party software and services | Cloud execution, base OS, SSH access, version control and Python environment management | Official sources and license notices linked above |
-| JAX, Brax, MJX, and MuJoCo Playground | Third-party software | GPU computation, PPO training, and the G1 locomotion environment | Official sources and Apache-2.0 licenses linked above |
+| JAX, Brax, MJX, and MuJoCo Playground | Third-party software | Dependencies used by the archived GPU baseline | Official sources and Apache-2.0 licenses linked above |
 | Menagerie G1 robot assets | Third-party assets | Robot geometry, dynamics, and collision model fetched by Playground | [Source and BSD-3-Clause license](https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1) |
 
 ## Assets and credentials

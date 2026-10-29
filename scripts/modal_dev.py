@@ -15,6 +15,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import traceback
 import uuid
 
 
@@ -317,6 +318,17 @@ def serve_ssh(public_key: str, session_id: str, settings: dict):
     yield {"status": "session_finished", "reason": reason, "session_id": session_id}
 
 
+def mountpoint_check_command(path: str) -> str:
+    """Fail during image build if a future Volume mount would hide image files."""
+    # Image.run_commands inserts this directly after Dockerfile RUN. Shell
+    # quoting does not protect physical newlines from the Dockerfile parser.
+    code = ("import sys; from pathlib import Path; "
+            f"p = Path({path!r}); "
+            "sys.exit('Volume mountpoint must be empty in the image; keep build caches elsewhere') "
+            "if p.exists() and (not p.is_dir() or any(p.iterdir())) else None")
+    return shlex.join(["python3", "-c", code])
+
+
 def runtime_build_commands(config: dict) -> list[str]:
     """Use the pinned upstream checkout and its frozen lock without local project uploads."""
     runtime = config.get("runtime")
@@ -333,6 +345,7 @@ def runtime_build_commands(config: dict) -> list[str]:
         f"echo '{runtime['lock_sha256']}  {path}/uv.lock' | sha256sum -c -",
         f"timeout --signal=TERM --kill-after=30s 1800 "
         f"uv sync --project {path} --frozen {extras} --python 3.12",
+        mountpoint_check_command("/workspace"),
     ]
 
 
@@ -354,7 +367,7 @@ def create_app(config: dict):
         ).env({
             "OMNI_KIT_ACCEPT_EULA": "yes", "ISAACSIM_ACCEPT_EULA": "Y",
             "NVIDIA_DRIVER_CAPABILITIES": "all", "MUJOCO_GL": "disable",
-            "XDG_CACHE_HOME": "/workspace/.cache", "UV_HTTP_TIMEOUT": "120",
+            "XDG_CACHE_HOME": "/opt/fmr-build-cache", "UV_HTTP_TIMEOUT": "120",
         }).run_commands(*runtime_build_commands(config)))
     volume = modal.Volume.from_name(config["volume_name"], create_if_missing=True, version=2)
     app = modal.App(config["app_name"])
@@ -366,7 +379,7 @@ def create_app(config: dict):
         timeout=config["session_seconds"] + config["cleanup_seconds"],
         startup_timeout=config["startup_seconds"],
         single_use_containers=True, serialized=True, include_source=False,
-        env={"UV_CACHE_DIR": "/workspace/.cache/uv"},
+        env={"UV_CACHE_DIR": "/workspace/.cache/uv", "XDG_CACHE_HOME": "/workspace/.cache"},
     )(serve_ssh)
     return app, function
 
@@ -425,6 +438,12 @@ def start(config: dict, public_path: Path, identity: Path | None,
     except BaseException as exc:
         summary["status"] = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
         summary["error_type"] = type(exc).__name__
+        (directory / "error.log").write_text(traceback.format_exc())
+        if app_id := summary.get("app_id"):
+            command = ("uv run --project environments/modal --locked "
+                       f"modal app logs {app_id} --tail 200 --timestamps")
+            summary["log_command"] = command
+            print(f"App log query (does not start a worker): {command}", file=sys.stderr, flush=True)
         summary_path.write_text(json.dumps(summary, indent=2) + "\n")
         raise
 

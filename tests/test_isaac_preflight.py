@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -120,6 +121,62 @@ class IsaacPreflightTests(unittest.TestCase):
         self.assertEqual(app.name, "fmr-isaac-dev")
         self.assertIsNone(app.app_id)
         self.assertIsInstance(function, modal.Function)
+
+    def test_image_build_cache_never_occupies_the_workspace_volume(self):
+        image = mock.Mock()
+        for method in ("apt_install", "pip_install", "env", "run_commands"):
+            getattr(image, method).return_value = image
+        app = mock.Mock()
+        app.function.return_value = lambda function: function
+        fake_modal = SimpleNamespace(
+            Image=SimpleNamespace(from_registry=mock.Mock(return_value=image)),
+            Volume=SimpleNamespace(from_name=mock.Mock(return_value=object())),
+            App=mock.Mock(return_value=app),
+        )
+        config = launcher.load_config(ROOT / "configs/modal_isaac.json")
+        with mock.patch.dict(sys.modules, {"modal": fake_modal}), \
+             mock.patch.object(launcher.importlib.metadata, "version", return_value=config["modal_version"]):
+            launcher.create_app(config)
+        for call in image.env.call_args_list:
+            for value in call.args[0].values():
+                self.assertFalse(value.startswith("/workspace"), "Image build writes into the Volume mount")
+        runtime_env = app.function.call_args.kwargs["env"]
+        self.assertEqual(runtime_env["XDG_CACHE_HOME"], "/workspace/.cache")
+        self.assertEqual(runtime_env["UV_CACHE_DIR"], "/workspace/.cache/uv")
+        self.assertIn("/workspace", app.function.call_args.kwargs["volumes"])
+
+    def test_mount_guard_rejects_nonempty_directory_without_deleting_files(self):
+        with tempfile.TemporaryDirectory(prefix="fmr-mount with spaces-") as directory:
+            command = launcher.mountpoint_check_command(directory)
+            empty = subprocess.run(command, shell=True, capture_output=True, text=True)
+            self.assertEqual(empty.returncode, 0, empty.stderr)
+            cache = Path(directory) / "cache.txt"
+            cache.write_text("preserve this data")
+            occupied = subprocess.run(command, shell=True, capture_output=True, text=True)
+            self.assertNotEqual(occupied.returncode, 0)
+            self.assertIn("Volume mountpoint must be empty", occupied.stderr)
+            self.assertEqual(cache.read_text(), "preserve this data")
+
+    def test_sdk_dockerfile_keeps_each_build_command_on_one_physical_line(self):
+        try:
+            from modal._image import _Image
+        except ImportError:
+            self.skipTest("Use the pinned Modal SDK for Dockerfile generation")
+        config = launcher.load_config(ROOT / "configs/modal_isaac.json")
+        commands = launcher.runtime_build_commands(config)
+        base = _Image.from_registry(config["image"])
+        # Capture the actual pinned SDK's Dockerfile factory without building or hydrating.
+        with mock.patch.object(_Image, "_from_args") as factory:
+            base.run_commands(*commands)
+        dockerfile = factory.call_args.kwargs["dockerfile_function"]("2024.10")
+        physical_lines = "\n".join(dockerfile.commands).splitlines()
+        self.assertEqual(len(physical_lines), len(commands) + 1)
+        self.assertEqual(physical_lines[0], "FROM base")
+        for line in physical_lines[1:]:
+            self.assertTrue(line.startswith("RUN "), line)
+            self.assertNotIn("\r", line)
+            syntax = subprocess.run(["sh", "-n", "-c", line[4:]], capture_output=True, text=True)
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
 
 if __name__ == "__main__":
