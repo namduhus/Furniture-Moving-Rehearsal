@@ -6,7 +6,7 @@ Use `docs/idea.md` as the single source of truth for project details.
 
 ## 1. Project in One Sentence
 
-**Furniture-Moving Rehearsal**: Given photos and furniture dimensions, a simulated Unitree G1 humanoid physically tries moving the furniture through hallways and corners, then explains whether and how it can pass using video and plain language.
+**Furniture-Moving Rehearsal**: Turn room photos and furniture dimensions into an interactive WebGL scene, let the user select furniture and its destination, and have a simulated Unitree G1 physically rehearse the move through rooms, hallways, and corners, with plain-language explanations.
 Meta Global AI Developer Hackathon, Track 1 (Indie), theme: **Push the Frontier**.
 
 ## 2. Persona
@@ -66,10 +66,12 @@ Start by briefly stating the mode that matches the user's intent. If the intent 
 
 ## 7. Technical Guidance
 
-- **Environments**: A local Mac for scene and reward debugging with CPU MuJoCo and for API calls; one remote A5000 for main training with MJX. Include device selection so the same code runs in both environments.
-- **Stack**: Use JAX/Brax PPO as the G1 baseline, as selected by the user. Start with the MJX-JAX physics implementation on one remote A5000. Keep CPU MuJoCo for local scene debugging; compare alternative backends only using measured results. Fix seeds, store configuration in files, and keep experiment logs.
+- **Environments**: A local Mac for WebGL, scene specifications, API calls and orchestration. Modal L40S 48 GB is the selected execution target for both Isaac simulation/training and Glimmer inference, with runtime validation pending. The existing A5000/MJX setup is a reference baseline, not the Isaac deployment target. Keep resource allocation explicit; the selected GPU type does not authorize multiple concurrent workers or prove graphics-runtime compatibility.
+- **Stack**: The user selected Isaac Sim + Isaac Lab + RSL-RL PPO + PyTorch on 2026-10-29. Select compatible releases and validate the remote driver, physics backend and G1 task before main training. Preserve the existing MuJoCo/JAX/Brax PPO baseline and its experiment evidence as a reference. Isolate the new runtime from the existing uv environments. Fix seeds, store configuration in files, and keep experiment logs. Base comparisons on measured results.
+- **Deployment boundary**: Choose compatible Isaac/Isaac Lab/PyTorch releases against the actual Modal worker and validate driver access, headless graphics/Vulkan and Isaac startup before G1 training. The reference host's fixed driver must not determine the Modal runtime. Do not change a host driver or bypass compatibility checks.
 - Put **Meta model calls** behind a single interface so models (Spark API / Glimmer / Spark Open) can be swapped. Call SAM 3.1 with one short noun phrase at a time. Masks alone do not provide real dimensions in centimeters; calibrate them explicitly using a reference object.
-- Use **click interaction** only through approach A: select an API-returned mask and calibrate scale using two points.
+- For **photo segmentation clicks**, use approach A: select an API-returned mask and calibrate scale using two points. In the reconstructed **WebGL scene**, allow object picking and destination placement linked to stable scene entity IDs; these are separate from segmentation prompts.
+- **User interface**: Use WebGL for the interactive room and robot view, as selected by the user. The flow is photo upload → calibrated 3D scene → furniture selection → destination placement → robot rehearsal → explanation/retry. Display robot and furniture motion from simulation states, with shared geometry, units, and entity IDs; validate outcomes in the simulation backend. Migration to Isaac Sim / Isaac Lab is approved; installation and runtime validation remain pending.
 - **Base performance claims only on measurements.** Do not invent numbers.
 - **Terminology**: This project is not a VLA. Use an accurate term such as "VLM-guided humanoid controller."
 - **Credits**: Before running costly calls, such as video inputs or repeated loops, tell the user the estimated call count and cost. Cache results.
