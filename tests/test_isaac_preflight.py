@@ -121,6 +121,18 @@ class IsaacPreflightTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     preflight.load_config(path)
 
+    def test_observer_requires_bounded_explicit_settings(self):
+        original = json.loads((ROOT / "configs/isaac_observe.json").read_text())
+        for setting, bad in (("port", 0), ("max_fps", 100), ("finished_linger_seconds", 600),
+                             ("realtime_pacing", "yes")):
+            with self.subTest(setting=setting), tempfile.TemporaryDirectory() as name:
+                path = Path(name) / "config.json"
+                value = {**original, "observation": {**original["observation"], setting: bad}}
+                path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError):
+                    preflight.load_config(path)
+        self.assertEqual(preflight.load_config(ROOT / "configs/isaac_observe.json")["observation"]["port"], 8765)
+
     def test_source_and_lock_pins_match_the_runtime_and_probe(self):
         image = launcher.load_config(ROOT / "configs/modal_isaac.json")
         smoke = preflight.load_config(preflight.DEFAULT_CONFIG)

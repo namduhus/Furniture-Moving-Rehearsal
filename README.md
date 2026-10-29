@@ -112,7 +112,25 @@ Save the remote workspace before stopping it. The existing 30-minute Isaac resou
 
 The selected development workflow is headless Isaac execution on Modal with motion observation from the Mac. Scene, physical-property and camera changes belong in reproducible code/configuration. The smoke check exports two PNGs and a trajectory; use the separate recording profile above for continuous MP4 output. Copy artifacts over SSH for local inspection and keep training independent of viewer connectivity. Live browser camera delivery remains a separate feature.
 
-The intended development viewer sends rendered camera frames through a browser service bound to loopback and forwarded over the existing authenticated SSH/TCP connection. This is a separate implementation from NVIDIA's [WebRTC Streaming Client](https://docs.isaacsim.omniverse.nvidia.com/6.2.0/installation/manual_livestream_clients.html), which requires a UDP media path that the current [Modal TCP tunnel](https://modal.com/docs/guide/tunnels) does not provide. Full remote editor access is outside the current development workflow.
+The [observation profile](configs/isaac_observe.json) adds an optional read-only browser camera viewer. It publishes the latest JPEG and matching step/time/reset metadata, then serves HTTP/MJPEG on remote loopback only through the existing authenticated SSH/TCP connection. Python stdlib and the runtime's existing Pillow are used; no extra frontend framework or Python dependency is added. This is a separate implementation from NVIDIA's [WebRTC Streaming Client](https://docs.isaacsim.omniverse.nvidia.com/6.2.0/installation/manual_livestream_clients.html), which requires a UDP media path that the current [Modal TCP tunnel](https://modal.com/docs/guide/tunnels) does not provide. Full remote editor access is outside the current development workflow.
+
+After starting the existing Isaac session and pulling the updated code, open a separate **Mac terminal** for the viewing tunnel and leave it running:
+
+```sh
+ssh -N -L 8765:127.0.0.1:8765 fmr-modal
+```
+
+In the **remote project terminal**, start observation:
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_preflight.py --config configs/isaac_observe.json --stage all
+```
+
+Once the command prints `Observer: http://127.0.0.1:8765`, open [the local viewer](http://127.0.0.1:8765) on the Mac. The server starts before GPU/Isaac checks; the page initially shows initialization and then camera frames. It shows simulated time, reset count, frame freshness and zero-action control explicitly. Display publication is capped at 10 wall-clock FPS; actual delivery/latency must be measured on the user's connection. Optional wall-clock pacing is enabled only in this observation profile to make the short rollout inspectable; the smoke/recording profiles are not paced and a paced observation is not a throughput benchmark.
+
+The run still performs 500 zero-action steps and verifies its MP4; it does not train a policy. After the final result, the viewer retains the last frame for 30 seconds and then closes. Browser closure, tunnel closure, run completion and Modal GPU termination are separate events: the simulation does not depend on a viewer, and a finished run does not release the GPU session. Keep the command/launcher terminals alive during execution; use `fmr-save` and `fmr-stop` when work is finished. `fmr-save` syncs files and does not create a training checkpoint. A future training command will have its own step/time/checkpoint limits in addition to the Modal session deadline.
+
+Observation writes `observation.json` (one atomic JPEG/state snapshot), phase/error records and observation counts within the run directory. A slow/disconnected browser receives the latest available frame on reconnect without queuing every old frame. Preview encoding errors are reported separately and do not turn a valid physics/recording result into a preview success claim. To inspect the retained final snapshot later, serve that run explicitly with `python scripts/isaac_observe.py --run-dir outputs/isaac/RUN_ID --seconds 600`; this views saved state and does not restart simulation.
 
 The product interface is an interactive WebGL room: users select furniture and its destination, then observe robot and furniture motion from simulation states and receive explanations. The developer camera viewer does not replace this WebGL interaction.
 
@@ -197,6 +215,7 @@ Keep this table current in the same commit as each new module or third-party add
 | Archived G1 preflight and PPO launcher | Created during the hackathon | Reference source/configurations for the earlier GPU baseline; dedicated runtime retired | [Launcher](scripts/g1_baseline.py), [pilot](configs/g1_baseline.json), [continuation](configs/g1_continue_10m.json) |
 | Modal SSH launcher and offline checks | Created during the hackathon | Bounded development sessions, public-key validation, pinned host-key configuration, persistent workspace, save/stop helpers and local duplicate-session guard | [Launcher](scripts/modal_dev.py), [configuration](configs/modal_dev.json), [environment](environments/modal/pyproject.toml), [checks](tests/test_modal_dev.py) |
 | Isaac runtime profile, G1 preflight and recording | Created during the hackathon | Pinned source/lock verification, OS shared-library/build-cache guards, CUDA/graphics guards, bounded PhysX execution, frame/state timing, MP4 verification and shutdown checks | [Profile](configs/modal_isaac.json), [smoke configuration](configs/isaac_smoke.json), [recording configuration](configs/isaac_record.json), [preflight](scripts/isaac_preflight.py), [video verification](scripts/isaac_video.py), [preflight checks](tests/test_isaac_preflight.py), [video checks](tests/test_isaac_video.py) |
+| Browser motion observer | Created during the hackathon | Latest-frame/state publication, read-only loopback MJPEG viewer, lifecycle/freshness labels, reconnect handling and observation-only pacing | [Observation profile](configs/isaac_observe.json), [viewer](scripts/isaac_observe.py), [HTTP/state checks](tests/test_isaac_observe.py) |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
 | Modal SDK, Ubuntu, X.Org libXt, OpenSSH, Git and uv | Third-party software and services | Cloud execution, base OS/shared libraries, SSH access, version control and Python environment management | Official sources and license notices linked above |

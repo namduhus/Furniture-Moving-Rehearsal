@@ -16,8 +16,10 @@ import re
 import signal
 import subprocess
 import sys
+import time
 import traceback
 
+from isaac_observe import ObservationPublisher, ObservationServer, atomic_json
 from isaac_video import encode_recording, require_ffmpeg, validate_recording
 
 
@@ -53,11 +55,20 @@ def load_config(path: Path) -> dict:
             raise ValueError("Invalid smoke camera size")
     if not re.fullmatch(r"[0-9a-f]{40}", config["isaaclab_commit"]):
         raise ValueError("Invalid source pin")
+    if (observation := config.get("observation")) is not None:
+        if not isinstance(observation, dict) or recording is None:
+            raise ValueError("Observation requires a recording configuration")
+        for key, minimum, maximum in (("port", 1, 65535), ("max_fps", 1, 30),
+                                       ("stale_seconds", 1, 30), ("finished_linger_seconds", 0, 60)):
+            if type(observation.get(key)) is not int or not minimum <= observation[key] <= maximum:
+                raise ValueError(f"Invalid observation {key}")
+        if type(observation.get("realtime_pacing")) is not bool:
+            raise ValueError("Observation pacing must be explicitly enabled or disabled")
     return config
 
 
 def write_json(path: Path, data: dict) -> None:
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    atomic_json(path, data)
 
 
 def driver_version(value: str) -> tuple[int, ...]:
@@ -132,6 +143,8 @@ def gpu_check(config: dict, directory: Path) -> dict:
 def g1_check(config: dict, directory: Path) -> None:
     recording = config.get("recording")
     encoder = require_ffmpeg(directory) if recording is not None else None
+    observation = config.get("observation")
+    observer = ObservationPublisher(directory, observation["max_fps"]) if observation else None
     import torch
     import warp as wp
 
@@ -176,7 +189,8 @@ def g1_check(config: dict, directory: Path) -> None:
                 if not torch.isfinite(value).all().item():
                     raise RuntimeError("Non-finite G1 state, observation or reward")
 
-    def save_frame(camera, filename: str, caption: str | None = None):
+    def save_frame(camera, filename: str, caption: str | None = None,
+                   observation_state: dict | None = None, force_observation: bool = False):
         rgb = tensor(camera.data.output["rgb"])[0, :, :, :3].detach().cpu().numpy()
         if rgb.shape != (config["camera"]["height"], config["camera"]["width"], 3):
             raise RuntimeError("Unexpected camera frame shape")
@@ -191,6 +205,8 @@ def g1_check(config: dict, directory: Path) -> None:
             draw.rectangle((0, 0, image.width, 22), fill="black")
             draw.text((6, 4), caption, fill="white")
         image.save(directory / filename)
+        if observer is not None and observation_state is not None:
+            observer.publish_image(image, force=force_observation, **observation_state)
         return {"shape": list(rgb.shape), "std": deviation, "raw_sha256": raw_hash}
 
     # The selected physics and camera explicitly require Kit; no Newton fallback.
@@ -226,9 +242,13 @@ def g1_check(config: dict, directory: Path) -> None:
             for _ in range(8):
                 env.unwrapped.sim.render()
                 camera.update(cfg.sim.dt, force_recompute=True)
-            evidence["initial_frame"] = save_frame(camera, "initial.png")
+            evidence["initial_frame"] = save_frame(camera, "initial.png", observation_state={
+                "step": 0, "sim_time_seconds": 0.0, "resets": 0}, force_observation=True)
             actions = torch.zeros(env.action_space.shape, device="cuda:0")
             resets = 0
+            if observer is not None:
+                observer.phase("running")
+            rollout_started = time.monotonic()
             with (directory / "trajectory.jsonl").open("w") as trajectory:
                 for step in range(config["steps"]):
                     observation, reward, terminated, truncated, _ = env.step(actions)
@@ -248,21 +268,30 @@ def g1_check(config: dict, directory: Path) -> None:
                             env.unwrapped.sim.render()
                             camera.update(cfg.sim.dt, force_recompute=True)
                             info = save_frame(camera, f"frames/{frame_count:06d}.png",
-                                f"ZERO ACTION | step {step + 1} | t={(step + 1) * control_dt:.2f}s | resets {resets}")
+                                f"ZERO ACTION | step {step + 1} | t={(step + 1) * control_dt:.2f}s | resets {resets}",
+                                observation_state={"step": step + 1,
+                                    "sim_time_seconds": (step + 1) * control_dt, "resets": resets})
                             raw_frame_hashes.add(info["raw_sha256"])
                             record.update({"video_frame_index": frame_count,
                                            "video_time_seconds": frame_count / float(fps)})
                             frame_count += 1
                     trajectory.write(json.dumps(record) + "\n")
                     evidence["steps_completed"] = step + 1
+                    if observation and observation["realtime_pacing"]:
+                        # Observation-only pacing; do not use this run for throughput claims.
+                        time.sleep(max(0, rollout_started + (step + 1) * control_dt - time.monotonic()))
             torch.cuda.synchronize()
             for _ in range(4):
                 env.unwrapped.sim.render()
                 camera.update(cfg.sim.dt, force_recompute=True)
-            evidence["final_frame"] = save_frame(camera, "final.png")
+            evidence["final_frame"] = save_frame(camera, "final.png", observation_state={
+                "step": config["steps"], "sim_time_seconds": config["steps"] * control_dt,
+                "resets": resets}, force_observation=True)
             evidence["resets"] = resets
             evidence["interpretation"] = "Zero actions validate runtime/finite states, not learned walking."
             if recording is not None:
+                if observer is not None:
+                    observer.phase("encoding")
                 if len(raw_frame_hashes) < 2:
                     raise RuntimeError("Camera scene did not change before adding video captions")
                 video = encode_recording(directory, binary=encoder, count=frame_count, fps=fps,
@@ -270,7 +299,13 @@ def g1_check(config: dict, directory: Path) -> None:
                 video["unique_source_frames"] = len(raw_frame_hashes)
                 write_json(directory / "video.json", video)
                 evidence["video"] = video
+            if observer is not None:
+                evidence["observation"] = {"frames_published": observer.sequence,
+                                            "preview_disabled": observer.disabled,
+                                            "realtime_pacing": observation["realtime_pacing"]}
         finally:
+            if observer is not None:
+                observer.phase("closing")
             env.close()
         # Kit may exit from its close method. Parent still requires a clean process exit.
         evidence["status"] = "checks_completed_before_kit_shutdown"
@@ -349,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     config = load_config(args.config)
+    if config.get("observation") is not None and args.stage == "gpu" and not args.worker:
+        parser.error("Use all or g1 for observation; the small smoke profile supports GPU-only checks")
     output_root = args.output_root.expanduser().resolve()
     if args.dry_run:
         print(json.dumps({"status": "local_plan_only", "config": config,
@@ -366,10 +403,19 @@ def main(argv: list[str] | None = None) -> int:
     write_json(directory / "config.json", config)
     summary = {"status": "running", "stages": {}, "run_dir": str(directory)}
     write_json(directory / "summary.json", summary)
+    observer_server = None
     try:
+        if settings := config.get("observation"):
+            observer_server = ObservationServer(directory, settings["port"], settings["max_fps"],
+                                                settings["stale_seconds"]).start()
+            print(f"Observer: http://127.0.0.1:{observer_server.port}\n"
+                  f"Mac tunnel: ssh -N -L {observer_server.port}:127.0.0.1:{observer_server.port} fmr-modal\n"
+                  "Closing the browser does not stop this bounded run or the GPU session.", flush=True)
         # Even a G1-only request must first validate CUDA and Vulkan in this process environment.
         stages = ["gpu", "g1"] if args.stage in ("all", "g1") else ["gpu"]
         for stage in stages:
+            summary["current_stage"] = stage
+            write_json(directory / "summary.json", summary)
             print(f"Running {stage}; log: {directory / (stage + '.log')}", flush=True)
             command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--stage", stage,
                        "--config", str(args.config.resolve()), "--run-dir", str(directory)]
@@ -383,6 +429,11 @@ def main(argv: list[str] | None = None) -> int:
             write_json(directory / "summary.json", summary)
         summary["status"] = (("passed_g1_recording" if config.get("recording") is not None
                               else "passed_g1_smoke") if "g1" in stages else "passed_gpu_graphics_smoke")
+        if observer_server is not None:
+            state = observer_server.state()
+            summary["observation"] = {"frames_published": state["frame"].get("sequence", 0),
+                                       "preview_error": state["preview_error"],
+                                       "stream_connections_seen": state["stream_connections_seen"]}
         return 0
     except BaseException as error:
         summary["status"] = "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
@@ -390,8 +441,20 @@ def main(argv: list[str] | None = None) -> int:
         (directory / "error.log").write_text(traceback.format_exc())
         raise
     finally:
+        summary.pop("current_stage", None)
         write_json(directory / "summary.json", summary)
         print(json.dumps(summary), flush=True)
+        if observer_server is not None:
+            try:
+                if summary["status"].startswith("passed"):
+                    linger = config["observation"]["finished_linger_seconds"]
+                    print(f"Run ended; last-frame viewer remains for {linger}s. "
+                          "The Modal GPU session is separate; use fmr-stop when done.", flush=True)
+                    observer_server.stop.wait(linger)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                observer_server.close()
 
 
 if __name__ == "__main__":
