@@ -286,6 +286,12 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_ppo.py --config configs/isaac_g1_ppo_push.json
 ```
 
+[`scripts/isaac_g1_ppo_eval.py`](scripts/isaac_g1_ppo_eval.py) evaluates a checkpoint on boxes with held-out mass and friction against the scripted command, and records [showcase boxes](configs/isaac_g1_ppo_eval.json) on camera with per-decision command traces.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_ppo_eval.py --config configs/isaac_g1_ppo_eval.json
+```
+
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
 
 ### Record a G1 motion check
@@ -415,7 +421,7 @@ Update this table in the same commit as each new module or third-party addition.
 | Built during the hackathon | Third-party (imported) |
 | --- | --- |
 | [Modal launcher](scripts/modal_dev.py), Isaac [preflight](scripts/isaac_preflight.py)/[recording](scripts/isaac_video.py)/[observer](scripts/isaac_observe.py)/[G1 asset inventory](scripts/isaac_g1_asset.py) | Isaac Sim, Isaac Lab, RSL-RL, PyTorch, G1 USD assets |
-| GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
+| GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py)/[evaluation](scripts/isaac_g1_ppo_eval.py), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
 | Contact/dynamics diagnostics and CPU analysis | Derived GR00T deployment/dynamics/contact [reference data](assets/references/) |
 | [Tests](tests/), README, [AGENTS.md](AGENTS.md) | NumPy, FFmpeg/libx264, Modal SDK, Ubuntu/libXt, OpenSSH, Git, uv |
 

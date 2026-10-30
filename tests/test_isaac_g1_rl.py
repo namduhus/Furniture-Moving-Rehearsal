@@ -168,6 +168,18 @@ def parallel_isaac(count, profile, asset):
             self.pose[ids], self.written[ids] = root_pose.value, steps["count"]
         def write_root_velocity_to_sim_index(self, *, root_velocity, env_ids=None): pass
 
+    class Camera:
+        """640x360 RGBA frames whose content changes with the physics step."""
+        def set_world_poses_from_view(self, eyes, targets): self.eyes, self.targets = eyes.value, targets.value
+        def update(self, dt, force_recompute): pass
+        @property
+        def data(self):
+            image = (np.add.outer(np.arange(360), np.arange(640)) + steps["count"]) % 256
+            return SimpleNamespace(output={"rgb": Tensor(np.tile(image[None, :, :, None], (count, 1, 1, 4)))})
+
+    # Each of two hand links feels 3 N from the box along -x, i.e. a 6 N push.
+    hand = SimpleNamespace(data=SimpleNamespace(force_matrix_w=Tensor(np.tile([-3.0, 0.0, 0.0], (count, 2, 1, 1)))))
+
     class Scene(dict):
         env_origins = Tensor(origins)
         def reset(self, env_ids=None): pass
@@ -180,6 +192,7 @@ def parallel_isaac(count, profile, asset):
         def reset(self): self.started = True
         def forward(self): pass
         def step(self, *, render): steps["count"] += 1
+        def render(self): pass
 
     class Policy:
         def __init__(self, *args): pass
@@ -207,7 +220,8 @@ def parallel_isaac(count, profile, asset):
     modules["warp"].config = SimpleNamespace(enable_backward=True)
     modules["isaaclab.app"].launch_simulation = lambda *args: nullcontext()
     modules["isaaclab.sim"].SimulationContext = Simulation
-    modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box)
+    camera = Camera()
+    modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box, hand_contact=hand, camera=camera)
     authored = []
     with ExitStack() as stack:
         for patch in (mock.patch.dict(sys.modules, modules), mock.patch.object(wbc, "BalancePolicy", Policy),
@@ -221,7 +235,7 @@ def parallel_isaac(count, profile, asset):
             stack.enter_context(patch)
         scene_config = stack.enter_context(mock.patch.object(rl, "scene_config", return_value=built))
         yield SimpleNamespace(robot=robot, box=box, steps=steps, authored=authored, scene_config=scene_config,
-                              origins=origins, box_mass=box_mass, box_friction=box_friction)
+                              origins=origins, box_mass=box_mass, box_friction=box_friction, camera=camera)
 
 
 class ParallelWorkerTests(unittest.TestCase):

@@ -203,7 +203,8 @@ class PushTaskEnv:
         self.length = np.zeros(self.num_envs, dtype=int)
         self.start_x, self.previous_x, self.goal_x = (np.zeros(self.num_envs) for _ in range(3))
         self.rng = np.random.default_rng(config["seed"])
-        self.recorder, self.last_completed = None, {}
+        self.recorder, self.last_completed, self.reset_on_done = None, {}, True
+        self.last_command = np.zeros((self.num_envs, self.num_actions))
         self.reset_envs(np.arange(self.num_envs))
         self.obs = self.observe()
 
@@ -272,6 +273,7 @@ class PushTaskEnv:
         s, n, profile = self.s, self.num_envs, self.profile
         action = np.clip(np.asarray(actions.detach().cpu().numpy(), dtype=float), -1.0, 1.0)
         commands, rpys = action_commands(action, self.config["action_bounds"])
+        self.last_command = np.c_[commands[:, 0], commands[:, 2], rpys[:, 1]]
         low_level = {"invalid_action": np.zeros(n, dtype=bool), "fallen": np.zeros(n, dtype=bool)}
         for _ in range(self.config["decision_control_steps"]):
             for _ in range(self.asset["control_decimation"]):
@@ -306,7 +308,8 @@ class PushTaskEnv:
             extras["log"] = {f"/episode/{name}": torch.as_tensor([r["outcome"] == name for r in records], dtype=torch.float32)
                              for name in ("success", "fallen", "off_course", "time_out")}
             extras["log"]["/episode/progress_m"] = torch.as_tensor([r["progress_m"] for r in records], dtype=torch.float32)
-            self.reset_envs(ids)
+            if self.reset_on_done:
+                self.reset_envs(ids)
         if self.recorder is not None:
             self.recorder(self.last_completed, n)
         self.obs = self.observe()
@@ -314,25 +317,52 @@ class PushTaskEnv:
                 torch.as_tensor(terminated | time_out, dtype=torch.long, device=self.device), extras)
 
 
+def hand_push(env):
+    """Box push sensed on the hand links: the negative world-x reaction, summed over links (wrist/forearm unsensed)."""
+    return -env.s.batch(env.s.scene["hand_contact"].data.force_matrix_w).sum(axis=(1, 2))[:, 0]
+
+
+def command_summary(commands, pushes):
+    import numpy as np
+    commands, pushes = np.asarray(commands, dtype=float), np.asarray(pushes, dtype=float)
+    contact = pushes > 1.0
+    return {"decisions": len(commands), "forward_mean_mps": float(commands[:, 0].mean()),
+            "forward_max_mps": float(commands[:, 0].max()), "yaw_rate_abs_mean_rps": float(np.abs(commands[:, 1]).mean()),
+            "lean_mean_rad": float(commands[:, 2].mean()), "lean_max_rad": float(commands[:, 2].max()),
+            "hand_contact_fraction": float(contact.mean()),
+            "hand_push_mean_during_contact_n": float(pushes[contact].mean()) if contact.any() else 0.0}
+
+
 def evaluate(env, act, seed):
-    """One episode per environment from seeded starts; outcomes are grouped by the force needed to slide the box."""
+    """One episode per environment from seeded starts; outcomes are grouped by the force needed to slide the box.
+
+    Commands and hand push are sampled once per high-level decision until each environment's episode ends.
+    """
     import numpy as np
     env.reset_envs(np.arange(env.num_envs), np.random.default_rng(seed))
     env.obs = env.observe()
-    first = {}
+    first, commands, pushes = {}, [[] for _ in range(env.num_envs)], [[] for _ in range(env.num_envs)]
     for _ in range(env.max_episode_length):
+        active = [i for i in range(env.num_envs) if i not in first]
         env.step(act(env.obs))
+        push = hand_push(env)
+        for i in active:
+            commands[i].append(env.last_command[i])
+            pushes[i].append(push[i])
         for i, record in env.last_completed.items():
             first.setdefault(i, record)
         if len(first) == env.num_envs:
             break
-    records = [first[i] for i in range(env.num_envs)]
+    records = [{**first[i], "commands": command_summary(commands[i], pushes[i])} for i in range(env.num_envs)]
     force = env.frictions*env.masses*9.81
     groups = {}
     for low, high in ((0.0, 10.0), (10.0, 20.0), (20.0, float("inf"))):
         chosen = [r for r, f in zip(records, force) if low <= f < high]
         groups[f"{low:g}-{high:g}_n"] = episode_summary(chosen)
+    forward = np.concatenate([np.asarray(c, dtype=float)[:, 0] for c in commands])
     return {**episode_summary(records), "by_slide_force": groups, "seed": seed,
+            "forward_command": {"max_mps": float(forward.max()), "mean_mps": float(forward.mean()),
+                                "fraction_above_reviewed_0_2_mps": float((forward > 0.2 + 1e-9).mean())},
             "per_env": [{"mass_kg": float(m), "friction": float(f), **r} for m, f, r in zip(env.masses, env.frictions, records)]}
 
 

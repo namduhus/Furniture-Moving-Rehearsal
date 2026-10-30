@@ -1,0 +1,24 @@
+{
+  "training_config": "configs/isaac_g1_ppo_push.json",
+  "checkpoint": "outputs/isaac/20261030T173207.162496Z-ppo/train/model_99.pt",
+  "held_out": {
+    "num_envs": 256,
+    "box_seed": 101,
+    "start_seed": 102
+  },
+  "showcase": {
+    "cases": [
+      {"mass_kg": 5.0, "friction": 0.1},
+      {"mass_kg": 10.0, "friction": 0.1},
+      {"mass_kg": 15.0, "friction": 0.12},
+      {"mass_kg": 20.0, "friction": 0.1},
+      {"mass_kg": 20.0, "friction": 0.15}
+    ],
+    "start_seed": 103,
+    "env_spacing_m": 10.0,
+    "eye_offset_m": [1.0, -3.8, 1.4],
+    "target_offset_m": [1.0, 0.0, 0.6]
+  },
+  "stage_timeout_seconds": 1800,
+  "scope": "RL stage 4 evidence for the first PPO push checkpoint (20261030T173207, iteration 99): held-out box mass/friction (new seed, same ranges) against the scripted command on the same starts, with per-environment command and hand-push statistics; plus five showcase boxes (4.9-29.4 N slide force) recorded at 10 fps with per-decision traces."
+}
