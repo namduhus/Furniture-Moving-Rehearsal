@@ -358,3 +358,80 @@ class ObservationHistory:
         self.last_action = action.astype(np.float32)
         raw = finite(c["default_lower_angles"], (15,)) + c["action_scale"]*action
         return np.clip(raw, limits[:, 0], limits[:, 1]), int(np.count_nonzero((raw < limits[:, 0]) | (raw > limits[:, 1])))
+
+
+def motion_summary(initial_pose, records):
+    """Report motion without treating a non-fall pass as stationary standing."""
+    if not records:
+        return {"samples": 0}
+    initial = finite(initial_pose, (7,))
+    times = finite([r["sim_time_seconds"] for r in records], (len(records),))
+    if (times[0] <= 0 or np.any(np.diff(times) <= 0) or
+            any(row["step"] != index for index, row in enumerate(records, 1))):
+        raise ValueError("Invalid motion sample sequence")
+    poses = finite([r["root_pose_xyzw"] for r in records], (len(records), 7))
+    velocities = finite([r["root_velocity_world"] for r in records], (len(records), 6))
+    xy = np.vstack([initial[:2], poses[:, :2]])
+    tilt = finite([r["tilt_rad"] for r in records], (len(records),))
+    return {"samples": len(records), "simulated_seconds": float(times[-1]),
+            "net_xy_displacement_m": float(np.linalg.norm(xy[-1]-xy[0])),
+            "maximum_xy_displacement_m": float(np.linalg.norm(xy-xy[0], axis=1).max()),
+            "xy_path_length_m": float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum()),
+            "final_world_position_m": poses[-1, :3].tolist(),
+            "final_planar_speed_m_s": float(np.linalg.norm(velocities[-1, :2])),
+            "minimum_root_height_m": float(poses[:, 2].min()),
+            "maximum_tilt_degrees": float(np.degrees(tilt.max())),
+            "maximum_absolute_action": float(np.abs(finite([r["action"] for r in records], (len(records), 15))).max()),
+            "target_clips": sum(r["clipped_joint_targets"] for r in records)}
+
+
+def contact_summary(samples, feet, threshold, physics_dt, decimation):
+    """Describe loaded-foot motion; it is not proof of slip at a contact point."""
+    collected = {name: [] for name in feet}
+    clipping = np.zeros(15, dtype=int)
+    support_counts = []
+    for index, sample in enumerate(samples, 1):
+        if (sample["physics_step"] != index or sample["control_step"] != (index-1)//decimation+1 or
+                not np.isclose(sample["sim_time_seconds"], index*physics_dt, atol=1e-9, rtol=0) or
+                set(sample["feet"]) != set(feet)):
+            raise ValueError("Invalid contact sample sequence or foot mapping")
+        computed = finite(sample["lower_body_computed_effort"], (15,))
+        applied = finite(sample["lower_body_applied_effort"], (15,))
+        clipping += np.abs(computed-applied) > 1e-5
+        supported = 0
+        for name in feet:
+            foot = sample["feet"][name]
+            pose = finite(foot["pose_xyzw"], (7,))
+            velocity = finite(foot["velocity_world"], (6,))
+            normal = finite(foot["normal_force_world_n"], (3,))
+            friction = finite(foot["friction_force_world_n"], (3,))
+            total = finite(foot["total_force_world_n"], (3,))
+            if not np.allclose(total, normal+friction, atol=1e-3, rtol=1e-5):
+                raise ValueError("Contact total force differs from normal plus friction")
+            force = float(np.linalg.norm(normal))
+            loaded = force >= threshold
+            supported += loaded
+            collected[name].append((loaded, np.linalg.norm(velocity[:2]), force, np.linalg.norm(friction), pose[2]))
+        support_counts.append(supported)
+    report = {"samples": len(samples), "minimum_normal_force_n": threshold,
+              "effort_clipped_samples_by_lower_body_index": clipping.tolist(), "feet": {},
+              "interpretation": "Loaded rigid-body origin speed includes foot rolling; contact-point slip is not established by this metric alone."}
+    if not samples:
+        report["force_evidence_present"] = False
+        return report
+    report["force_evidence_present"] = any(any(row[0] for row in values) for values in collected.values())
+    report["no_support_fraction"] = float(np.mean(np.array(support_counts) == 0))
+    report["double_support_fraction"] = float(np.mean(np.array(support_counts) == 2))
+    for name, values in collected.items():
+        a = np.asarray(values, dtype=float)
+        loaded = a[:, 0] > 0
+        report["feet"][name] = {
+            "loaded_fraction": float(loaded.mean()),
+            "loaded_planar_speed_mean_m_s": float(a[loaded, 1].mean()) if loaded.any() else None,
+            "loaded_planar_speed_p95_m_s": float(np.quantile(a[loaded, 1], 0.95)) if loaded.any() else None,
+            "maximum_normal_force_n": float(a[:, 2].max()),
+            "maximum_friction_force_n": float(a[:, 3].max()),
+            "mean_friction_normal_ratio_when_loaded": float((a[loaded, 3]/a[loaded, 2]).mean()) if loaded.any() else None,
+            "minimum_body_origin_height_m": float(a[:, 4].min()),
+            "maximum_body_origin_height_m": float(a[:, 4].max())}
+    return report

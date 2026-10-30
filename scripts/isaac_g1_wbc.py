@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from fractions import Fraction
 import json
@@ -18,6 +18,92 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 
 
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
+
+
+def read_contact_materials(stage, feet):
+    """Read bound collision materials without changing their coefficients."""
+    from pxr import Usd, UsdPhysics, UsdShade
+
+    scopes = {"ground": "/World/Ground", **{n: f"/World/envs/env_0/Robot/{n}" for n in feet}}
+    report = {}
+    for name, path in scopes.items():
+        root = stage.GetPrimAtPath(path)
+        if not root or not root.IsValid():
+            raise RuntimeError(f"Missing diagnostic material scope: {path}")
+        shapes = []
+        for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+            if not prim.HasAPI(UsdPhysics.CollisionAPI):
+                continue
+            material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial(materialPurpose="physics")
+            if not material:
+                material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial()
+            values = {"collision_path": str(prim.GetPath()), "material_path": None,
+                      "physics_material_found": False}
+            enabled = prim.GetAttribute("physics:collisionEnabled")
+            values["collision_enabled"] = enabled.Get() if enabled else None
+            if material and material.GetPrim().HasAPI(UsdPhysics.MaterialAPI):
+                material_prim = material.GetPrim()
+                values.update(material_path=str(material_prim.GetPath()), physics_material_found=True)
+                for attribute in ("physics:staticFriction", "physics:dynamicFriction", "physics:restitution",
+                                  "physxMaterial:frictionCombineMode", "physxMaterial:restitutionCombineMode"):
+                    attr = material_prim.GetAttribute(attribute)
+                    value = attr.Get() if attr else None
+                    values[attribute] = value if value is None or isinstance(value, (float, int, str, bool)) else str(value)
+            shapes.append(values)
+        if not shapes:
+            raise RuntimeError(f"No collision shapes found in diagnostic material scope: {path}")
+        report[name] = shapes
+    return {"scopes": report, "interpretation": "Authored bound-material values only; unresolved bindings and combine modes are not guessed."}
+
+
+def analyze_run(directory):
+    """Analyze saved inputs on CPU without loading Isaac, ONNX or cloud SDKs."""
+    import numpy as np
+    from g1_wbc import ObservationHistory, contact_summary, finite, motion_summary
+
+    directory = directory.expanduser().resolve()
+    profile = json.loads((directory / "profile.json").read_text())
+    initial = json.loads((directory / "initial-state.json").read_text())
+    records = [json.loads(line) for line in (directory / "trajectory.jsonl").read_text().splitlines()]
+    report = {"status": "motion_only", "motion": motion_summary(initial["root_pose_xyzw"], records),
+              "stationary_success_assessed": False, "contacts": None, "policy_inputs_verified": False}
+    worker_path = directory / "balance-worker.json"
+    report["run_status"] = json.loads(worker_path.read_text()).get("status") if worker_path.exists() else "unknown"
+    if not profile.get("diagnostics"):
+        report["limitation"] = "This historical run did not record contact forces or policy inputs; foot slip cannot be determined."
+        return report
+    diagnostics = profile["diagnostics"]
+    asset = json.loads((directory / "asset-profile.json").read_text())
+    metadata = json.loads((directory / "contact-metadata.json").read_text())
+    if set(metadata["sensor_body_names"]) != set(diagnostics["foot_body_names"]):
+        raise ValueError("Contact sensor metadata does not match the diagnostic profile")
+    samples_path = directory / "contacts.jsonl"
+    samples = [json.loads(line) for line in samples_path.read_text().splitlines()] if samples_path.exists() else []
+    report["contacts"] = contact_summary(samples, diagnostics["foot_body_names"],
+        diagnostics["minimum_normal_force_n"], asset["physics_dt"], asset["control_decimation"])
+    expected = profile["control_steps"]*asset["control_decimation"]
+    report["expected_physics_samples"] = expected
+    contract = json.loads((directory / "controller-contract.json").read_text())
+    names = json.loads((directory / "asset-inventory.json").read_text())["joint_names"]
+    indices = [names.index(n) for n in asset["controller_reference"]["joint_order"]]
+    lower_indices = [names.index(n) for n in asset["joint_groups"]["lower_body"]]
+    limits = np.asarray(json.loads((directory / "asset-inventory.json").read_text())["joint_position_limits"])[lower_indices]
+    rotation = json.loads((directory / "frames.json").read_text())["calibration"]["source_to_asset_rotation"]
+    history = ObservationHistory(contract)
+    for row in records:
+        state = row["policy_input_state"]
+        q = finite(state["joint_positions"], (43,))
+        dq = finite(state["joint_velocities"], (43,))
+        pose = finite(state["root_pose_xyzw"], (7,))
+        velocity = finite(state["root_velocity_world"], (6,))
+        observation = history.observe(q[indices], dq[indices], pose[3:], velocity[3:], rotation)
+        if not np.allclose(observation, finite(row["policy_observation"], (516,)), atol=1e-6, rtol=0):
+            raise ValueError("Logged policy observation disagrees with its saved input state/history")
+        history.targets(row["action"], limits)
+    report["policy_inputs_verified"] = bool(records)
+    report["status"] = "diagnostics_complete" if len(samples) == expected and len(records) == profile["control_steps"] else "diagnostics_partial"
+    report["limitation"] = "Input-state consistency is checked with the adapter; it does not independently establish equivalence to upstream training observations."
+    return report
 
 
 @contextmanager
@@ -89,6 +175,17 @@ def stage_failure(stage, code, directory):
 
 def load_plan(path):
     profile = json.loads(path.read_text())
+    if "base_profile" in profile:
+        base = (ROOT / profile["base_profile"]).resolve()
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "scope"}:
+            raise ValueError("Diagnostic profiles may only extend the reviewed standing profile with instrumentation")
+        profile = {**json.loads(base.read_text()), **profile}
+    if (diagnostics := profile.get("diagnostics")) is not None:
+        if (not isinstance(diagnostics, dict) or
+                diagnostics.get("foot_body_names") != ["left_ankle_roll_link", "right_ankle_roll_link"] or
+                type(diagnostics.get("minimum_normal_force_n")) not in (float, int) or
+                not 0.1 <= diagnostics["minimum_normal_force_n"] <= 20):
+            raise ValueError("Invalid foot contact diagnostic configuration")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if type(profile["control_steps"]) is not int or not 4 <= profile["control_steps"] <= 500:
         raise ValueError("Standing trial needs 4-500 control steps")
@@ -142,6 +239,9 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     from isaaclab.assets import AssetBaseCfg
     from isaaclab.scene import InteractiveSceneCfg
     from isaaclab.sensors import CameraCfg
+    diagnostics = profile.get("diagnostics")
+    if diagnostics:
+        from isaaclab.sensors import ContactSensorCfg
     import isaaclab.sim as sim_utils
     from isaaclab.utils import configclass, instantiate, replace
     from isaaclab_assets import G1_29DOF_CFG
@@ -157,6 +257,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         kp.update({n: contract[f"{prefix}_hold_kp"] for n in groups[key]})
         kd.update({n: contract[f"{prefix}_hold_kd"] for n in groups[key]})
     candidate = replace(G1_29DOF_CFG, prim_path="{ENV_REGEX_NS}/Robot")
+    if diagnostics:
+        candidate.spawn = replace(candidate.spawn, activate_contact_sensors=True)
     motor_limits = actuator_limits(contract, reference)
     upper = groups["arms"] + groups["hands"]
     candidate.actuators = {"reference_pd": IdealPDActuatorCfg(
@@ -184,6 +286,10 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             spawn=sim_utils.PinholeCameraCfg(focal_length=24, horizontal_aperture=20.955,
                                            clipping_range=(0.1, 100)),
         )
+        if diagnostics:
+            feet_contact = ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link", update_period=0.0,
+                history_length=1, track_friction_forces=True, debug_vis=False)
 
     @configclass
     class LaunchCfg:
@@ -216,6 +322,21 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
 
         def device(value):
             return torch.as_tensor(value, dtype=torch.float32, device=runtime["device"])[None]
+
+        if diagnostics:
+            contact_sensor = scene["feet_contact"]
+            feet = diagnostics["foot_body_names"]
+            if set(contact_sensor.body_names) != set(feet) or len(contact_sensor.body_names) != 2:
+                raise RuntimeError("Diagnostic sensor did not resolve exactly the two reviewed foot bodies")
+            foot_body_indices = [robot.body_names.index(name) for name in feet]
+            sensor_indices = [contact_sensor.body_names.index(name) for name in feet]
+            write_json(directory / "contact-materials.json", read_contact_materials(sim.stage, feet))
+            write_json(directory / "contact-metadata.json", {
+                "sensor_body_names": list(contact_sensor.body_names), "foot_body_names": feet,
+                "physics_dt_seconds": asset["physics_dt"], "sensor_history_length": 1,
+                "force_scope": "Aggregate forces from all contact partners in the single-G1 ground-only scene",
+                "sampling": "Post-physics-step poses, world twists and forces; explicit efforts are those held over that step",
+                "point_velocity_limitation": "Velocity is measured at the rigid-body origin, not a contact point"})
 
         names = list(robot.joint_names)
         inventory = {"joint_names": names, "is_fixed_base": bool(robot.is_fixed_base),
@@ -329,11 +450,15 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         capture(directory / "initial.png")
         error = None
         try:
-            with (directory / "trajectory.jsonl").open("w") as trajectory:
+            with (directory / "trajectory.jsonl").open("w") as trajectory, \
+                    ((directory / "contacts.jsonl").open("w") if diagnostics else nullcontext(None)) as contact_log:
                 for step in range(profile["control_steps"]):
                     q, dq = array(robot.data.joint_pos), array(robot.data.joint_vel)
                     pose, vel = array(robot.data.root_link_pose_w), array(robot.data.root_link_vel_w)
                     observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation)
+                    if diagnostics:
+                        input_state = {"joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
+                                       "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist()}
                     action = policy(observation)
                     try:
                         target, clipped = history.targets(action, limits[lower_indices])
@@ -351,10 +476,31 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                     targets = defaults.copy()
                     targets[lower_indices] = target
                     robot.set_joint_position_target_index(target=device(targets))
-                    for _ in range(asset["control_decimation"]):
+                    for substep in range(asset["control_decimation"]):
                         scene.write_data_to_sim()
                         sim.step(render=False)
                         scene.update(asset["physics_dt"])
+                        if diagnostics:
+                            data = contact_sensor.data
+                            normal = finite(array(data.net_normal_forces_w), (2, 3))[sensor_indices]
+                            friction = finite(array(data.net_friction_forces_w), (2, 3))[sensor_indices]
+                            total = finite(array(data.net_forces_w), (2, 3))[sensor_indices]
+                            foot_poses = finite(array(robot.data.body_link_pose_w), (len(robot.body_names), 7))[foot_body_indices]
+                            foot_velocities = finite(array(robot.data.body_link_vel_w), (len(robot.body_names), 6))[foot_body_indices]
+                            computed = finite(array(robot.actuators.computed_effort), (43,))[lower_indices]
+                            applied = finite(array(robot.actuators.applied_effort), (43,))[lower_indices]
+                            physics_step = step*asset["control_decimation"]+substep+1
+                            contact_log.write(json.dumps({
+                                "physics_step": physics_step, "control_step": step+1,
+                                "sim_time_seconds": physics_step*asset["physics_dt"],
+                                "lower_body_computed_effort": computed.tolist(),
+                                "lower_body_applied_effort": applied.tolist(),
+                                "feet": {name: {"pose_xyzw": foot_poses[i].tolist(),
+                                    "velocity_world": foot_velocities[i].tolist(),
+                                    "normal_force_world_n": normal[i].tolist(),
+                                    "friction_force_world_n": friction[i].tolist(),
+                                    "total_force_world_n": total[i].tolist()} for i, name in enumerate(feet)}
+                            }, allow_nan=False)+"\n")
                     pose = finite(array(robot.data.root_link_pose_w), (7,))
                     q = finite(array(robot.data.joint_pos), (43,))
                     dq = finite(array(robot.data.joint_vel), (43,))
@@ -366,6 +512,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                               "action": action.tolist(), "clipped_joint_targets": clipped,
                               "root_pose_xyzw": pose.tolist(), "root_velocity_world": velocity.tolist(),
                               "joint_positions": q.tolist(), "joint_velocities": dq.tolist()}
+                    if diagnostics:
+                        record.update(policy_observation=observation.tolist(), policy_input_state=input_state)
                     trajectory.write(json.dumps(record)+"\n")
                     result.update(steps_completed=step+1, controller_inference_verified=True)
                     if (step+1) % stride == 0:
@@ -471,6 +619,16 @@ def validate_stage(stage, directory, profile):
         for name in ("initial.png", "final.png"):
             if not (directory / name).is_file():
                 raise RuntimeError("Missing balance camera evidence")
+        if profile.get("diagnostics"):
+            analysis = analyze_run(directory)
+            if analysis["status"] != "diagnostics_complete":
+                raise RuntimeError("Incomplete contact diagnostics")
+            if not analysis["contacts"]["force_evidence_present"]:
+                raise RuntimeError("Contact diagnostics recorded no supporting foot-force evidence")
+            materials = json.loads((directory / "contact-materials.json").read_text())
+            if (set(materials["scopes"]) != {"ground", *profile["diagnostics"]["foot_body_names"]} or
+                    any(not shapes for shapes in materials["scopes"].values())):
+                raise RuntimeError("Incomplete diagnostic material evidence")
 
 
 def worker(stage, profile, asset, runtime, contract_path, directory):
@@ -510,16 +668,22 @@ def main(argv=None):
     parser.add_argument("--stage", choices=("policy", "balance"), default="policy")
     parser.add_argument("--prepare-model", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--analyze-run", type=Path, help="Analyze saved artifacts on CPU without Isaac, ONNX or Modal")
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs/isaac")
     parser.add_argument("--worker", choices=("policy", "gpu", "balance"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if args.analyze_run:
+        print(json.dumps(analyze_run(args.analyze_run), indent=2))
+        return 0
     profile, asset, runtime = load_plan(args.profile)
     stages = ["policy"] if args.stage == "policy" else ["policy", "gpu", "balance"]
     if args.dry_run:
         print(json.dumps({"status": "local_plan_only", "stages": stages, "asset": asset["asset_config"],
                           "control_steps": profile["control_steps"], "simulated_seconds": profile["control_steps"]*0.02,
                           "model_download_bytes": 1886682 if args.prepare_model else 0,
+                          "contact_diagnostics": bool(profile.get("diagnostics")),
+                          "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
@@ -561,6 +725,11 @@ def main(argv=None):
         (directory / "error.log").write_text(traceback.format_exc())
         raise
     finally:
+        if profile.get("diagnostics") and (directory / "trajectory.jsonl").is_file():
+            try:
+                write_json(directory / "diagnostics-summary.json", analyze_run(directory))
+            except (OSError, ValueError, RuntimeError, KeyError):
+                (directory / "diagnostics-error.log").write_text(traceback.format_exc())
         write_json(directory / "summary.json", summary)
         print(json.dumps(summary), flush=True)
 

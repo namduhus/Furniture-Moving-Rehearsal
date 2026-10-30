@@ -270,6 +270,75 @@ class ControllerAdapterTests(unittest.TestCase):
                 mock.patch("builtins.print"):
             self.assertEqual(runner.main(["--stage", "balance", "--prepare-model", "--dry-run"]), 0)
 
+    def test_diagnostic_profile_preserves_the_working_control_configuration(self):
+        baseline, asset, runtime = runner.load_plan(runner.DEFAULT_PROFILE)
+        profile, diagnostic_asset, diagnostic_runtime = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
+        self.assertEqual(asset, diagnostic_asset)
+        self.assertEqual(runtime, diagnostic_runtime)
+        self.assertEqual({k:v for k,v in profile.items() if k not in ("base_profile", "diagnostics", "scope")},
+                         {k:v for k,v in baseline.items() if k != "scope"})
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "profile.json"
+            for change in ({"base_profile": "configs/isaac_smoke.json"}, {"control_steps": 500},
+                           {"diagnostics": {"foot_body_names": [], "minimum_normal_force_n": 1}},
+                           {"diagnostics": {**profile["diagnostics"], "minimum_normal_force_n": float("nan")}}):
+                path.write_text(json.dumps({"base_profile": "configs/isaac_g1_balance.json",
+                                            "diagnostics": profile["diagnostics"], **change}))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    runner.load_plan(path)
+
+    def test_contact_summary_checks_raw_force_timing_and_loaded_motion(self):
+        feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        samples = []
+        for i in range(1, 9):
+            sample = {"physics_step": i, "control_step": (i-1)//4+1, "sim_time_seconds": i*0.005,
+                      "lower_body_computed_effort": [2.0]*15, "lower_body_applied_effort": [1.0]*15, "feet": {}}
+            for j,name in enumerate(feet):
+                normal = 100.0 if ((i <= 4) == (j == 0)) else 0.0
+                sample["feet"][name] = {"pose_xyzw": [0,0,0.02,0,0,0,1], "velocity_world": [0.2,0,0,0,0,0],
+                    "normal_force_world_n": [0,0,normal], "friction_force_world_n": [-0.1*normal,0,0],
+                    "total_force_world_n": [-0.1*normal,0,normal]}
+            samples.append(sample)
+        report = wbc.contact_summary(samples, feet, 1.0, 0.005, 4)
+        self.assertTrue(report["force_evidence_present"])
+        self.assertEqual(report["feet"][feet[0]]["loaded_fraction"], 0.5)
+        self.assertAlmostEqual(report["feet"][feet[1]]["loaded_planar_speed_mean_m_s"], 0.2)
+        self.assertAlmostEqual(report["feet"][feet[1]]["mean_friction_normal_ratio_when_loaded"], 0.1)
+        self.assertEqual(report["effort_clipped_samples_by_lower_body_index"], [8]*15)
+        for corrupt in (lambda rows: rows[2].update(physics_step=99),
+                        lambda rows: rows[2]["feet"][feet[0]].update(total_force_world_n=[0,0,0]),
+                        lambda rows: rows[2]["feet"][feet[0]].update(velocity_world=[float("nan")]*6)):
+            invalid = copy.deepcopy(samples)
+            corrupt(invalid)
+            with self.assertRaises(ValueError):
+                wbc.contact_summary(invalid, feet, 1.0, 0.005, 4)
+        self.assertFalse(wbc.contact_summary([], feet, 1.0, 0.005, 4)["force_evidence_present"])
+
+    def test_material_reader_records_unresolved_bindings_without_inventing_friction(self):
+        class Prim:
+            def __init__(self, path): self.path = path
+            def IsValid(self): return True
+            def HasAPI(self, schema): return schema == "collision" or self.path.endswith("material")
+            def GetPath(self): return self.path
+            def GetAttribute(self, name):
+                return SimpleNamespace(Get=lambda: {"physics:staticFriction": 0.5, "physics:dynamicFriction": 0.4}.get(name))
+        class Binding:
+            def __init__(self, prim): self.prim = prim
+            def ComputeBoundMaterial(self, **kwargs):
+                if self.prim.path == "/World/Ground":
+                    return SimpleNamespace(GetPrim=lambda: Prim("/World/Ground/material")), None
+                return None, None
+        module = ModuleType("pxr")
+        module.Usd = SimpleNamespace(PrimRange=lambda root, flags: [root], TraverseInstanceProxies=lambda: None)
+        module.UsdPhysics = SimpleNamespace(CollisionAPI="collision", MaterialAPI="material")
+        module.UsdShade = SimpleNamespace(MaterialBindingAPI=Binding)
+        feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        with mock.patch.dict(sys.modules, {"pxr": module}):
+            result = runner.read_contact_materials(SimpleNamespace(GetPrimAtPath=lambda path: Prim(path)), feet)
+        self.assertEqual(result["scopes"]["ground"][0]["physics:dynamicFriction"], 0.4)
+        self.assertFalse(result["scopes"][feet[0]][0]["physics_material_found"])
+        self.assertIsNone(result["scopes"][feet[0]][0]["material_path"])
+
 
 class ControllerLaunchTests(unittest.TestCase):
     def test_actual_balance_flow_initializes_frames_gains_and_contiguous_steps(self):
@@ -310,6 +379,9 @@ class ControllerLaunchTests(unittest.TestCase):
                 local = reference.forward(dict(zip(names, robot.q, strict=True)))
                 poses = [root @ local[n] for n in robot.body_names]
                 return Tensor([[np.r_[p[:3, 3], wbc.matrix_quat_xyzw(p[:3, :3])] for p in poses]])
+            @property
+            def body_link_vel_w(self):
+                return Tensor([[[0.2,0,0,0,0,0] for n in robot.body_names]])
 
         class Robot:
             joint_names = names
@@ -328,6 +400,7 @@ class ControllerLaunchTests(unittest.TestCase):
             def set_joint_velocity_target_index(self, *, target): pass
 
         robot = Robot()
+        robot.actuators = SimpleNamespace(computed_effort=Tensor([np.zeros(43)]), applied_effort=Tensor([np.zeros(43)]))
         limits = [[reference.limits[n]["lower"], reference.limits[n]["upper"]] for n in names]
         rgb = np.repeat(((np.indices((64, 64)).sum(axis=0) % 2)*255)[..., None], 3, axis=-1).astype(np.uint8)
 
@@ -380,7 +453,14 @@ class ControllerLaunchTests(unittest.TestCase):
 
         def instantiate(config):
             instantiated.append(config)
-            return Scene(robot=robot, camera=Camera())
+            scene = Scene(robot=robot, camera=Camera())
+            if hasattr(config, "feet_contact"):
+                scene["feet_contact"] = SimpleNamespace(
+                    body_names=["right_ankle_roll_link", "left_ankle_roll_link"],
+                    data=SimpleNamespace(net_normal_forces_w=Tensor([[[0,0,200],[0,0,100]]]),
+                        net_friction_forces_w=Tensor([[[-20,0,0],[-10,0,0]]]),
+                        net_forces_w=Tensor([[[-20,0,200],[-10,0,100]]])))
+            return scene
 
         def replace(value, **kwargs):
             value = copy.deepcopy(value)
@@ -396,7 +476,7 @@ class ControllerLaunchTests(unittest.TestCase):
             "isaaclab.actuators": {"IdealPDActuatorCfg": ExplicitConfig, "ImplicitActuatorCfg": ImplicitConfig},
             "isaaclab.assets": {"AssetBaseCfg": Config},
             "isaaclab.scene": {"InteractiveSceneCfg": Config},
-            "isaaclab.sensors": {"CameraCfg": Config},
+            "isaaclab.sensors": {"CameraCfg": Config, "ContactSensorCfg": Config},
             "isaaclab.sim": {"GroundPlaneCfg": Config, "DomeLightCfg": Config, "PinholeCameraCfg": Config,
                              "SimulationCfg": Config, "SimulationContext": Simulation},
             "isaaclab.utils": {"configclass": lambda c: c, "instantiate": instantiate, "replace": replace},
@@ -420,11 +500,15 @@ class ControllerLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name, mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(wbc, "BalancePolicy", Policy), \
                 mock.patch.object(runner, "read_joint_frames", return_value=joint_frame_fixture(reference)), \
+                mock.patch.object(runner, "read_contact_materials", return_value={"scopes": {n:[{"material_path":None}]
+                    for n in ("ground", "left_ankle_roll_link", "right_ankle_roll_link")}}) as materials, \
                 mock.patch.object(runner, "require_ffmpeg", return_value="unused-interface-double"), \
                 mock.patch.object(runner, "encode_recording", side_effect=encode):
             directory = Path(name)
             runner.balance_check(profile, asset, runtime, contract, reference, Path("unused.onnx"), directory)
             runner.validate_stage("balance", directory, profile)
+            materials.assert_not_called()
+            self.assertFalse((directory / "contacts.jsonl").exists())
             self.assertEqual(Simulation.steps, 16)
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].stiffness["waist_yaw_joint"], 250)
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].actuator_effort_limit["left_hip_roll_joint"], 88)
@@ -481,6 +565,34 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertEqual(snapshot["limit"], 5.0)
             self.assertEqual(len(snapshot["observation"]), 516)
             self.assertEqual(Simulation.steps, steps_before)
+            Policy.output = np.zeros(15)
+            diagnostic_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
+            diagnostic_profile.update(control_steps=4, camera=profile["camera"])
+            diagnostic = directory / "diagnostic"
+            diagnostic.mkdir()
+            for file,value in (("profile.json", diagnostic_profile), ("asset-profile.json", asset),
+                               ("controller-contract.json", contract)):
+                (diagnostic / file).write_text(json.dumps(value))
+            runner.balance_check(diagnostic_profile, asset, runtime, contract, reference, Path("unused.onnx"), diagnostic)
+            runner.validate_stage("balance", diagnostic, diagnostic_profile)
+            analysis = runner.analyze_run(diagnostic)
+            self.assertEqual(analysis["status"], "diagnostics_complete")
+            self.assertTrue(analysis["policy_inputs_verified"])
+            self.assertEqual(analysis["contacts"]["samples"], 16)
+            self.assertEqual(analysis["contacts"]["feet"]["left_ankle_roll_link"]["maximum_normal_force_n"], 100)
+            self.assertTrue(instantiated[-1].robot.spawn.activate_contact_sensors)
+            self.assertTrue(instantiated[-1].feet_contact.track_friction_forces)
+            self.assertEqual(instantiated[-1].feet_contact.history_length, 1)
+            with mock.patch.object(wbc, "prepare_model", side_effect=AssertionError("model accessed")), \
+                    mock.patch.object(runner, "run_stage", side_effect=AssertionError("worker launched")), \
+                    mock.patch("builtins.print"):
+                self.assertEqual(runner.main(["--analyze-run", str(diagnostic)]), 0)
+            trace_path = diagnostic / "trajectory.jsonl"
+            trace = [json.loads(line) for line in trace_path.read_text().splitlines()]
+            trace[0]["policy_observation"][-1] = 123.0
+            trace_path.write_text("\n".join(json.dumps(row) for row in trace))
+            with self.assertRaisesRegex(ValueError, "observation"):
+                runner.analyze_run(diagnostic)
 
 if __name__ == "__main__":
     unittest.main()

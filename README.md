@@ -114,7 +114,32 @@ The trial requests **250 control steps at 50 Hz**, or five simulated seconds, wi
 
 Outputs go to `outputs/isaac/<run-id>-wbc/`: source/runtime contracts, stage/error logs, actuator configuration and applied armature, `joint-frames.json`, raw frame-calibration/probe inputs, per-link `frame-comparison-*.json` reports, explicit initialization evidence, a per-step trajectory, initial/final PNGs and an MP4. Failures inside the simulation block are saved before Kit shutdown can terminate the process; the parent also reports a bounded log tail. A rejected policy target writes `rejected-action.json` with the complete 516-value observation, raw action, state, joint mapping and failing step before applying it; the raw-action bound remains 5. Successful full recording contains 125 frames at 25 FPS. Static frames are allowed for this standing video because a steady stance can be visually static; physical advancement is checked through the complete timed trajectory. Existing motion-smoke video checks still require changing frames by default. Failed trials preserve partial evidence and videos when enough frames exist.
 
-Only `passed_balance_rollout` with reviewed trajectory/video establishes this standing trial's success. `passed_policy_contract` verifies checkpoint execution only. Neither status establishes walking, furniture manipulation or VLA capability. Inspect errors and frame/initialization evidence before changing transfer settings.
+A reviewed `passed_balance_rollout` means the bounded non-fall, action and recording checks completed; it does not assess stationary position holding. `passed_policy_contract` verifies checkpoint execution only. Neither status establishes walking, furniture manipulation or VLA capability. Inspect errors and frame/initialization evidence before changing transfer settings.
+
+### Diagnose zero-command drift
+
+The [diagnostic profile](configs/isaac_g1_diagnostics.json) extends the standing profile with instrumentation. The checkpoint, zero navigation command, gains, armatures, motor limits, time steps and recording remain the same. Contact reporting is enabled on the existing robot; no friction coefficients or controller parameters are tuned. This profile uses the selected Isaac Sim 6.2 [contact-sensor API](https://github.com/isaac-sim/IsaacLab/blob/e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4/source/isaaclab/isaaclab/sensors/contact_sensor/base_contact_sensor_data.py), including aggregate normal, friction and total forces.
+
+Preview on the Mac, then run once in an existing remote Isaac session after synchronizing the code:
+
+```sh
+uv run --locked python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_diagnostics.json --stage balance --dry-run
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_diagnostics.json --stage balance --prepare-model
+```
+
+No additional image, dependency or Modal session is required. The existing single-L40S session/cost limits apply; five simulated seconds is not the GPU session duration. There is no automatic experiment loop.
+
+The run records 1,000 physics samples at 200 Hz in `contacts.jsonl`: both foot-body world poses/twists, aggregate normal/friction/total contact forces, and the explicit lower-body motor efforts before/after clipping. The control trajectory additionally records the 250 complete policy inputs and their source states. `contact-materials.json` stores authored collision-material bindings and coefficients; missing bindings/combine modes remain unresolved instead of assuming a value. `contact-metadata.json` records body mapping and sampling semantics. The parent requires complete finite samples, force-component consistency, some supporting foot-force evidence and consistent recorded policy inputs. Partial logs remain available on failure.
+
+`diagnostics-summary.json` reports planar drift/speed, loaded-foot motion and motor clipping. The 1 N load threshold is an aggregation setting that does not alter control or define a standing-success criterion. Foot-body origin motion can include rolling; it is not contact-point slip by itself. Authored material properties alone do not establish an effective pair coefficient or a drift cause. A non-fall pass also does not establish stationary standing.
+
+After copying a run locally, analyze it without Isaac, ONNX inference or cloud access:
+
+```sh
+uv run --locked python scripts/isaac_g1_wbc.py --analyze-run outputs/isaac/RUN_ID
+```
+
+This command prints a derived report without rewriting the original artifacts. Older runs without the new telemetry receive a motion-only report; missing contact evidence is not reconstructed as measured force. Policy input replay checks state/history consistency with the adapter and does not prove equivalence to upstream training observations. The diagnostic sensor and material collection still require validation on the selected GPU worker.
 
 ### Record a G1 motion check
 
@@ -248,6 +273,7 @@ Keep this table current in the same commit as each new module or third-party add
 | Browser motion observer | Created during the hackathon | Latest-frame/state publication, read-only loopback MJPEG viewer, lifecycle/freshness labels, reconnect handling and observation-only pacing | [Observation profile](configs/isaac_observe.json), [viewer](scripts/isaac_observe.py), [HTTP/state checks](tests/test_isaac_observe.py) |
 | G1 manipulation-asset inventory | Created during the hackathon | Separate floating-base candidate profile, explicit joint-order mapping, finite state/limit guards, bounded inventory subprocess and evidence validation | [Profile](configs/isaac_g1_asset.json), [script](scripts/isaac_g1_asset.py), [checks](tests/test_isaac_g1_asset.py) |
 | Pretrained G1 controller adapter and bounded standing trial | Created during the hackathon | Quaternion/frame conversion, authored USD joint checks, kinematic probes, initialization, observation history, lower-body explicit PD and implicit posture holding, applied-armature validation, transfer guards, rejected-action/failure diagnostics and recorded evaluation | [Adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [profile](configs/isaac_g1_balance.json), [contract](configs/g1_wbc_reference.json), [numerical and flow checks](tests/test_g1_wbc.py) |
+| Zero-command contact diagnostics and CPU analysis | Created during the hackathon | Optional per-physics-step foot forces/twists, authored material inspection, explicit effort clipping, policy input/state capture and saved-run analysis with evidence validation | [Diagnostic profile](configs/isaac_g1_diagnostics.json), [runner and analyzer](scripts/isaac_g1_wbc.py), [summary mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing Isaac sensor and USD APIs |
 | GR00T-WBC balance checkpoint and G1 reference kinematics | Third-party model and robot data | Downloaded pretrained balance inference and reference-only frame checks; no original robot or pretrained-policy claim | [Pinned NVIDIA controller source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), [upstream rev 1.0 URDF](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf), [local reference](assets/references/g1_wbc.urdf), [NVIDIA code/model terms](licenses/GR00T-WBC.txt), [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt); weights remain Git-ignored |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
