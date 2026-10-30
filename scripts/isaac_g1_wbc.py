@@ -18,6 +18,7 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 
 
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
+FINGERTIP_ALLOWANCE_M = 0.05
 
 
 def trial_contract(profile):
@@ -572,7 +573,8 @@ def analyze_run(directory):
         dq = finite(state["joint_velocities"], (dofs,))
         pose = finite(state["root_pose_xyzw"], (7,))
         velocity = finite(state["root_velocity_world"], (6,))
-        observation = history.observe(q[indices], dq[indices], pose[3:], velocity[3:], rotation, profile.get("command", (0, 0, 0)))
+        observation = history.observe(q[indices], dq[indices], pose[3:], velocity[3:], rotation, profile.get("command", (0, 0, 0)),
+                                      profile.get("rpy_command", (0, 0, 0)))
         if not np.allclose(observation, finite(row["policy_observation"], (516,)), atol=1e-6, rtol=0):
             raise ValueError("Logged policy observation disagrees with its saved input state/history")
         history.targets(row["action"], limits)
@@ -602,6 +604,9 @@ def analyze_run(directory):
                 raise ValueError("Incomplete push object evidence")
             report["push_object"] = push_object_summary(pushed, profile["push_object"])
             object_start = pushed["initial_pose_xyzw"]
+            if (directory / "hand-contact-metadata.json").exists():
+                from g1_wbc import push_force_summary
+                report["push_force"] = push_force_summary(samples)
         report["functional"] = functional_summary(profile["functional_case"], initial, records, foot_start, samples, object_start)
         report["stationary_success_assessed"] = profile["functional_case"] == "stand" and report["status"] == "diagnostics_complete"
     return report
@@ -678,7 +683,7 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "arm_hold", "push_object", "deployment", "command", "functional_case", "scope"}:
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "arm_hold", "push_object", "rpy_command", "deployment", "command", "functional_case", "scope"}:
             raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm/contact overrides")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
@@ -734,6 +739,12 @@ def load_plan(path):
             type(push["friction"]) not in (int, float) or not 0.05 <= push["friction"] <= 1.0 or
             type(push["gap_m"]) not in (int, float) or not 0 <= push["gap_m"] <= 0.5):
         raise ValueError("Invalid push object experiment configuration")
+    # Only a bounded forward torso-pitch lean is reviewed; the policy observes it as its rpy command.
+    rpy = profile.get("rpy_command")
+    if rpy is not None and (push is None or not isinstance(rpy, list) or len(rpy) != 3 or
+                            any(type(v) not in (int, float) for v in rpy) or rpy[0] != 0 or rpy[2] != 0 or
+                            not 0 <= rpy[1] <= 0.3):
+        raise ValueError("Invalid lean command configuration")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if deployment:
         asset["fixed_hand_joints"] = asset["joint_groups"]["hands"]
@@ -843,16 +854,17 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         material = {"physics_material": PhysxRigidBodyMaterialCfg(**{**surface, **({"friction_combine_mode": combine_mode} if push else {})})}
     if push:
         from isaaclab.assets import RigidObjectCfg
-        # The default-pose palm reach places the object's near face gap_m ahead of the hands.
-        palm_reach = float(reference.forward({**dict.fromkeys(reference.limits, 0.0),
-            **dict(zip(lower, contract["default_lower_angles"]))})["left_hand_palm_link"][0, 3])
+        # Hand reach: the farthest default-pose hand link origin plus an allowance for the distal finger
+        # segment (~0.046 m); run 143003 stalled with fingertips touching at ~0.40 m.
+        default_pose = reference.forward({**dict.fromkeys(reference.limits, 0.0), **dict(zip(lower, contract["default_lower_angles"]))})
+        hand_reach = max(float(pose[0, 3]) for name, pose in default_pose.items() if "_hand_" in name) + FINGERTIP_ALLOWANCE_M
         furniture_cfg = RigidObjectCfg(prim_path="{ENV_REGEX_NS}/Furniture", spawn=sim_utils.CuboidCfg(
             size=tuple(push["size_m"]), visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.55, 0.38, 0.22)),
             rigid_props=sim_utils.UsdPhysicsRigidBodyCfg(), mass_props=sim_utils.MassCfg(mass=push["mass_kg"]),
             collision_props=sim_utils.UsdPhysicsCollisionCfg(), physics_material_path="physicsMaterial",
             physics_material=PhysxRigidBodyMaterialCfg(static_friction=push["friction"], dynamic_friction=push["friction"],
                                                        friction_combine_mode="multiply")),
-            init_state=RigidObjectCfg.InitialStateCfg(pos=(palm_reach+push["gap_m"]+push["size_m"][0]/2, 0.0, push["size_m"][2]/2)))
+            init_state=RigidObjectCfg.InitialStateCfg(pos=(hand_reach+push["gap_m"]+push["size_m"][0]/2, 0.0, push["size_m"][2]/2)))
 
     @configclass
     class SceneCfg(InteractiveSceneCfg):
@@ -873,6 +885,10 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             feet_contact = ContactSensorCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link", update_period=0.0,
                 history_length=1, track_friction_forces=True, debug_vis=False)
+        if push:
+            hand_contact = ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/.*_hand/.*_hand_.*_link", update_period=0.0, history_length=1,
+                filter_prim_paths_expr=["{ENV_REGEX_NS}/Furniture"], debug_vis=False)
 
     @configclass
     class LaunchCfg:
@@ -934,6 +950,16 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                 "sampling": "Post-physics-step poses, world twists and forces; efforts are recorded collection staging buffers",
                 "effort_telemetry_limitation": "Native execution bypasses these processed-command buffers; actual submitted effort and clipping are not established.",
                 "point_velocity_limitation": "Velocity is measured at the rigid-body origin, not a contact point"})
+        if push:
+            hand_sensor = scene["hand_contact"]
+            hand_names = list(hand_sensor.body_names)
+            hand_sides = {side: [i for i, n in enumerate(hand_names) if n.startswith(f"{side}_hand_")] for side in ("left", "right")}
+            if not all(hand_sides.values()) or sum(map(len, hand_sides.values())) != len(hand_names):
+                raise RuntimeError(f"Hand contact sensor resolved unexpected bodies: {hand_names}")
+            write_json(directory / "hand-contact-metadata.json", {
+                "sensor_body_names": hand_names, "filter_prim_path": "/World/envs/env_0/Furniture",
+                "force_scope": "Filtered hand-link forces from the box only, summed per side",
+                "limitation": "Wrist and forearm contacts with the box are not sensed"})
 
         names = list(robot.joint_names)
         inventory = {"joint_names": names, "is_fixed_base": bool(robot.is_fixed_base),
@@ -1062,7 +1088,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         furniture = scene["furniture"] if push else None
         if push:
             from g1_wbc import push_object_summary
-            pushed = {"status": "measuring_push_object", "size_m": list(push["size_m"]), "palm_reach_m": palm_reach,
+            pushed = {"status": "measuring_push_object", "size_m": list(push["size_m"]), "hand_reach_m": hand_reach,
+                      "fingertip_allowance_m": FINGERTIP_ALLOWANCE_M,
                       "material": read_material(sim.stage, "/World/envs/env_0/Furniture/geometry/physicsMaterial"),
                       "runtime_mass_kg": float(array(furniture.data.body_mass)[0]),
                       "initial_pose_xyzw": array(furniture.data.root_link_pose_w).tolist()}
@@ -1117,7 +1144,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         def infer(step, input_time):
             q, dq = array(robot.data.joint_pos), array(robot.data.joint_vel)
             pose, vel = array(robot.data.root_link_pose_w), array(robot.data.root_link_vel_w)
-            observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation, profile.get("command", (0, 0, 0)))
+            observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation, profile.get("command", (0, 0, 0)),
+                                          profile.get("rpy_command", (0, 0, 0)))
             if diagnostics:
                 input_state = {"joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
                                "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist()}
@@ -1163,7 +1191,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                             computed = finite(array(robot.actuators.computed_effort), (dofs,))[lower_indices]
                             applied = finite(array(robot.actuators.applied_effort), (dofs,))[lower_indices]
                             physics_step = step*asset["control_decimation"]+substep+1
-                            contact_log.write(json.dumps({
+                            sample = {
                                 "physics_step": physics_step, "control_step": step+1,
                                 "sim_time_seconds": physics_step*asset["physics_dt"],
                                 "lower_body_computed_effort": computed.tolist(),
@@ -1172,8 +1200,11 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                                     "velocity_world": foot_velocities[i].tolist(),
                                     "normal_force_world_n": normal[i].tolist(),
                                     "friction_force_world_n": friction[i].tolist(),
-                                    "total_force_world_n": total[i].tolist()} for i, name in enumerate(feet)}
-                            }, allow_nan=False)+"\n")
+                                    "total_force_world_n": total[i].tolist()} for i, name in enumerate(feet)}}
+                            if push:
+                                matrix = finite(array(hand_sensor.data.force_matrix_w), (len(hand_names), 1, 3))[:, 0]
+                                sample["hand_box_force_world_n"] = {side: matrix[rows].sum(axis=0).tolist() for side, rows in hand_sides.items()}
+                            contact_log.write(json.dumps(sample, allow_nan=False)+"\n")
                     if deployment:
                         action, clipped, observation, input_state = infer(step, (step+1)*dt)
                     pose = finite(array(robot.data.root_link_pose_w), (7,))

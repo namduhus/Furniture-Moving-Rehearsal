@@ -345,7 +345,9 @@ def push_object_summary(evidence, settings):
     size = finite(settings["size_m"], (3,))
     pose = finite(evidence["initial_pose_xyzw"], (7,))
     material = evidence["material"]
-    wanted_x = evidence["palm_reach_m"] + settings["gap_m"] + size[0]/2
+    # Earlier evidence measured from the palm origin; current runs use the fingertip-inclusive hand reach.
+    reach = evidence["hand_reach_m"] if "hand_reach_m" in evidence else evidence["palm_reach_m"]
+    wanted_x = reach + settings["gap_m"] + size[0]/2
     if (not np.allclose(finite(evidence["size_m"], (3,)), size, atol=1e-9, rtol=0) or
             not np.isclose(evidence["runtime_mass_kg"], settings["mass_kg"], atol=1e-4, rtol=0) or
             material["friction_combine_mode"] != "multiply" or
@@ -355,6 +357,21 @@ def push_object_summary(evidence, settings):
         raise ValueError("Push object differs from the reviewed configuration")
     return {"status": "verified_push_object", "size_m": size.tolist(), "mass_kg": settings["mass_kg"],
             "friction": settings["friction"], "near_face_x_m": float(pose[0]-size[0]/2)}
+
+
+def push_force_summary(samples, threshold=1.0):
+    """Summarize hand forces from the box; the push is the negative x reaction on the hands."""
+    if not samples or any("hand_box_force_world_n" not in s for s in samples):
+        raise ValueError("Missing hand-box contact force samples")
+    force = finite([np.sum([s["hand_box_force_world_n"][side] for side in ("left", "right")], axis=0) for s in samples],
+                   (len(samples), 3))
+    contact = np.linalg.norm(force, axis=1) > threshold
+    push = -force[:, 0]
+    return {"samples": len(samples), "contact_fraction": float(contact.mean()),
+            "first_contact_s": float(samples[int(np.argmax(contact))]["sim_time_seconds"]) if contact.any() else None,
+            "maximum_push_n": float(push.max()),
+            "mean_push_during_contact_n": float(push[contact].mean()) if contact.any() else 0.0,
+            "interpretation": "Sum over sensed hand links; other robot bodies touching the box are not included."}
 
 
 def object_tilt_degrees(pose):
@@ -397,7 +414,10 @@ def functional_summary(case, initial, records, foot_start=None, samples=(), obje
         pushed = {"progress_m": float(objects[-1, 0]-start[0]),
                   "maximum_lateral_drift_m": float(np.max(np.abs(objects[:, 1]-start[1]))),
                   "maximum_tilt_degrees": max(object_tilt_degrees(p) for p in objects)}
-        checks.update(object_progress_at_least_0_20m=pushed["progress_m"] >= 0.20,
+        # A box that moves before the robot can reach it was kicked by a spawn overlap.
+        pushed["displacement_by_0_20s_m"] = float(np.linalg.norm(objects[9, :2]-start[:2]))
+        checks.update(object_still_through_0_20s=pushed["displacement_by_0_20s_m"] <= 0.005,
+                      object_progress_at_least_0_20m=pushed["progress_m"] >= 0.20,
                       object_lateral_drift_within_0_15m=pushed["maximum_lateral_drift_m"] <= 0.15,
                       object_tilt_within_10_degrees=pushed["maximum_tilt_degrees"] <= 10)
     elif case == "turn":
@@ -584,7 +604,7 @@ class ObservationHistory:
         self.last_action = np.zeros(15, dtype=np.float32)
 
     def observe(self, body_positions, body_velocities, root_quat_xyzw, angular_velocity_w,
-                source_to_asset, command=(0.0, 0.0, 0.0)):
+                source_to_asset, command=(0.0, 0.0, 0.0), rpy=(0.0, 0.0, 0.0)):
         c = self.contract
         body = finite(body_positions, (29,))
         velocities = finite(body_velocities, (29,))
@@ -593,7 +613,7 @@ class ObservationHistory:
         gravity = rotation.T @ np.array([0.0, 0.0, -1.0])
         defaults = np.r_[finite(c["default_lower_angles"], (15,)), np.zeros(14)]
         frame = np.r_[finite(command, (3,))*c["command_scale"], c["height_command"],
-                      np.zeros(3), gyro*c["angular_velocity_scale"], gravity,
+                      finite(rpy, (3,)), gyro*c["angular_velocity_scale"], gravity,
                       (body-defaults)*c["joint_position_scale"],
                       velocities*c["joint_velocity_scale"], self.last_action].astype(np.float32)
         finite(frame, (86,))

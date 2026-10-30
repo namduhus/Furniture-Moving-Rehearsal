@@ -401,7 +401,7 @@ class ControllerAdapterTests(unittest.TestCase):
         push, push_asset, push_runtime = runner.load_plan(ROOT / "configs/isaac_g1_push.json")
         self.assertEqual((asset, runtime), (push_asset, push_runtime))
         self.assertEqual({k: v for k, v in base.items() if k not in ("scope", "functional_case")},
-                         {k: v for k, v in push.items() if k not in ("scope", "functional_case", "push_object")})
+                         {k: v for k, v in push.items() if k not in ("scope", "functional_case", "push_object", "rpy_command")})
         self.assertEqual(runner.trial_contract(push)[0]["policy_role"], "walk")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
@@ -411,12 +411,14 @@ class ControllerAdapterTests(unittest.TestCase):
                          {**raw, "push_object": {**raw["push_object"], "size_m": [0.7, 0.8]}},
                          {**raw, "push_object": {**raw["push_object"], "friction": 0}},
                          {**raw, "push_object": {**raw["push_object"], "anchor": "weld"}},
+                         {**raw, "rpy_command": [0, 0.5, 0]}, {**raw, "rpy_command": [0.1, 0.2, 0]},
+                         {**forward, "rpy_command": [0, 0.2, 0]},
                          {k: v for k, v in raw.items() if k != "push_object"},
                          {**forward, "push_object": raw["push_object"]}):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
         settings = push["push_object"]
-        evidence = {"size_m": [0.7, 0.8, 1.0], "palm_reach_m": 0.241, "runtime_mass_kg": 10.0,
+        evidence = {"size_m": [0.7, 0.8, 1.0], "hand_reach_m": 0.291, "runtime_mass_kg": 10.0,
                     "material": {"static_friction": 0.3, "dynamic_friction": 0.3, "friction_combine_mode": "multiply"},
                     "initial_pose_xyzw": [0.241+0.1+0.35, 0, 0.5, 0, 0, 0, 1]}
         self.assertAlmostEqual(wbc.push_object_summary(evidence, settings)["near_face_x_m"], 0.341)
@@ -426,16 +428,25 @@ class ControllerAdapterTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 wbc.push_object_summary({**evidence, key: value}, settings)
         initial = {"root_pose_xyzw": [0, 0, 0.785, 0, 0, 0, 1]}
-        def trace(dx, tip=0.0):
+        def trace(dx, tip=0.0, kick=0.0):
             quat = wbc.matrix_quat_xyzw(wbc.axis_rotation([0, 1, 0], tip)).tolist()
             return [{"step": i, "sim_time_seconds": i*0.02, "root_pose_xyzw": [0.0006*i, 0, 0.75, 0, 0, 0, 1],
                      "root_velocity_world": [0.03, 0, 0, 0, 0, 0], "tilt_rad": 0, "action": [0]*15, "clipped_joint_targets": 0,
-                     "object_pose_xyzw": [0.691+dx*i/250, 0, 0.5, *quat]} for i in range(1, 251)]
+                     "object_pose_xyzw": [0.691+dx*max(0, i-25)/225+kick, 0, 0.5, *quat]} for i in range(1, 251)]
         start = [0.691, 0, 0.5, 0, 0, 0, 1]
         self.assertEqual(wbc.functional_summary("push", initial, trace(0.3), object_start=start)["status"], "passed_functional_evaluation")
-        for rows, failed in ((trace(0.05), "object_progress_at_least_0_20m"), (trace(0.3, tip=0.3), "object_tilt_within_10_degrees")):
+        for rows, failed in ((trace(0.05), "object_progress_at_least_0_20m"), (trace(0.3, tip=0.3), "object_tilt_within_10_degrees"),
+                             (trace(0.0, kick=0.068), "object_still_through_0_20s")):
             result = wbc.functional_summary("push", initial, rows, object_start=start)
             self.assertFalse(result["checks"][failed])
+        samples = [{"sim_time_seconds": k*0.005, "hand_box_force_world_n": {side: [-push, 0, 1.0] if k >= 300 else [0.0, 0, 0]
+                    for side, push in (("left", 10.0), ("right", 8.0))}} for k in range(1, 1001)]
+        force = wbc.push_force_summary(samples)
+        self.assertEqual((force["maximum_push_n"], force["mean_push_during_contact_n"], force["first_contact_s"]), (18.0, 18.0, 1.5))
+        with self.assertRaisesRegex(ValueError, "Missing"): wbc.push_force_summary([{"sim_time_seconds": 0.005}])
+        history = wbc.ObservationHistory(self.contract)
+        frame = history.observe(np.zeros(29), np.zeros(29), [0, 0, 0, 1], np.zeros(3), np.eye(3), (0.2, 0, 0), (0, 0.2, 0))[-86:]
+        np.testing.assert_allclose(frame[:7], [0.2*self.contract["command_scale"][0], 0, 0, self.contract["height_command"], 0, 0.2, 0], atol=1e-6)
 
     def test_contact_authoring_deinstances_and_moves_only_sphere_centers(self):
         stage = SimpleNamespace(target="root", writes=[], GetSessionLayer=lambda: "session")
@@ -1346,15 +1357,20 @@ class ControllerLaunchTests(unittest.TestCase):
                         net_forces_w=Tensor([[[-20,0,200],[-10,0,100]]])))
             if hasattr(config, "furniture"):
                 scene["furniture"] = SimpleNamespace(data=FurnitureData(config.furniture))
+            if hasattr(config, "hand_contact"):
+                hands = [f"{side}_hand_{part}_link" for side in ("left", "right") for part in
+                         ("palm", "thumb_0", "thumb_1", "thumb_2", "index_0", "index_1", "middle_0", "middle_1")]
+                scene["hand_contact"] = SimpleNamespace(body_names=hands,
+                    data=SimpleNamespace(force_matrix_w=Tensor([[[[-1.5, 0, 0.2]]]*16])))
             return scene
 
         class FurnitureData:
-            """Pushed object double: slides 0.4 mm along x per physics step after spawning."""
+            """Pushed object double: rests for 80 physics steps, then slides 0.4 mm along x per step."""
             def __init__(self, config): self.config, self.start = config, Simulation.steps
             @property
             def root_link_pose_w(self):
                 x, y, z = self.config.init_state.pos
-                return Tensor([[x+0.0004*(Simulation.steps-self.start), y, z, 0, 0, 0, 1]])
+                return Tensor([[x+0.0004*max(0, Simulation.steps-self.start-80), y, z, 0, 0, 0, 1]])
             @property
             def root_link_vel_w(self): return Tensor([[0.08, 0, 0, 0, 0, 0]])
             @property
@@ -1757,8 +1773,13 @@ class ControllerLaunchTests(unittest.TestCase):
                     if case_profile is push_profile:
                         box = instantiated[-1].furniture
                         self.assertEqual((box.spawn.size, box.spawn.mass_props.mass, box.spawn.physics_material.static_friction), ((0.7, 0.8, 1.0), 10.0, 0.3))
-                        self.assertAlmostEqual(analysis["push_object"]["near_face_x_m"], 0.1+json.loads((contact_dir/"push-object.json").read_text())["palm_reach_m"])
-                        self.assertAlmostEqual(analysis["functional"]["object"]["progress_m"], 0.4, places=6)
+                        pushed = json.loads((contact_dir/"push-object.json").read_text())
+                        self.assertAlmostEqual(analysis["push_object"]["near_face_x_m"], 0.05+pushed["hand_reach_m"])
+                        self.assertAlmostEqual(pushed["hand_reach_m"], 0.365+0.05, places=3)
+                        self.assertAlmostEqual(analysis["functional"]["object"]["progress_m"], 0.368, places=6)
+                        self.assertAlmostEqual(analysis["push_force"]["maximum_push_n"], 24.0, places=4)
+                        np.testing.assert_allclose(Policy.observations[-1][-86+4:-86+7], [0, 0.2, 0], atol=1e-6)  # rpy command slot
+                        self.assertTrue(instantiated[-1].hand_contact.filter_prim_paths_expr)
                         self.assertEqual(controller["policy_role"], "walk")
                 else:
                     self.assertEqual(Simulation.steps, steps_before)

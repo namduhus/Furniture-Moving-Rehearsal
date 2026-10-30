@@ -262,7 +262,7 @@ The [crouch-start profile](configs/isaac_g1_crouch_start.json) keeps the arm-hol
 
 #### Box push
 
-The [push profile](configs/isaac_g1_push.json) adds a 0.7 x 0.8 x 1.0 m, 10 kg box (friction 0.3) 0.1 m ahead of the hands and walks forward with the arms in the hold pose. The gate requires the box to move at least 0.20 m without tipping past 10 degrees. Ground friction combines by multiplication so the feet keep 1.0 and the box keeps its own coefficient.
+The [push profile](configs/isaac_g1_push.json) adds a 0.7 x 0.8 x 1.0 m, 10 kg box (friction 0.3) 0.05 m beyond the fingertips and walks forward with a 0.2 rad forward torso-pitch command, arms in the hold pose. Hand-box contact forces are recorded. The gate requires the box to stay still for the first 0.2 s, then move at least 0.20 m without tipping past 10 degrees. Ground friction combines by multiplication so the feet keep 1.0 and the box keeps its own coefficient.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_push.json --stage balance --stand-run outputs/isaac/STAND_RUN_ID
