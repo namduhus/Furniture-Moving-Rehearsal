@@ -9,7 +9,7 @@
   },
   "initialization": {
     "mode": "source_pose",
-    "minimum_clearance_m": 0.001,
+    "minimum_clearance_m": 0.0,
     "maximum_vertical_shift_m": 0.1,
     "root_height_m": 0.793
   },

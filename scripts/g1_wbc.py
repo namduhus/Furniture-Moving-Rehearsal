@@ -734,7 +734,11 @@ def placement_summary(evidence, settings, policy_height, initial_pose):
                 raise ValueError("Foot collider geometry changed during placement")
     if (after["minimum_clearance_m"] < settings["minimum_clearance_m"]-1e-5 or
             not np.isclose(after["minimum_clearance_m"]-before["minimum_clearance_m"], lift, atol=1e-5, rtol=0)):
-        raise ValueError("Initial foot clearance was not established")
+        raise ValueError("Initial foot clearance was not established: "
+                         f"mode={settings['mode']}, before={before['minimum_clearance_m']:.9g} m, "
+                         f"after={after['minimum_clearance_m']:.9g} m, "
+                         f"required={settings['minimum_clearance_m']:.9g} m, tolerance=1e-5 m, "
+                         f"expected_vertical_shift={lift:.9g} m")
     return {"status": "passed_initial_placement", "vertical_shift_m": lift,
             "minimum_clearance_before_m": before["minimum_clearance_m"],
             "minimum_clearance_after_m": after["minimum_clearance_m"],

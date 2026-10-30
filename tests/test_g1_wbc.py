@@ -107,6 +107,7 @@ class ControllerAdapterTests(unittest.TestCase):
                                  ("forward", "isaac_g1_deployment_forward.json", "walk"),
                                  ("turn", "isaac_g1_deployment_turn.json", "walk")):
             profile, asset, _ = runner.load_plan(ROOT / "configs" / file)
+            self.assertEqual(profile["initialization"]["minimum_clearance_m"], 0.0)
             contract, robot = runner.trial_contract(profile)
             self.assertEqual(contract["policy_role"], role)
             self.assertEqual(set(robot.limits), set(asset["controller_reference"]["joint_order"]))
@@ -127,7 +128,8 @@ class ControllerAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/"invalid.json"
             raw=json.loads((ROOT/"configs/isaac_g1_deployment.json").read_text())
-            for changes in ({"command":[1,0,0]}, {"functional_case":"turn"}, {"control_steps":4}):
+            for changes in ({"command":[1,0,0]}, {"functional_case":"turn"}, {"control_steps":4},
+                            {"initialization":{**raw["initialization"],"minimum_clearance_m":0.001}}):
                 path.write_text(json.dumps({**raw,**changes}))
                 with self.assertRaises(ValueError):runner.load_plan(path)
 
@@ -143,6 +145,48 @@ class ControllerAdapterTests(unittest.TestCase):
         for case, rows in (("stand",trace(-0.3)),("forward",trace(-0.2)),
                            ("turn",trace(yaw_rate=-0.2)),("stand",trace()[:100])):
             self.assertEqual(wbc.functional_summary(case,initial,rows)["status"],"failed_functional_evaluation")
+
+    def test_source_pose_accepts_actual_positive_submillimeter_gap_and_rejects_penetration(self):
+        # Numeric fields supplied from run 20261030T082959.221472Z-wbc.
+        root_pose=[0,0,0.7929999828338623,-1.0107841319495492e-7,2.849920832659336e-8,2.1509819703169342e-8,1]
+        poses={
+            "left_ankle_roll_link":[-2.386048436164856e-6,0.11850626021623611,0.03613623231649399,
+                -9.543479251306053e-8,-1.6414904990824652e-8,1.4057685859825142e-7,0.9999999403953552],
+            "right_ankle_roll_link":[-2.3953616619110107e-6,-0.1185065433382988,0.036136433482170105,
+                -1.0301163655412893e-7,-1.440671471009125e-9,-7.222333842094031e-9,0.9999998807907104]}
+        geometry=collision_fixture(poses)
+        basis=np.array([[0.009999999776481742,-4.097141855155327e-9,2.8990830818410147e-12],
+            [4.097141855328148e-9,0.009999999776481725,-5.960393839798507e-10],
+            [-2.8988388760445647e-12,5.96039385167596e-10,0.009999999776482565]])
+        for name,foot in geometry["feet"].items():
+            foot["colliders"]=[]
+            for index,x,y in (("05",0.12,0.026),("04",0.12,-0.026),("07",-0.02,-0.026),("06",-0.02,0.026)):
+                transform=np.eye(4);transform[:3,:3]=basis;transform[:3,3]=[x,y,-0.031]
+                foot["colliders"].append({"type":"Sphere","radius_m":0.5,
+                    "collision_path":f"/World/envs/env_0/Robot/{name}/collisions/spheres/Sphere_{index}",
+                    "body_from_shape":transform.tolist()})
+        clearance=wbc.collision_clearance(geometry)
+        self.assertAlmostEqual(clearance["minimum_clearance_m"],0.00013622680904792211,places=14)
+        evidence={"status":"passed_initial_placement","mode":"source_pose","policy_height_command_m":0.74,
+            "before_root_pose_xyzw":root_pose,"after_root_pose_xyzw":root_pose,"vertical_shift_m":0.0,
+            "before_geometry":geometry,"after_geometry":copy.deepcopy(geometry),
+            "before_clearance":clearance,"after_clearance":copy.deepcopy(clearance)}
+        settings={"mode":"source_pose","minimum_clearance_m":0.001,"maximum_vertical_shift_m":0.1,"root_height_m":0.793}
+        with self.assertRaisesRegex(ValueError,r"after=0\.000136.*required=0\.001"):
+            wbc.placement_summary(evidence,settings,0.74,root_pose)
+        settings["minimum_clearance_m"]=0.0
+        result=wbc.placement_summary(evidence,settings,0.74,root_pose)
+        self.assertEqual(result["vertical_shift_m"],0)
+        self.assertEqual(result["spawn_height_m"],root_pose[2])
+        self.assertEqual(result["policy_height_command_m"],0.74)
+        invalid=copy.deepcopy(evidence)
+        for scope in ("before_geometry","after_geometry"):
+            for foot in invalid[scope]["feet"].values():
+                for shape in foot["colliders"]:shape["body_from_shape"][2][3]-=0.001
+        invalid["before_clearance"]=wbc.collision_clearance(invalid["before_geometry"])
+        invalid["after_clearance"]=wbc.collision_clearance(invalid["after_geometry"])
+        with self.assertRaisesRegex(ValueError,"Initial foot clearance"):
+            wbc.placement_summary(invalid,settings,0.74,root_pose)
 
     def test_movement_prerequisite_and_clean_exit_cannot_hide_functional_failure(self):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:

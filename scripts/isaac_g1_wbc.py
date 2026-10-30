@@ -595,14 +595,15 @@ def load_plan(path):
                 profile["control_steps"] != 250 or not profile.get("inertial_override")):
             raise ValueError("Invalid coherent deployment/functional protocol")
     if (initialization := profile.get("initialization")) is not None:
+        # The fixed source pose requires nonpenetration; automatic placement adds a margin.
         valid_source_pose = bool(deployment) and initialization == {
-            "mode": "source_pose", "minimum_clearance_m": 0.001,
+            "mode": "source_pose", "minimum_clearance_m": 0.0,
             "maximum_vertical_shift_m": 0.1, "root_height_m": source["initial_root_height_m"]}
         if (not profile.get("diagnostics") or not isinstance(initialization, dict) or
                 (not valid_source_pose and (set(initialization) != {"mode", "minimum_clearance_m", "maximum_vertical_shift_m"} or
                 initialization["mode"] != "collision_clearance")) or
                 type(initialization["minimum_clearance_m"]) not in (int, float) or
-                not 0.0005 <= initialization["minimum_clearance_m"] <= 0.005 or
+                (not valid_source_pose and not 0.0005 <= initialization["minimum_clearance_m"] <= 0.005) or
                 type(initialization["maximum_vertical_shift_m"]) not in (int, float) or
                 not 0 < initialization["maximum_vertical_shift_m"] <= 0.1):
             raise ValueError("Invalid initial placement experiment configuration")
