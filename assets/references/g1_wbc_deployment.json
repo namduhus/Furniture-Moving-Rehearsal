@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "source_commit": "4141c34280abb67c82e115342a8720f4a83d750d",
+  "sources": [
+    {
+      "path": "decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.yaml",
+      "git_blob_sha1": "d629c837a57cf80364311b4469f1a348d5e09313",
+      "sha256": "31226a224ca8450e89d9ce17d5cb31c052192a9cbfedc8d145f1cb95627ac7a2",
+      "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.yaml"
+    },
+    {
+      "path": "decoupled_wbc/sim2mujoco/scripts/run_mujoco_gear_wbc.py",
+      "git_blob_sha1": "d3206f5a8200e36c9d24b1dfa3d1f7a4b7ccffe9",
+      "sha256": "b78dfb546ee250116b3853f96a12f82174aca248808da33caf199ec8e42f82fd",
+      "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/scripts/run_mujoco_gear_wbc.py"
+    },
+    {
+      "path": "decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.xml",
+      "git_blob_sha1": "b5879a3c400eead549758283b00dbc9da46e414d",
+      "sha256": "3b0b5a1c8299fda85cf328cc2a8df53ccc765ce37f20030175295049947b1a19",
+      "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.xml"
+    },
+    {
+      "path": "decoupled_wbc/control/policy/g1_gear_wbc_policy.py",
+      "git_blob_sha1": "02021d63a1e256001159b7b1dec813d2215080c3",
+      "sha256": "833bc58c7bacabf8634a9d458da821bc86b179af8420075ad9824e317d054e3e",
+      "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/control/policy/g1_gear_wbc_policy.py"
+    },
+    {
+      "path": "decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Walk.onnx",
+      "git_blob_sha1": "d66452c137e48f4da729559e59b8f36b7056a4c9",
+      "sha256": "274b3f3a635478d645a155f60695ecb3813c319767cbef8b26710d12cc91638c",
+      "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Walk.onnx"
+    }
+  ],
+  "selected_entrypoint": "decoupled_wbc/sim2mujoco/scripts/run_mujoco_gear_wbc.py",
+  "entrypoint_caveat": "Standalone YAML still names ft92/ft109 aliases; named Balance/Walk releases are pinned independently. This is deployment-source parity, not evidence of original training or an upstream run.",
+  "physics_dt": 0.005,
+  "control_decimation": 4,
+  "policy_phase": "after_physics",
+  "initial_root_height_m": 0.793,
+  "initial_body_joint_positions": "zero",
+  "first_interval_lower_target": [
+    -0.1,
+    0.0,
+    0.0,
+    0.3,
+    -0.2,
+    0.0,
+    -0.1,
+    0.0,
+    0.0,
+    0.3,
+    -0.2,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "policy_switch_command_norm": 0.05,
+  "balance_model": {
+    "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Balance.onnx",
+    "bytes": 1886682,
+    "sha256": "f645da599d4ca3d29ed273c8f4712620bb680d34977469ca3aeabe5bb9631c18",
+    "cache_path": "models/g1_wbc/GR00T-WholeBodyControl-Balance.onnx",
+    "license": "licenses/GR00T-WBC.txt",
+    "attribution": "Licensed by NVIDIA Corporation under the NVIDIA Open Model License."
+  },
+  "walk_model": {
+    "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Walk.onnx",
+    "bytes": 1886682,
+    "sha256": "7c82255b6905ffcc4468fa7f8ddcf7b70db168cf1042107ccab887cb6a8e5407",
+    "cache_path": "models/g1_wbc/GR00T-WholeBodyControl-Walk.onnx",
+    "license": "licenses/GR00T-WBC.txt",
+    "attribution": "Licensed by NVIDIA Corporation under the NVIDIA Open Model License."
+  },
+  "fixed_hand_joints": [
+    "left_hand_index_0_joint",
+    "left_hand_index_1_joint",
+    "left_hand_middle_0_joint",
+    "left_hand_middle_1_joint",
+    "left_hand_thumb_0_joint",
+    "left_hand_thumb_1_joint",
+    "left_hand_thumb_2_joint",
+    "right_hand_index_0_joint",
+    "right_hand_index_1_joint",
+    "right_hand_middle_0_joint",
+    "right_hand_middle_1_joint",
+    "right_hand_thumb_0_joint",
+    "right_hand_thumb_1_joint",
+    "right_hand_thumb_2_joint"
+  ],
+  "body_effort_limits_nm": {
+    "left_hip_pitch_joint": 88.0,
+    "left_hip_roll_joint": 139.0,
+    "left_hip_yaw_joint": 88.0,
+    "left_knee_joint": 139.0,
+    "left_ankle_pitch_joint": 50.0,
+    "left_ankle_roll_joint": 50.0,
+    "right_hip_pitch_joint": 88.0,
+    "right_hip_roll_joint": 139.0,
+    "right_hip_yaw_joint": 88.0,
+    "right_knee_joint": 139.0,
+    "right_ankle_pitch_joint": 50.0,
+    "right_ankle_roll_joint": 50.0,
+    "waist_yaw_joint": 88.0,
+    "waist_roll_joint": 50.0,
+    "waist_pitch_joint": 50.0,
+    "left_shoulder_pitch_joint": 25.0,
+    "left_shoulder_roll_joint": 25.0,
+    "left_shoulder_yaw_joint": 25.0,
+    "left_elbow_joint": 25.0,
+    "left_wrist_roll_joint": 25.0,
+    "left_wrist_pitch_joint": 5.0,
+    "left_wrist_yaw_joint": 5.0,
+    "right_shoulder_pitch_joint": 25.0,
+    "right_shoulder_roll_joint": 25.0,
+    "right_shoulder_yaw_joint": 25.0,
+    "right_elbow_joint": 25.0,
+    "right_wrist_roll_joint": 25.0,
+    "right_wrist_pitch_joint": 5.0,
+    "right_wrist_yaw_joint": 5.0
+  },
+  "upper_actuator": "explicit_pd",
+  "upper_kp": 100.0,
+  "upper_kd": 0.5,
+  "body_armature": 0.01,
+  "source_passive_joint_terms": {
+    "damping": 0.001,
+    "frictionloss": 0.1
+  },
+  "residual_differences": [
+    "PhysX contact solver/material combination and passive joint friction semantics are not equivalent to the source engine.",
+    "Retain existing experiment velocity safety caps; the source XML does not author matching velocity caps.",
+    "Isaac body decomposition/collider topology and residual inertial differences remain recorded by the dynamics audit.",
+    "Source model aliases in the standalone YAML are not published under those names; use explicitly hashed named checkpoints.",
+    "Project raw-action bound, joint-target clipping and fall guards are retained; they are not asserted to be upstream behavior."
+  ],
+  "attribution": "Derived pinned deployment data; uses existing NVIDIA/Unitree terms in README and licenses. No original runtime is included or executed."
+}

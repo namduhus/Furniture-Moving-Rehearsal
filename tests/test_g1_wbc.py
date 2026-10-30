@@ -46,18 +46,18 @@ def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names
     names = body_names or list(reversed(source["bodies"]))
     models = {};solver_kp={};solver_kd={}
     for key,names_group in asset["joint_groups"].items():
-        implicit = key != "lower_body"
-        kp = contract["kp"] if not implicit else [contract["upper_hold_kp"] if key == "arms" else contract["hand_hold_kp"]]*len(names_group)
-        kd = contract["kd"] if not implicit else [contract["upper_hold_kd"] if key == "arms" else contract["hand_hold_kd"]]*len(names_group)
+        implicit = key != "lower_body" and not contract.get("deployment_sha256")
+        kp = contract["kp"] if key == "lower_body" else [contract["upper_hold_kp"] if key == "arms" else contract["hand_hold_kp"]]*len(names_group)
+        kd = contract["kd"] if key == "lower_body" else [contract["upper_hold_kd"] if key == "arms" else contract["hand_hold_kd"]]*len(names_group)
         models[key] = {"joint_names":names_group,"class":"fixture."+key,"implicit":implicit,"kp":kp,"kd":kd}
         solver_kp.update(zip(names_group,kp if implicit else [0]*len(names_group)))
         solver_kd.update(zip(names_group,kd if implicit else [0]*len(names_group)))
     fields = {"status":"captured_runtime_dynamics","body_names":names,"joint_names":joints,
         "root_pose_xyzw":root,"source_to_asset_rotation":np.eye(3).tolist(),"joint_positions":q,
-        "joint_position_targets":q,"joint_velocity_targets":[0.0]*43,
+        "joint_position_targets":q,"joint_velocity_targets":[0.0]*len(joints),
         "solver_joint_stiffness":[solver_kp[n]for n in joints],"solver_joint_damping":[solver_kd[n]for n in joints],
-        "joint_armature":[0.01 if n in asset["joint_groups"]["lower_body"]else 0.001 for n in joints],
-        "joint_effort_limits":[50.0]*43,"actuators":models,
+        "joint_armature":[contract["lower_body_armature"] if n in asset["joint_groups"]["lower_body"]else contract["upper_body_armature"] for n in joints],
+        "joint_effort_limits":[wbc.actuator_limits(contract,reference)[n]["effort"] for n in joints],"actuators":models,
         "body_mass_kg":[],"body_com_pose_b_xyzw":[],"body_inertia_backend_kg_m2":[],"body_link_pose_w_xyzw":[]}
     for name in names:
         s=source["bodies"].get(name,{"mass_kg":0.01,"com_position_b_m":[0,0,0],"principal_inertia_kg_m2":[1e-5,2e-5,3e-5]})
@@ -68,6 +68,9 @@ def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names
         transform=wbc.pose_matrix(root)@fk[name]
         fields["body_link_pose_w_xyzw"].append([*transform[:3,3],*wbc.matrix_quat_xyzw(transform[:3,:3])])
     if poses is not None: fields["body_link_pose_w_xyzw"]=poses
+    if contract.get("deployment_sha256"):
+        fields.update(joint_static_friction_nm=[0.1]*29, joint_dynamic_friction_nm=[0.1]*29,
+                      joint_viscous_friction_nm_s_rad=[0.001]*29)
     return fields
 
 
@@ -97,6 +100,97 @@ class ControllerAdapterTests(unittest.TestCase):
     def setUp(self):
         self.contract, self.robot = wbc.load_contract(ROOT / "configs/g1_wbc_reference.json")
         self.asset = json.loads((ROOT / "configs/isaac_g1_asset.json").read_text())
+
+    def test_deployment_contract_matches_body_order_caps_and_selects_policy(self):
+        original = copy.deepcopy(self.contract)
+        for case, file, role in (("stand", "isaac_g1_deployment.json", "balance"),
+                                 ("forward", "isaac_g1_deployment_forward.json", "walk"),
+                                 ("turn", "isaac_g1_deployment_turn.json", "walk")):
+            profile, asset, _ = runner.load_plan(ROOT / "configs" / file)
+            contract, robot = runner.trial_contract(profile)
+            self.assertEqual(contract["policy_role"], role)
+            self.assertEqual(set(robot.limits), set(asset["controller_reference"]["joint_order"]))
+            self.assertEqual(len(robot.limits), 29)
+            self.assertFalse(asset["joint_groups"]["hands"])
+            self.assertEqual(len(asset["fixed_hand_joints"]), 14)
+            self.assertEqual((contract["upper_hold_kp"], contract["upper_hold_kd"], contract["upper_body_armature"]), (100, 0.5, 0.01))
+            self.assertEqual(wbc.actuator_limits(contract, robot)["left_hip_roll_joint"]["effort"], 139)
+            self.assertEqual(wbc.actuator_limits(contract, robot)["left_ankle_pitch_joint"]["velocity"], 37)
+            before = self.robot.forward({n:0 for n in self.robot.limits})
+            after = robot.forward({n:0 for n in robot.limits})
+            for name in before: np.testing.assert_allclose(before[name], after[name], atol=1e-12, rtol=0)
+            with mock.patch.object(wbc,"prepare_model",side_effect=AssertionError("model access")), \
+                    mock.patch.object(runner,"run_stage",side_effect=AssertionError("GPU launch")), mock.patch("builtins.print"):
+                self.assertEqual(runner.main(["--profile",str(ROOT/"configs"/file),"--stage","balance","--dry-run"]),0)
+        self.assertEqual(self.contract, original)
+        self.assertEqual(len(self.robot.limits), 43)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"invalid.json"
+            raw=json.loads((ROOT/"configs/isaac_g1_deployment.json").read_text())
+            for changes in ({"command":[1,0,0]}, {"functional_case":"turn"}, {"control_steps":4}):
+                path.write_text(json.dumps({**raw,**changes}))
+                with self.assertRaises(ValueError):runner.load_plan(path)
+
+    def test_functional_gates_reject_backward_motion_and_wrong_turn_direction(self):
+        initial={"root_pose_xyzw":[0,0,0.793,0,0,0,1]}
+        def trace(vx=0, yaw_rate=0):
+            return [{"step":i,"sim_time_seconds":i*0.02,
+                "root_pose_xyzw":[vx*i*0.02,0,0.793,0,0,np.sin(yaw_rate*i*0.01),np.cos(yaw_rate*i*0.01)],
+                "root_velocity_world":[vx,0,0,0,0,yaw_rate],"tilt_rad":0,
+                "action":[0]*15,"clipped_joint_targets":0} for i in range(1,251)]
+        for case, rows in (("stand",trace()),("forward",trace(0.2)),("turn",trace(yaw_rate=0.2))):
+            self.assertEqual(wbc.functional_summary(case,initial,rows)["status"],"passed_functional_evaluation")
+        for case, rows in (("stand",trace(-0.3)),("forward",trace(-0.2)),
+                           ("turn",trace(yaw_rate=-0.2)),("stand",trace()[:100])):
+            self.assertEqual(wbc.functional_summary(case,initial,rows)["status"],"failed_functional_evaluation")
+
+    def test_movement_prerequisite_and_clean_exit_cannot_hide_functional_failure(self):
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
+            runner.main(["--profile",str(ROOT/"configs/isaac_g1_deployment_forward.json"),"--stage","balance"])
+        self.assertEqual(exit_error.exception.code,2)
+        profile,asset,runtime=runner.load_plan(ROOT/"configs/isaac_g1_deployment.json")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner,"check_versions",return_value={}), \
+                mock.patch.object(wbc,"prepare_model",return_value=Path("unused.onnx")), \
+                mock.patch.object(runner,"balance_check",side_effect=SystemExit(0)), \
+                mock.patch.object(runner,"validate_stage",side_effect=RuntimeError("Functional gate failed")):
+            with self.assertRaisesRegex(RuntimeError,"Functional gate failed"):
+                runner.worker("balance",profile,asset,runtime,ROOT/profile["controller_contract"],Path(tmp))
+            evidence=json.loads((Path(tmp)/"balance-worker.json").read_text())
+            self.assertEqual(evidence["error_type"],"RuntimeError")
+            self.assertEqual(evidence["error"],"Functional gate failed")
+
+    def test_fixed_hand_authoring_changes_only_joint_types_in_session_layer(self):
+        names=wbc.load_deployment_reference()["fixed_hand_joints"]
+        class Prim:
+            def __init__(self,name):self.name=name;self.kind="Revolute";self.frame=[0,0,0,0,0,0,1]
+            def GetName(self):return self.name
+            def GetPath(self):return "/World/envs/env_0/Robot/"+self.name.split('_')[0]+"_hand/joints/"+self.name
+            def GetTypeName(self):return "PhysicsFixedJoint" if self.kind=="Fixed" else "PhysicsRevoluteJoint"
+            def IsA(self,kind):return self.kind==kind
+            def IsInstanceProxy(self):return False
+            def GetBody0Rel(self):return SimpleNamespace(GetTargets=lambda:["parent/"+self.name])
+            def GetBody1Rel(self):return SimpleNamespace(GetTargets=lambda:["child/"+self.name])
+        prims=[Prim(n) for n in names]
+        stage=SimpleNamespace(target="root",Traverse=lambda:iter(prims),GetSessionLayer=lambda:"session")
+        @contextmanager
+        def edit(stage,layer):
+            stage.target=layer
+            try:yield
+            finally:stage.target="root"
+        def define(stage,path):
+            self.assertEqual(stage.target,"session")
+            prim=next(p for p in prims if p.GetPath()==path);prim.kind="Fixed"
+            return SimpleNamespace(GetPrim=lambda:prim)
+        pxr=SimpleNamespace(Usd=SimpleNamespace(EditContext=edit),UsdPhysics=SimpleNamespace(
+            RevoluteJoint="Revolute",Joint=lambda prim:prim,FixedJoint=SimpleNamespace(Define=define)))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules,{"pxr":pxr}):
+            runner.apply_fixed_hands(stage,SimpleNamespace(is_initialized=False),Path(tmp))
+            record=json.loads((Path(tmp)/"deployment-joints.json").read_text())
+            self.assertEqual(len(record["joints"]),14)
+            self.assertEqual(stage.target,"root")
+            self.assertTrue(all(p.kind=="Fixed" and p.frame==[0,0,0,0,0,0,1] for p in prims))
+            with self.assertRaisesRegex(RuntimeError,"before reset"):
+                runner.apply_fixed_hands(stage,SimpleNamespace(is_initialized=True),Path(tmp))
 
     def test_xyzw_quarter_turns_and_half_turns(self):
         q = [0, 0, np.sqrt(0.5), np.sqrt(0.5)]
@@ -817,7 +911,7 @@ class ControllerLaunchTests(unittest.TestCase):
             @property
             def joint_vel(self): return Tensor([robot.dq])
             @property
-            def default_joint_pos(self): return Tensor([np.zeros(43)])
+            def default_joint_pos(self): return Tensor([np.zeros(len(names))])
             @property
             def joint_pos_limits(self): return Tensor([limits])
             @property
@@ -856,7 +950,7 @@ class ControllerLaunchTests(unittest.TestCase):
             def set_joint_velocity_target_index(self, *, target): pass
 
         robot = Robot()
-        robot.actuators = SimpleNamespace(computed_effort=Tensor([np.zeros(43)]), applied_effort=Tensor([np.zeros(43)]))
+        robot.actuators = SimpleNamespace(computed_effort=Tensor([np.zeros(len(names))]), applied_effort=Tensor([np.zeros(len(names))]))
         limits = [[reference.limits[n]["lower"], reference.limits[n]["upper"]] for n in names]
         rgb = np.repeat(((np.indices((64, 64)).sum(axis=0) % 2)*255)[..., None], 3, axis=-1).astype(np.uint8)
 
@@ -894,11 +988,13 @@ class ControllerLaunchTests(unittest.TestCase):
             metadata = {"input": ["batch",516], "output": ["batch",15]}
             output = np.zeros(15)
             observations = []
+            simulation_steps_at_calls = []
             def __init__(self, *args): pass
             def __call__(self, observation):
                 self.assert_shape = observation.shape == (516,)
                 if not self.assert_shape: raise AssertionError("Bad observation passed to policy")
                 self.observations.append(observation.copy())
+                self.simulation_steps_at_calls.append(Simulation.steps)
                 return self.output
 
         class Image:
@@ -1077,7 +1173,7 @@ class ControllerLaunchTests(unittest.TestCase):
             audit = directory/"audit";audit.mkdir()
             for file,value in (("profile.json",placement_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
                 (audit/file).write_text(json.dumps(value))
-            def read_dynamics(robot,rotation,usd_path,*,directory=None):
+            def read_dynamics(robot,rotation,usd_path,*,directory=None,filename="dynamics-runtime.json"):
                 snapshot=dynamics_fixture(contract,reference,asset,body_names=robot.body_names,joint_names=names,
                     q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist())
                 snapshot["source_to_asset_rotation"]=rotation.tolist()
@@ -1172,6 +1268,52 @@ class ControllerLaunchTests(unittest.TestCase):
             trace_path.write_text("\n".join(json.dumps(row) for row in trace))
             with self.assertRaisesRegex(ValueError, "observation"):
                 runner.analyze_run(diagnostic)
+
+
+            # Reuse the same runner doubles for the coherent 29-DOF branch.
+            deployment_profile, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_deployment.json")
+            deployment_profile = {**deployment_profile, "camera": {"width":64,"height":64,"capture_every_control_steps":2}}
+            contract, reference = runner.trial_contract(deployment_profile)
+            names[:] = [n for n in names if n in reference.limits]
+            limits = [[reference.limits[n]["lower"], reference.limits[n]["upper"]] for n in names]
+            robot.q = np.zeros(29); robot.dq = np.zeros(29)
+            robot.actuators = SimpleNamespace(computed_effort=Tensor([np.zeros(29)]), applied_effort=Tensor([np.zeros(29)]))
+            deployment_dir = directory / "deployment"; deployment_dir.mkdir()
+            for file, value in (("profile.json",deployment_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
+                (deployment_dir/file).write_text(json.dumps(value))
+            Policy.observations.clear(); Policy.simulation_steps_at_calls.clear()
+            steps_before = Simulation.steps
+            override = palm_fixture(contract)
+            def fix_hands(stage, target, directory):
+                self.assertFalse(target.is_initialized)
+                value = {"status":"authored_fixed_hands_before_reset","edit_layer":"session","joints":{
+                    n:{"path":"/World/Robot/"+n,"body0":["parent"],"body1":["child"],"authored_type":"PhysicsFixedJoint"}
+                    for n in wbc.load_deployment_reference()["fixed_hand_joints"]}}
+                (directory/"deployment-joints.json").write_text(json.dumps(value))
+            with mock.patch.object(runner,"apply_fixed_hands",side_effect=fix_hands), \
+                    mock.patch.object(runner,"apply_palm_override",side_effect=author_palm), \
+                    mock.patch.object(runner,"read_palm_runtime",side_effect=read_palms), \
+                    mock.patch.object(runner,"read_runtime_dynamics",side_effect=read_dynamics), \
+                    mock.patch.object(runner,"read_joint_frames",return_value=joint_frame_fixture(reference)), \
+                    mock.patch.object(runner,"read_collision_geometry",side_effect=lambda stage,poses:collision_fixture(poses)):
+                runner.balance_check(deployment_profile,asset,runtime,contract,reference,Path("unused.onnx"),deployment_dir)
+            runner.validate_stage("balance",deployment_dir,deployment_profile)
+            analysis = runner.analyze_run(deployment_dir)
+            self.assertEqual(analysis["functional"]["status"],"passed_functional_evaluation")
+            self.assertEqual(analysis["deployment"]["active_joints"],29)
+            self.assertEqual(Policy.simulation_steps_at_calls,[steps_before+4*(i+1) for i in range(250)])
+            self.assertEqual(len(Policy.observations),250)
+            first = json.loads((deployment_dir/"trajectory.jsonl").read_text().splitlines()[0])
+            self.assertEqual(first["policy_input_time_seconds"],0.02)
+            self.assertEqual(first["applied_action"],[0.0]*15)
+            self.assertEqual(json.loads((deployment_dir/"initial-state.json").read_text())["wanted_joint_positions"],[0.0]*29)
+            self.assertIsInstance(instantiated[-1].robot.actuators["upper_hold"],ExplicitConfig)
+            self.assertEqual(instantiated[-1].robot.actuators["upper_hold"].armature,0.01)
+            rejected_analysis = copy.deepcopy(analysis)
+            rejected_analysis["functional"]["status"] = "failed_functional_evaluation"
+            rejected_analysis["functional"]["checks"]["displacement_within_0_10m"] = False
+            with mock.patch.object(runner,"analyze_run",return_value=rejected_analysis), self.assertRaisesRegex(RuntimeError,"Functional gate failed"):
+                runner.validate_stage("balance",deployment_dir,deployment_profile)
 
 if __name__ == "__main__":
     unittest.main()

@@ -196,6 +196,48 @@ The verification checks mass within 1e-6 kg, COM components within 1e-6 m and fu
 
 Compare displacement, final speed, tilt, foot contacts and arm motion against the placement profile; matching physical properties alone does not establish stationary control. The static audit and rollout are separate manual runs with existing deadlines and billing, not an automatic loop. No image rebuild or dependency change is required. Actual application and motion still require GPU validation. Stop the Modal session with `fmr-stop` when finished.
 
+### Qualify the complete GR00T deployment contract
+
+Use the [deployment standing profile](configs/isaac_g1_deployment.json) to evaluate a coherent transfer of the pinned standalone GR00T deployment conditions. The earlier balance/diagnostic/placement/palm profiles remain available as historical comparisons. The [derived deployment reference](assets/references/g1_wbc_deployment.json) records source paths, hashes, model identities, joint effort caps and unresolved differences; it is reference data, not an original simulator or proof of the training distribution.
+
+This profile combines the following conditions:
+
+- Exactly 29 active body joints, with 14 finger joints changed to [fixed joints](https://openusd.org/dev/api/class_usd_physics_fixed_joint.html) in the session layer before reset. Joint body bindings and frames are retained; the vendor asset is not saved.
+- Explicit PD for all body joints, published arm gains 100/0.5, armature 0.01 and source effort caps. Source passive terms are mapped to static/dynamic friction effort 0.1 N m and viscous friction 0.001 N m s/rad using the pinned Isaac Sim 6.2 / Lab 3 APIs. Actual native gains, armature, effort caps and passive values are checked before trial control; a mismatch stops the run.
+- Source startup height 0.793 m and zero initial body-joint angles. The default lower-joint targets are applied for the first four physics steps; the first inference occurs after 0.02 simulated seconds. Subsequent observations are sampled after each four-step interval, with chronological zero-padded history and the previous policy action. The source pose is measured for clearance and rejected if invalid; it is not silently lifted to fit.
+- The existing pinned left-palm correction, seed, physics/control timing, camera and safety guards. Named Balance/Walk checkpoints are selected by command magnitude, with their individual hashes pinned. Standalone source YAML aliases `ft92`/`ft109` are recorded as unresolved names; they are not asserted to be byte-identical aliases of the named releases.
+
+Preview on the Mac without cloud or weight access:
+
+```sh
+uv run --locked python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_deployment.json --stage balance --dry-run
+```
+
+Then run **one** standing qualification in the existing remote Isaac image. It includes runtime validation and the bounded rollout in the same process; no separate static run or image rebuild is required. Existing cached Balance weights are reused.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_deployment.json --stage balance
+```
+
+Each case lasts five simulated seconds. All cases require maximum tilt at most 20 degrees, in addition to the existing fall/action guards. The following are **project acceptance criteria**, not vendor specifications or a robustness claim:
+
+| Case | Command | Functional acceptance |
+| --- | --- | --- |
+| Stand | Zero navigation | Maximum displacement at most 0.10 m; final planar speed at most 0.10 m/s |
+| Forward | +0.2 m/s in x | Forward progress at least 0.30 m; maximum lateral drift at most 0.15 m; final-second mean x velocity 0.10–0.30 m/s; maximum heading change at most 0.20 rad |
+| Turn | +0.2 rad/s yaw | Positive heading change at least 0.30 rad; maximum displacement at most 0.20 m; final speed at most 0.15 m/s; final-second mean heading rate 0.10–0.30 rad/s |
+
+The parent reports `passed_deployment_stand`, `passed_deployment_forward` or `passed_deployment_turn` only when the corresponding functional gate passes. A completed non-fall worker rollout alone is insufficient. A failed gate makes the parent fail and retains `diagnostics-summary.json` with its individual checks. Inspect the whole-contract evidence before making another change; there is no automatic retry, parameter sweep or framework switch.
+
+Only after standing succeeds, use its verified run as a prerequisite for separate manual movement trials. The existing `--stage balance` flag means a bounded control rollout; the profile selects the model and motion. The first movement invocation with `--prepare-model` downloads the single 1,886,682-byte Walk checkpoint; subsequent calls verify/reuse it.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_deployment_forward.json --stage balance --stand-run outputs/isaac/STAND_RUN_ID --prepare-model
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_deployment_turn.json --stage balance --stand-run outputs/isaac/STAND_RUN_ID
+```
+
+`deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
+
 ### Record a G1 motion check
 
 The separate [recording profile](configs/isaac_record.json) uses one environment, seed 0, zero actions, a 640 x 360 camera and 500 environment steps. It captures every two steps. At this task's 0.02 s control step, that produces 250 frames at 25 FPS covering 10 simulated seconds. Video timing comes from the actual environment step size, not wall-clock execution speed. This is a recording/runtime check, not a trained walking policy.
@@ -332,8 +374,10 @@ Keep this table current in the same commit as each new module or third-party add
 | Geometry-based initial placement comparison | Created during the hackathon | Current-body/relative-USD collision geometry capture, bounded initial vertical translation independent of the policy height command, and saved clearance revalidation | [Placement profile](configs/isaac_g1_placement.json), [runner](scripts/isaac_g1_wbc.py), [clearance mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing OpenUSD APIs |
 | Static G1 dynamics and control audit | Created during the hackathon | Shared-runner static collection, mass/COM and principal-inertia comparison, resolved actuator/solver inspection, readable tables and CPU evidence replay | [Runner](scripts/isaac_g1_wbc.py), [comparison mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing Isaac/PhysX APIs |
 | Left-palm inertial comparison | Created during the hackathon | Separate placement-preserving profile, pinned left-tensor diagonalization, session-layer authoring before reset, actual mass/COM/full-inertia guards and CPU evidence replay | [Profile](configs/isaac_g1_palm.json), [runner](scripts/isaac_g1_wbc.py), [mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); derives values from the existing attributed URDF |
+| Coherent GR00T transfer and functional gates | Created during the hackathon | Session-layer fixed hands, 29-joint explicit control, source startup/inference phase, effective runtime checks, Balance/Walk routing, standing/motion acceptance and prerequisite enforcement | [Standing](configs/isaac_g1_deployment.json), [forward](configs/isaac_g1_deployment_forward.json), [turn](configs/isaac_g1_deployment_turn.json), [runner](scripts/isaac_g1_wbc.py), [mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py) |
+| GR00T deployment contract and checkpoint routing data | Derived third-party data | Hash-pinned facts from the standalone deployment source, joint/model definitions and published checkpoint pointers; project acceptance criteria are separate | [Reference and provenance](assets/references/g1_wbc_deployment.json), existing [NVIDIA terms](licenses/GR00T-WBC.txt) and [Unitree notice](licenses/UNITREE-BSD-3-CLAUSE.txt) |
 | G1 deployment dynamics reference | Derived third-party robot/controller data | Hash-pinned inertial and control parameters extracted from the published deployment model/configuration/source; not a simulator or a new robot/policy | [Derived reference and source hashes](assets/references/g1_wbc_dynamics.json), [NVIDIA source terms](licenses/GR00T-WBC.txt), [Unitree notice](licenses/UNITREE-BSD-3-CLAUSE.txt) |
-| GR00T-WBC balance checkpoint and G1 reference kinematics | Third-party model and robot data | Downloaded pretrained balance inference and reference-only frame checks; no original robot or pretrained-policy claim | [Pinned NVIDIA controller source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), [upstream rev 1.0 URDF](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf), [local reference](assets/references/g1_wbc.urdf), [NVIDIA code/model terms](licenses/GR00T-WBC.txt), [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt); weights remain Git-ignored |
+| GR00T-WBC Balance/Walk checkpoints and G1 reference kinematics | Third-party model and robot data | Pretrained control inference and reference-only frame checks; Walk is an optional separate hash-checked download; no original robot or pretrained-policy claim | [Pinned NVIDIA controller source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), [upstream rev 1.0 URDF](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf), [local reference](assets/references/g1_wbc.urdf), [NVIDIA code/model terms](licenses/GR00T-WBC.txt), [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt); weights remain Git-ignored |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
 | Modal SDK, Ubuntu, X.Org libXt, OpenSSH, Git and uv | Third-party software and services | Cloud execution, base OS/shared libraries, SSH access, version control and Python environment management | Official sources and license notices linked above |

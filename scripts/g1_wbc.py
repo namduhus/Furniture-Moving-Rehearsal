@@ -25,6 +25,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_COMMIT = "4141c34280abb67c82e115342a8720f4a83d750d"
 DYNAMICS_REFERENCE_SHA256 = "c61a85fc44fc74482285fb2efb09e4e0f8918a1a94a722c78bbf22887c0cad9d"
+DEPLOYMENT_REFERENCE_SHA256 = "790678175ea58d658f4d501aacf349f275c24dd4eea3a2bc9c3e7deddc602cc6"
 
 
 def finite(value, shape=None):
@@ -235,6 +236,80 @@ def load_contract(path: Path):
     robot = RobotReference(reference)
     actuator_limits(contract, robot)
     return contract, robot
+
+
+def load_deployment_reference():
+    path = ROOT / "assets/references/g1_wbc_deployment.json"
+    if hashlib.sha256(path.read_bytes()).hexdigest() != DEPLOYMENT_REFERENCE_SHA256:
+        raise ValueError("Deployment reference hash mismatch")
+    return json.loads(path.read_text())
+
+
+def deployment_contract(contract, reference, command):
+    """Build an explicit 29-DOF transfer view; leave the pinned URDF unchanged."""
+    data = load_deployment_reference()
+    lower = load_dynamics_reference()["lower_body"]
+    for key, source_key in (("kp", "kp"), ("kd", "kd"), ("default_lower_angles", "default_angles")):
+        if contract[key] != lower[source_key]:
+            raise ValueError("Deployment lower-body contract differs from the pinned source")
+    command = finite(command, (3,))
+    hands = set(data["fixed_hand_joints"])
+    if len(reference.limits) != 43 or len(hands) != 14 or not hands <= reference.limits.keys():
+        raise ValueError("Unexpected deployment hand topology")
+    reference.joints = [(n, p, c, "fixed" if n in hands else kind, origin, axis)
+                        for n, p, c, kind, origin, axis in reference.joints]
+    reference.limits = {n: v for n, v in reference.limits.items() if n not in hands}
+    limits = actuator_limits(contract, RobotReference(ROOT / contract["reference_urdf"]))
+    changes = {n: {"effort": data["body_effort_limits_nm"][n], "velocity": limits[n]["velocity"]}
+               for n in reference.limits}
+    moving = bool(np.linalg.norm(command) > data["policy_switch_command_norm"])
+    effective = {**contract, "model": data["walk_model"] if moving else data["balance_model"],
+        "policy_role": "walk" if moving else "balance", "deployment_sha256": DEPLOYMENT_REFERENCE_SHA256,
+        "lower_body_armature": data["body_armature"], "upper_body_armature": data["body_armature"],
+        "upper_hold_kp": data["upper_kp"], "upper_hold_kd": data["upper_kd"],
+        "actuator_limit_overrides": changes,
+        "actuator_limit_origin": "Pinned deployment effort caps; previous experiment velocity safety caps retained as an explicit residual difference.",
+        "actuation_origin": "All 29 body joints use explicit PD and source armature 0.01; finger joints are fixed in the USD session layer.",
+        "hold_gain_origin": "Pinned standalone deployment arm PD; contact/passive-friction equivalence is not claimed."}
+    return effective, reference
+
+
+def functional_summary(case, initial, records):
+    """Project five-second acceptance gates, separate from fall/action guards."""
+    motion = motion_summary(initial["root_pose_xyzw"], records)
+    if len(records) != 250 or not np.isclose(motion["simulated_seconds"], 5):
+        return {"status": "failed_functional_evaluation", "case": case,
+                "checks": {"complete_five_second_trial": False},
+                "on_failure": "Preserve partial evidence; no automatic retry."}
+    velocity = finite([r["root_velocity_world"] for r in records], (250, 6))
+    poses = finite([r["root_pose_xyzw"] for r in records], (250, 7))
+    delta = poses[-1, :2] - finite(initial["root_pose_xyzw"], (7,))[:2]
+    yaw = np.unwrap([np.arctan2(quat_xyzw_matrix(p[3:])[1, 0], quat_xyzw_matrix(p[3:])[0, 0])
+                     for p in [initial["root_pose_xyzw"], *poses]])
+    tail_vx = float(velocity[-50:, 0].mean())
+    tail_yaw_rate = float((yaw[-1] - yaw[-51]) / 1.0)
+    checks = {"tilt_within_20_degrees": motion["maximum_tilt_degrees"] <= 20}
+    if case == "stand":
+        checks.update(displacement_within_0_10m=motion["maximum_xy_displacement_m"] <= 0.10,
+                      final_speed_within_0_10m_s=motion["final_planar_speed_m_s"] <= 0.10)
+    elif case == "forward":
+        checks.update(forward_progress_at_least_0_30m=float(delta[0]) >= 0.30,
+                      lateral_drift_within_0_15m=float(np.max(np.abs(poses[:, 1]-initial["root_pose_xyzw"][1]))) <= 0.15,
+                      final_second_vx_in_0_10_to_0_30m_s=0.10 <= tail_vx <= 0.30,
+                      heading_change_within_0_20rad=float(np.max(np.abs(yaw-yaw[0]))) <= 0.20)
+    elif case == "turn":
+        checks.update(positive_turn_at_least_0_30rad=float(yaw[-1]-yaw[0]) >= 0.30,
+                      displacement_within_0_20m=motion["maximum_xy_displacement_m"] <= 0.20,
+                      final_speed_within_0_15m_s=motion["final_planar_speed_m_s"] <= 0.15,
+                      final_second_yaw_rate_in_0_10_to_0_30rad_s=0.10 <= tail_yaw_rate <= 0.30)
+    else:
+        raise ValueError("Unknown functional case")
+    return {"status": "passed_functional_evaluation" if all(checks.values()) else "failed_functional_evaluation",
+            "case": case, "checks": {k: bool(v) for k, v in checks.items()},
+            "final_second_mean_vx_m_s": tail_vx, "final_second_mean_heading_rate_rad_s": tail_yaw_rate,
+            "heading_change_rad": float(yaw[-1]-yaw[0]),
+            "criteria_origin": "Project acceptance proposal, not vendor thresholds; one bounded trial is not a robustness claim.",
+            "on_failure": "Stop this gate; inspect the whole-contract evidence before proposing another physical change. No automatic retry or framework switch."}
 
 
 def palm_inertial_reference(contract):
@@ -450,7 +525,8 @@ def dynamics_comparison(measured, reference, source, contract, asset):
     if measured["status"] != "captured_runtime_dynamics":
         raise ValueError(f"Incomplete runtime dynamics capture at {measured.get('collection_phase', 'unknown phase')}: "
                          f"{measured.get('collection_error', 'collection did not finish')}")
-    if (not names or len(names) != len(set(names)) or set(joints) != set(reference.limits) or len(joints) != 43):
+    dofs = len(reference.limits)
+    if (not names or len(names) != len(set(names)) or set(joints) != set(reference.limits) or len(joints) != dofs):
         raise ValueError("Invalid dynamics body/joint mapping")
     count = len(names)
     masses = finite(measured["body_mass_kg"], (count,))
@@ -463,12 +539,12 @@ def dynamics_comparison(measured, reference, source, contract, asset):
     if np.any(principal <= 0):
         raise ValueError("Runtime inertia is not positive definite")
     for key in ("solver_joint_stiffness", "solver_joint_damping", "joint_armature"):
-        if np.any(finite(measured[key], (43,)) < 0):
+        if np.any(finite(measured[key], (dofs,)) < 0):
             raise ValueError(f"Invalid runtime {key}")
-    finite(measured["joint_effort_limits"], (43,))
-    targets = finite(measured["joint_position_targets"], (43,))
-    velocity_targets = finite(measured["joint_velocity_targets"], (43,))
-    q = dict(zip(joints, finite(measured["joint_positions"], (43,)), strict=True))
+    finite(measured["joint_effort_limits"], (dofs,))
+    targets = finite(measured["joint_position_targets"], (dofs,))
+    velocity_targets = finite(measured["joint_velocity_targets"], (dofs,))
+    q = dict(zip(joints, finite(measured["joint_positions"], (dofs,)), strict=True))
     if source["actuated_joint_names"] != asset["controller_reference"]["joint_order"]:
         raise ValueError("Source dynamics joint order differs from the reviewed policy")
     root = pose_matrix(measured["root_pose_xyzw"])
@@ -628,13 +704,14 @@ def placement_summary(evidence, settings, policy_height, initial_pose):
     after = collision_clearance(evidence["after_geometry"])
     if not agrees(before, evidence["before_clearance"]) or not agrees(after, evidence["after_clearance"]):
         raise ValueError("Saved clearance disagrees with collision geometry")
-    lift = placement_shift(before["minimum_clearance_m"], settings)
+    source_pose = settings["mode"] == "source_pose"
+    lift = 0.0 if source_pose else placement_shift(before["minimum_clearance_m"], settings)
     wanted = np.array([0.0, 0.0, lift, 0, 0, 0, 0])
     root_before = finite(evidence["before_root_pose_xyzw"], (7,))
     root_after = finite(evidence["after_root_pose_xyzw"], (7,))
     if (not np.isclose(evidence["policy_height_command_m"], policy_height, atol=1e-8, rtol=0) or
             not np.isclose(evidence["vertical_shift_m"], lift, atol=1e-8, rtol=0) or
-            not np.allclose(root_before[:3], [0, 0, policy_height], atol=1e-6, rtol=0) or
+            not np.allclose(root_before[:3], [0, 0, settings["root_height_m"] if source_pose else policy_height], atol=1e-6, rtol=0) or
             not np.allclose(root_after-root_before, wanted, atol=1e-6, rtol=0) or
             not np.allclose(root_after, finite(initial_pose, (7,)), atol=1e-6, rtol=0)):
         raise ValueError("Initial placement changed more than the declared vertical translation")

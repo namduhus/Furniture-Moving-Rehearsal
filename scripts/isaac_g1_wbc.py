@@ -20,6 +20,87 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 
 
+def trial_contract(profile):
+    from g1_wbc import load_contract, deployment_contract
+    contract, reference = load_contract(ROOT / profile["controller_contract"])
+    return deployment_contract(contract, reference, profile["command"]) if profile.get("deployment") else (contract, reference)
+
+
+def apply_fixed_hands(stage, robot, directory):
+    """Replace joint types in the session layer; preserve all joint frames."""
+    from pxr import Usd, UsdPhysics
+    from g1_wbc import load_deployment_reference
+    expected = set(load_deployment_reference()["fixed_hand_joints"])
+    evidence = {"status": "preparing_fixed_hands", "joints": {}, "edit_layer": "session"}
+    write_json(directory / "deployment-joints.json", evidence)
+    if robot.is_initialized:
+        raise RuntimeError("Fixed hands must be authored before reset")
+    prims = [p for p in stage.Traverse() if p.GetName() in expected]
+    if len(prims) != 14 or {p.GetName() for p in prims} != expected:
+        raise RuntimeError("Expected exactly the 14 source hand joints")
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        for prim in prims:
+            if (not prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsInstanceProxy() or
+                    not str(prim.GetPath()).startswith("/World/envs/env_0/Robot/")):
+                raise RuntimeError("Unexpected source hand joint type/proxy")
+            joint = UsdPhysics.Joint(prim)
+            before = {"body0": [str(p) for p in joint.GetBody0Rel().GetTargets()],
+                      "body1": [str(p) for p in joint.GetBody1Rel().GetTargets()]}
+            if len(before["body0"]) != 1 or len(before["body1"]) != 1:
+                raise RuntimeError("Invalid hand joint body relationships")
+            fixed = UsdPhysics.FixedJoint.Define(stage, prim.GetPath())
+            if not fixed:
+                raise RuntimeError("Unable to author fixed hand joint")
+            evidence["joints"][prim.GetName()] = {"path": str(prim.GetPath()), **before,
+                "authored_type": fixed.GetPrim().GetTypeName()}
+            write_json(directory / "deployment-joints.json", evidence)
+    evidence["status"] = "authored_fixed_hands_before_reset"
+    write_json(directory / "deployment-joints.json", evidence)
+
+
+def validate_deployment_evidence(directory, asset, contract):
+    from g1_wbc import load_deployment_reference, finite
+    import numpy as np
+    data = load_deployment_reference()
+    fixed = json.loads((directory / "deployment-joints.json").read_text())
+    if (fixed["status"] != "authored_fixed_hands_before_reset" or fixed["edit_layer"] != "session" or
+            set(fixed["joints"]) != set(data["fixed_hand_joints"]) or
+            any(j["authored_type"] != "PhysicsFixedJoint" for j in fixed["joints"].values())):
+        raise ValueError("Incomplete fixed-hand deployment evidence")
+    measured = json.loads((directory / "deployment-runtime.json").read_text())
+    if measured["joint_names"] != json.loads((directory / "asset-inventory.json").read_text())["joint_names"]:
+        raise ValueError("Deployment joint order differs from the inventory")
+    expected = asset["controller_reference"]["joint_order"]
+    if len(measured["joint_names"]) != 29 or set(measured["joint_names"]) != set(expected):
+        raise ValueError("Deployment did not resolve exactly 29 active body joints")
+    covered = []
+    for group in measured["actuators"].values():
+        covered.extend(group["joint_names"])
+        if group["implicit"]:
+            raise ValueError("Deployment requires explicit body PD")
+        for i, name in enumerate(group["joint_names"]):
+            lower = name in asset["joint_groups"]["lower_body"]
+            index = asset["joint_groups"]["lower_body"].index(name) if lower else 0
+            kp = contract["kp"][index] if lower else 100.0
+            kd = contract["kd"][index] if lower else 0.5
+            if not np.allclose([group["kp"][i], group["kd"][i]], [kp, kd], atol=1e-6, rtol=0):
+                raise ValueError("Deployment native PD gains were not applied")
+    if len(covered) != 29 or set(covered) != set(expected):
+        raise ValueError("Incomplete deployment native actuator coverage")
+    armature = finite(measured["joint_armature"], (29,))
+    limits = finite(measured["joint_effort_limits"], (29,))
+    if not np.allclose(armature, 0.01, atol=1e-7, rtol=0) or not np.allclose(
+            limits, [data["body_effort_limits_nm"][n] for n in measured["joint_names"]], atol=1e-5, rtol=0):
+        raise ValueError("Deployment armature/effort caps differ from the source")
+    for key, wanted in (("joint_static_friction_nm", 0.1), ("joint_dynamic_friction_nm", 0.1),
+                        ("joint_viscous_friction_nm_s_rad", 0.001)):
+        if not np.allclose(finite(measured[key], (29,)), wanted, atol=1e-7, rtol=0):
+            raise ValueError("Deployment passive joint terms were not applied")
+    return {"status": "verified_deployment_runtime", "active_joints": 29, "fixed_finger_joints": 14,
+            "policy_role": contract["policy_role"], "policy_phase": data["policy_phase"],
+            "residual_differences": data["residual_differences"]}
+
+
 def apply_palm_override(stage, robot, contract, directory):
     """Author only the left palm in the session layer before physics reset."""
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
@@ -116,7 +197,7 @@ def analyze_palm_override(directory, profile, contract, measured=None):
     return report
 
 
-def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None):
+def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None, filename="dynamics-runtime.json"):
     """Capture backend-reordered buffers and resolved actuator parameters."""
     from isaaclab.actuators import ActuatorBase, ImplicitActuatorCfg
     from isaaclab.actuators.newton import read_group_parameter
@@ -146,10 +227,17 @@ def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None):
 
     def save():
         if directory is not None:
-            write_json(directory / "dynamics-runtime.json", result)
+            write_json(directory / filename, result)
 
     save()  # Preserve physical data even if controller introspection fails.
     try:
+        if len(robot.joint_names) == 29:
+            result["collection_phase"] = "passive_joint_terms"
+            save()
+            result.update(joint_static_friction_nm=array(data.joint_friction_coeff),
+                          joint_dynamic_friction_nm=array(data.joint_dynamic_friction_coeff),
+                          joint_viscous_friction_nm_s_rad=array(data.joint_viscous_friction_coeff))
+            save()
         for name, owner in robot.actuators.items():
             result["collection_phase"] = f"actuator:{name}"
             save()
@@ -190,10 +278,10 @@ def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None):
 
 
 def analyze_dynamics(directory):
-    from g1_wbc import dynamics_comparison, load_contract, load_dynamics_reference, placement_summary
+    from g1_wbc import dynamics_comparison, load_dynamics_reference, placement_summary
     profile = json.loads((directory / "profile.json").read_text())
     asset = json.loads((directory / "asset-profile.json").read_text())
-    contract, reference = load_contract(ROOT / profile["controller_contract"])
+    contract, reference = trial_contract(profile)
     if contract != json.loads((directory / "controller-contract.json").read_text()):
         raise ValueError("Saved audit contract differs from the current reviewed contract")
     source = load_dynamics_reference()
@@ -205,7 +293,7 @@ def analyze_dynamics(directory):
     validate_inventory(json.loads((directory / "asset-inventory.json").read_text()), asset)
     if (initial["status"] != "passed_explicit_initialization" or
             not np.allclose(initial["root_vel_world"], np.zeros(6), atol=1e-4, rtol=0) or
-            not np.allclose(initial["joint_velocities"], np.zeros(43), atol=1e-4, rtol=0) or
+            not np.allclose(initial["joint_velocities"], np.zeros(len(reference.limits)), atol=1e-4, rtol=0) or
             not np.allclose(measured["root_pose_xyzw"], initial["root_pose_xyzw"], atol=1e-6, rtol=0) or
             not np.allclose(measured["joint_positions"], initial["joint_positions"], atol=1e-6, rtol=0)):
         raise ValueError("Audit pose differs from the initialized state")
@@ -214,6 +302,8 @@ def analyze_dynamics(directory):
         profile["initialization"], contract["height_command"], initial["root_pose_xyzw"])
     if profile.get("inertial_override"):
         report["inertial_override"] = analyze_palm_override(directory, profile, contract, measured)
+    if profile.get("deployment"):
+        report["deployment"] = validate_deployment_evidence(directory, asset, contract)
     return report
 
 
@@ -364,6 +454,7 @@ def analyze_run(directory):
         return report
     diagnostics = profile["diagnostics"]
     asset = json.loads((directory / "asset-profile.json").read_text())
+    dofs = len(json.loads((directory / "asset-inventory.json").read_text())["joint_names"])
     metadata = json.loads((directory / "contact-metadata.json").read_text())
     if set(metadata["sensor_body_names"]) != set(diagnostics["foot_body_names"]):
         raise ValueError("Contact sensor metadata does not match the diagnostic profile")
@@ -382,17 +473,32 @@ def analyze_run(directory):
     history = ObservationHistory(contract)
     for row in records:
         state = row["policy_input_state"]
-        q = finite(state["joint_positions"], (43,))
-        dq = finite(state["joint_velocities"], (43,))
+        q = finite(state["joint_positions"], (dofs,))
+        dq = finite(state["joint_velocities"], (dofs,))
         pose = finite(state["root_pose_xyzw"], (7,))
         velocity = finite(state["root_velocity_world"], (6,))
-        observation = history.observe(q[indices], dq[indices], pose[3:], velocity[3:], rotation)
+        observation = history.observe(q[indices], dq[indices], pose[3:], velocity[3:], rotation, profile.get("command", (0, 0, 0)))
         if not np.allclose(observation, finite(row["policy_observation"], (516,)), atol=1e-6, rtol=0):
             raise ValueError("Logged policy observation disagrees with its saved input state/history")
         history.targets(row["action"], limits)
+        if profile.get("deployment"):
+            expected_applied = np.zeros(15) if row["step"] == 1 else records[row["step"]-2]["action"]
+            if (row["policy_phase"] != "after_physics" or
+                    not np.isclose(row["policy_input_time_seconds"], row["sim_time_seconds"], atol=1e-9, rtol=0) or
+                    not np.allclose(row["applied_action"], expected_applied, atol=1e-7, rtol=0) or
+                    not np.allclose(state["root_pose_xyzw"], row["root_pose_xyzw"], atol=1e-7, rtol=0)):
+                raise ValueError("Deployment control-phase evidence differs from the source schedule")
     report["policy_inputs_verified"] = bool(records)
     report["status"] = "diagnostics_complete" if len(samples) == expected and len(records) == profile["control_steps"] else "diagnostics_partial"
     report["limitation"] = "Input-state consistency is checked with the adapter; it does not independently establish equivalence to upstream training observations."
+    if profile.get("deployment"):
+        from g1_wbc import functional_summary
+        effective, _ = trial_contract(profile)
+        if effective != contract:
+            raise ValueError("Saved deployment controller differs from the pinned effective contract")
+        report["deployment"] = validate_deployment_evidence(directory, asset, contract)
+        report["functional"] = functional_summary(profile["functional_case"], initial, records)
+        report["stationary_success_assessed"] = profile["functional_case"] == "stand" and report["status"] == "diagnostics_complete"
     return report
 
 
@@ -467,7 +573,7 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "scope"}:
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "deployment", "command", "functional_case", "scope"}:
             raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm override")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
@@ -476,20 +582,40 @@ def load_plan(path):
                 type(diagnostics.get("minimum_normal_force_n")) not in (float, int) or
                 not 0.1 <= diagnostics["minimum_normal_force_n"] <= 20):
             raise ValueError("Invalid foot contact diagnostic configuration")
+    deployment = profile.get("deployment")
+    if not deployment and any(k in profile for k in ("command", "functional_case")):
+        raise ValueError("Motion commands require the reviewed deployment protocol")
+    if deployment is not None:
+        from g1_wbc import load_deployment_reference
+        source = load_deployment_reference()
+        commands = {"stand": [0, 0, 0], "forward": [0.2, 0, 0], "turn": [0, 0, 0.2]}
+        if (deployment != "assets/references/g1_wbc_deployment.json" or
+                profile.get("functional_case") not in commands or
+                profile.get("command") != commands.get(profile.get("functional_case")) or
+                profile["control_steps"] != 250 or not profile.get("inertial_override")):
+            raise ValueError("Invalid coherent deployment/functional protocol")
     if (initialization := profile.get("initialization")) is not None:
+        valid_source_pose = bool(deployment) and initialization == {
+            "mode": "source_pose", "minimum_clearance_m": 0.001,
+            "maximum_vertical_shift_m": 0.1, "root_height_m": source["initial_root_height_m"]}
         if (not profile.get("diagnostics") or not isinstance(initialization, dict) or
-                set(initialization) != {"mode", "minimum_clearance_m", "maximum_vertical_shift_m"} or
-                initialization["mode"] != "collision_clearance" or
+                (not valid_source_pose and (set(initialization) != {"mode", "minimum_clearance_m", "maximum_vertical_shift_m"} or
+                initialization["mode"] != "collision_clearance")) or
                 type(initialization["minimum_clearance_m"]) not in (int, float) or
                 not 0.0005 <= initialization["minimum_clearance_m"] <= 0.005 or
                 type(initialization["maximum_vertical_shift_m"]) not in (int, float) or
                 not 0 < initialization["maximum_vertical_shift_m"] <= 0.1):
             raise ValueError("Invalid initial placement experiment configuration")
+        if deployment and not valid_source_pose:
+            raise ValueError("Deployment requires the source root pose without height adjustment")
     if "inertial_override" in profile:
         if (not profile.get("initialization") or
                 profile["inertial_override"] != {"body": "left_hand_palm_link", "source": "pinned_urdf"}):
             raise ValueError("Only the pinned left-palm inertial override with initial placement is reviewed")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
+    if deployment:
+        asset["fixed_hand_joints"] = asset["joint_groups"]["hands"]
+        asset["joint_groups"]["hands"] = []
     if type(profile["control_steps"]) is not int or not 4 <= profile["control_steps"] <= 500:
         raise ValueError("Standing trial needs 4-500 control steps")
     if type(profile["stage_timeout_seconds"]) is not int or not 1 <= profile["stage_timeout_seconds"] <= 600:
@@ -532,6 +658,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, actuator_limits, check_frames,
                         finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
 
+    deployment = bool(profile.get("deployment"))
+    dofs = len(reference.limits)
     encoder = None if audit_only else require_ffmpeg(directory)
     torch.manual_seed(runtime["seed"])
     policy = None if audit_only else BalancePolicy(model_path, contract)
@@ -569,12 +697,15 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         actuator_effort_limit={n: motor_limits[n]["effort"] for n in lower},
         joint_effort_limit={n: motor_limits[n]["effort"] for n in lower},
         joint_velocity_limit={n: motor_limits[n]["velocity"] for n in lower},
-        armature=contract["lower_body_armature"], friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
-    ), "upper_hold": ImplicitActuatorCfg(
+        armature=contract["lower_body_armature"], friction=0.1 if deployment else 0.0,
+        dynamic_friction=0.1 if deployment else 0.0, viscous_friction=0.001 if deployment else 0.0,
+    ), "upper_hold": (IdealPDActuatorCfg if deployment else ImplicitActuatorCfg)(
         joint_names_expr=upper, stiffness={n: kp[n] for n in upper}, damping={n: kd[n] for n in upper},
+        **({"actuator_effort_limit": {n: motor_limits[n]["effort"] for n in upper}} if deployment else {}),
         joint_effort_limit={n: motor_limits[n]["effort"] for n in upper},
         joint_velocity_limit={n: motor_limits[n]["velocity"] for n in upper},
-        armature=contract["upper_body_armature"], friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
+        armature=contract["upper_body_armature"], friction=0.1 if deployment else 0.0,
+        dynamic_friction=0.1 if deployment else 0.0, viscous_friction=0.001 if deployment else 0.0,
     )}
 
     @configclass
@@ -604,7 +735,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     stage = "dynamics" if audit_only else "balance"
     result = {"status": "running", "steps_completed": 0, "resets": 0,
               "controller": policy.metadata if policy else {},
-              "mode": "static_dynamics_audit_no_control" if audit_only else "stand_only_zero_navigation",
+              "mode": "static_dynamics_audit_no_control" if audit_only else ("deployment_"+profile["functional_case"] if deployment else "stand_only_zero_navigation"),
               "controller_inference_verified": False, "walking_verified": False}
     write_json(directory / f"{stage}-worker.json", result)
     actuator_evidence = {"kp": kp, "kd": kd,
@@ -617,6 +748,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                                  "enable_cameras": not audit_only, "kit_args": "--allow-root"}), record_worker_failure(directory, result, stage):
         sim = sim_utils.SimulationContext(cfg.sim)
         scene = instantiate(cfg.scene)
+        if deployment:
+            apply_fixed_hands(sim.stage, scene["robot"], directory)
         palm_override = apply_palm_override(sim.stage, scene["robot"], contract, directory) if profile.get("inertial_override") else None
         sim.reset()
         robot, camera = scene["robot"], None if audit_only else scene["camera"]
@@ -663,7 +796,12 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                      "joint_position_limits": array(robot.data.joint_pos_limits).tolist()}
         write_json(directory / "asset-inventory.json", inventory)
         validate_inventory(inventory, asset)
-        applied_armature = finite(array(robot.data.joint_armature), (43,))
+        if deployment:
+            snapshot = read_runtime_dynamics(robot, np.eye(3), candidate.spawn.usd_path,
+                                             directory=directory, filename="deployment-runtime.json")
+            write_json(directory / "deployment-runtime.json", snapshot)
+            write_json(directory / "deployment-audit.json", validate_deployment_evidence(directory, asset, contract))
+        applied_armature = finite(array(robot.data.joint_armature), (dofs,))
         wanted_armature = np.array([contract["lower_body_armature"] if n in lower
                                    else contract["upper_body_armature"] for n in names])
         actuator_evidence["joint_armature"] = dict(zip(names, applied_armature.tolist(), strict=True))
@@ -686,7 +824,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             return dict(zip(robot.body_names, poses, strict=True))
 
         def verify_frames(rotation=None, label="calibration"):
-            q = finite(array(robot.data.joint_pos), (43,))
+            q = finite(array(robot.data.joint_pos), (dofs,))
             positions = dict(zip(names, q, strict=True))
             poses = frames()
             write_json(directory / f"frame-input-{label}.json", {
@@ -705,12 +843,12 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         # configured wxyz root rotation equals an API xyzw root pose.
         frame_evidence = {"calibration": verify_frames(), "probes": []}
         rotation = np.asarray(frame_evidence["calibration"]["source_to_asset_rotation"])
-        defaults = np.zeros(43)
+        defaults = np.zeros(dofs)
         defaults[lower_indices] = contract["default_lower_angles"]
 
         def write_joints(q):
             robot.write_joint_position_to_sim_index(position=device(q))
-            robot.write_joint_velocity_to_sim_index(velocity=device(np.zeros(43)))
+            robot.write_joint_velocity_to_sim_index(velocity=device(np.zeros(dofs)))
             sim.forward()
             scene.update(0.0)
 
@@ -720,13 +858,15 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             frame_evidence["probes"].append(probe)
         write_json(directory / "frames.json", {"status": "passed_kinematic_probes", **frame_evidence})
 
-        root_pose = np.r_[0.0, 0.0, contract["height_command"], matrix_quat_xyzw(rotation.T)]
+        initial_joints = np.zeros(dofs) if deployment else defaults
+        root_height = profile["initialization"]["root_height_m"] if deployment else contract["height_command"]
+        root_pose = np.r_[0.0, 0.0, root_height, matrix_quat_xyzw(rotation.T)]
         robot.write_root_pose_to_sim_index(root_pose=device(root_pose))
         robot.write_root_velocity_to_sim_index(root_velocity=device(np.zeros(6)))
-        write_joints(defaults)
+        write_joints(initial_joints)
         scene.reset()
         robot.set_joint_position_target_index(target=device(defaults))
-        robot.set_joint_velocity_target_index(target=device(np.zeros(43)))
+        robot.set_joint_velocity_target_index(target=device(np.zeros(dofs)))
         sim.forward()
         scene.update(0.0)
         if profile.get("initialization"):
@@ -745,7 +885,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             write_json(directory / "initial-placement.json", placement)
             placement["before_clearance"] = collision_clearance(placement["before_geometry"])
             write_json(directory / "initial-placement.json", placement)
-            lift = placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
+            lift = 0.0 if deployment else placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
             root_pose[2] += lift
             placement["vertical_shift_m"] = lift
             robot.write_root_pose_to_sim_index(root_pose=device(root_pose))
@@ -761,16 +901,16 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             placement_summary(placement, settings, contract["height_command"], placement["after_root_pose_xyzw"])
             write_json(directory / "initial-placement.json", placement)
         pose = finite(array(robot.data.root_link_pose_w), (7,))
-        q = finite(array(robot.data.joint_pos), (43,))
+        q = finite(array(robot.data.joint_pos), (dofs,))
         velocity = finite(array(robot.data.root_link_vel_w), (6,))
-        dq = finite(array(robot.data.joint_vel), (43,))
+        dq = finite(array(robot.data.joint_vel), (dofs,))
         source_rotation = quat_xyzw_matrix(pose[3:]) @ rotation
         initial = {"status": "initialization_mismatch", "wanted_root_pose_xyzw": root_pose.tolist(),
-                   "wanted_joint_positions": defaults.tolist(), "root_pose_xyzw": pose.tolist(),
+                   "wanted_joint_positions": initial_joints.tolist(), "root_pose_xyzw": pose.tolist(),
                    "source_rotation_world": source_rotation.tolist(), "joint_positions": q.tolist(),
                    "root_vel_world": velocity.tolist(), "joint_velocities": dq.tolist()}
         write_json(directory / "initial-state.json", initial)
-        if (np.max(np.abs(q-defaults)) > profile["initial_joint_tolerance_rad"] or
+        if (np.max(np.abs(q-initial_joints)) > profile["initial_joint_tolerance_rad"] or
                 np.max(np.abs(pose[:3]-root_pose[:3])) > profile["initial_pose_tolerance"] or
                 not np.allclose(source_rotation, np.eye(3), atol=profile["initial_pose_tolerance"]) or
                 np.max(np.abs(velocity)) > 1e-4 or np.max(np.abs(dq)) > 1e-4):
@@ -804,35 +944,41 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                 raise RuntimeError("Invalid balance camera evidence")
             Image.fromarray(rgb.astype(np.uint8)).save(path)
 
+        def infer(step, input_time):
+            q, dq = array(robot.data.joint_pos), array(robot.data.joint_vel)
+            pose, vel = array(robot.data.root_link_pose_w), array(robot.data.root_link_vel_w)
+            observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation, profile.get("command", (0, 0, 0)))
+            if diagnostics:
+                input_state = {"joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
+                               "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist()}
+            action = policy(observation)
+            try:
+                target, clipped = history.targets(action, limits[lower_indices])
+            except (RuntimeError, ValueError):
+                write_json(directory / "rejected-action.json", {
+                    "step": step+1, "sim_time_seconds": input_time, "applied": False,
+                    "limit": contract["action_limit"], "maximum_absolute_action": float(np.max(np.abs(action))),
+                    "maximum_action_joint": lower[int(np.argmax(np.abs(action)))],
+                    "observation": observation.tolist(), "action": action.tolist(),
+                    "joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
+                    "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist(),
+                    "source_to_asset_rotation": rotation.tolist(),
+                    "controller_body_joint_indices": indices, "lower_body_joint_names": lower})
+                raise
+            targets = defaults.copy()
+            targets[lower_indices] = target
+            robot.set_joint_position_target_index(target=device(targets))
+            return action, clipped, observation, input_state if diagnostics else None
+
         capture(directory / "initial.png")
         error = None
         try:
             with (directory / "trajectory.jsonl").open("w") as trajectory, \
                     ((directory / "contacts.jsonl").open("w") if diagnostics else nullcontext(None)) as contact_log:
                 for step in range(profile["control_steps"]):
-                    q, dq = array(robot.data.joint_pos), array(robot.data.joint_vel)
-                    pose, vel = array(robot.data.root_link_pose_w), array(robot.data.root_link_vel_w)
-                    observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation)
-                    if diagnostics:
-                        input_state = {"joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
-                                       "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist()}
-                    action = policy(observation)
-                    try:
-                        target, clipped = history.targets(action, limits[lower_indices])
-                    except (RuntimeError, ValueError):
-                        write_json(directory / "rejected-action.json", {
-                            "step": step+1, "sim_time_seconds": step*dt, "applied": False,
-                            "limit": contract["action_limit"], "maximum_absolute_action": float(np.max(np.abs(action))),
-                            "maximum_action_joint": lower[int(np.argmax(np.abs(action)))],
-                            "observation": observation.tolist(), "action": action.tolist(),
-                            "joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
-                            "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist(),
-                            "source_to_asset_rotation": rotation.tolist(),
-                            "controller_body_joint_indices": indices, "lower_body_joint_names": lower})
-                        raise
-                    targets = defaults.copy()
-                    targets[lower_indices] = target
-                    robot.set_joint_position_target_index(target=device(targets))
+                    applied_action = history.last_action.copy()
+                    if not deployment:
+                        action, clipped, observation, input_state = infer(step, step*dt)
                     for substep in range(asset["control_decimation"]):
                         scene.write_data_to_sim()
                         sim.step(render=False)
@@ -844,8 +990,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                             total = finite(array(data.net_forces_w), (2, 3))[sensor_indices]
                             foot_poses = finite(array(robot.data.body_link_pose_w), (len(robot.body_names), 7))[foot_body_indices]
                             foot_velocities = finite(array(robot.data.body_link_vel_w), (len(robot.body_names), 6))[foot_body_indices]
-                            computed = finite(array(robot.actuators.computed_effort), (43,))[lower_indices]
-                            applied = finite(array(robot.actuators.applied_effort), (43,))[lower_indices]
+                            computed = finite(array(robot.actuators.computed_effort), (dofs,))[lower_indices]
+                            applied = finite(array(robot.actuators.applied_effort), (dofs,))[lower_indices]
                             physics_step = step*asset["control_decimation"]+substep+1
                             contact_log.write(json.dumps({
                                 "physics_step": physics_step, "control_step": step+1,
@@ -858,9 +1004,11 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                                     "friction_force_world_n": friction[i].tolist(),
                                     "total_force_world_n": total[i].tolist()} for i, name in enumerate(feet)}
                             }, allow_nan=False)+"\n")
+                    if deployment:
+                        action, clipped, observation, input_state = infer(step, (step+1)*dt)
                     pose = finite(array(robot.data.root_link_pose_w), (7,))
-                    q = finite(array(robot.data.joint_pos), (43,))
-                    dq = finite(array(robot.data.joint_vel), (43,))
+                    q = finite(array(robot.data.joint_pos), (dofs,))
+                    dq = finite(array(robot.data.joint_vel), (dofs,))
                     velocity = finite(array(robot.data.root_link_vel_w), (6,))
                     gravity = (quat_xyzw_matrix(pose[3:]) @ rotation).T @ np.array([0, 0, -1])
                     tilt = float(np.arccos(np.clip(-gravity[2], -1, 1)))
@@ -871,6 +1019,9 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                               "joint_positions": q.tolist(), "joint_velocities": dq.tolist()}
                     if diagnostics:
                         record.update(policy_observation=observation.tolist(), policy_input_state=input_state)
+                    if deployment:
+                        record.update(policy_phase="after_physics", policy_input_time_seconds=(step+1)*dt,
+                                      applied_action=applied_action.tolist(), command=profile["command"])
                     trajectory.write(json.dumps(record)+"\n")
                     result.update(steps_completed=step+1, controller_inference_verified=True)
                     if (step+1) % stride == 0:
@@ -914,7 +1065,9 @@ def validate_stage(stage, directory, profile):
             raise RuntimeError("Incomplete dynamics comparison")
     if stage == "balance":
         import numpy as np
-        from g1_wbc import check_frames, finite, joint_anchor_poses, load_contract, quat_xyzw_matrix
+        from g1_wbc import check_frames, finite, joint_anchor_poses, quat_xyzw_matrix
+        contract, reference = trial_contract(profile)
+        dofs = len(reference.limits)
         if evidence["steps_completed"] != profile["control_steps"] or evidence["resets"] != 0 or not evidence["controller_inference_verified"]:
             raise RuntimeError("Incomplete or reset balance rollout")
         records = [json.loads(line) for line in (directory / "trajectory.jsonl").read_text().splitlines()]
@@ -927,8 +1080,8 @@ def validate_stage(stage, directory, profile):
                     not 0 <= item["tilt_rad"] <= profile["maximum_tilt_rad"] or
                     not np.isclose(item["sim_time_seconds"], step*0.02, atol=1e-8)):
                 raise RuntimeError("Trajectory violates balance guards")
-            finite(item["joint_positions"], (43,))
-            finite(item["joint_velocities"], (43,))
+            finite(item["joint_positions"], (dofs,))
+            finite(item["joint_velocities"], (dofs,))
             finite(item["root_velocity_world"], (6,))
             finite(item["action"], (15,))
             pose = finite(item["root_pose_xyzw"], (7,))
@@ -941,9 +1094,9 @@ def validate_stage(stage, directory, profile):
                 raise RuntimeError("Missing initialization/frame evidence")
         if len(frames["probes"]) != 2:
             raise RuntimeError("Incomplete kinematic probes")
-        contract, reference = load_contract(ROOT / profile["controller_contract"])
         armature = json.loads((directory / "actuators.json").read_text())["joint_armature"]
-        asset, _ = load_asset_profile(ROOT / profile["asset_profile"])
+        asset = (json.loads((directory / "asset-profile.json").read_text()) if profile.get("deployment")
+                 else load_asset_profile(ROOT / profile["asset_profile"])[0])
         if set(armature) != set(reference.limits) or any(
                 not np.isclose(value, contract["lower_body_armature"] if name in asset["joint_groups"]["lower_body"]
                                else contract["upper_body_armature"], rtol=0, atol=1e-7)
@@ -970,10 +1123,10 @@ def validate_stage(stage, directory, profile):
         pose = finite(initial["root_pose_xyzw"], (7,))
         wanted_pose = finite(initial["wanted_root_pose_xyzw"], (7,))
         if (np.max(np.abs(pose[:3]-wanted_pose[:3])) > profile["initial_pose_tolerance"] or
-                np.max(np.abs(finite(initial["joint_positions"], (43,))-finite(initial["wanted_joint_positions"], (43,)))) > profile["initial_joint_tolerance_rad"] or
+                np.max(np.abs(finite(initial["joint_positions"], (dofs,))-finite(initial["wanted_joint_positions"], (dofs,)))) > profile["initial_joint_tolerance_rad"] or
                 not np.allclose(finite(initial["source_rotation_world"], (3, 3)), np.eye(3), atol=profile["initial_pose_tolerance"]) or
                 np.max(np.abs(finite(initial["root_vel_world"], (6,)))) > 1e-4 or
-                np.max(np.abs(finite(initial["joint_velocities"], (43,)))) > 1e-4):
+                np.max(np.abs(finite(initial["joint_velocities"], (dofs,)))) > 1e-4):
             raise RuntimeError("Invalid initial-state evidence")
         video = evidence["video"]
         expected_count = profile["control_steps"] // profile["camera"]["capture_every_control_steps"]
@@ -994,6 +1147,9 @@ def validate_stage(stage, directory, profile):
                 raise RuntimeError("Incomplete contact diagnostics")
             if not analysis["contacts"]["force_evidence_present"]:
                 raise RuntimeError("Contact diagnostics recorded no supporting foot-force evidence")
+            if profile.get("deployment") and analysis["functional"]["status"] != "passed_functional_evaluation":
+                failed = [k for k, passed in analysis["functional"]["checks"].items() if not passed]
+                raise RuntimeError(f"Functional gate failed: {failed}; inspect diagnostics-summary.json. No automatic retry.")
             materials = json.loads((directory / "contact-materials.json").read_text())
             if (set(materials["scopes"]) != {"ground", *profile["diagnostics"]["foot_body_names"]} or
                     any(not shapes for shapes in materials["scopes"].values())):
@@ -1004,7 +1160,7 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
     try:
         write_json(directory / "versions.json", check_versions(runtime))
         from g1_wbc import load_contract, prepare_model
-        contract, reference = load_contract(contract_path)
+        contract, reference = trial_contract(profile)
         if stage == "gpu":
             write_json(directory / "gpu-worker.json", {"status": "checks_completed", **gpu_check(runtime, directory)})
         elif stage == "dynamics":
@@ -1020,8 +1176,9 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
         if stage in ("balance", "dynamics") and isinstance(error, SystemExit) and error.code in (None, 0):
             try:
                 validate_stage(stage, directory, profile)
-            except (OSError, ValueError, RuntimeError, KeyError):
-                pass
+            except (OSError, ValueError, RuntimeError, KeyError) as validation_error:
+                if profile.get("deployment"):
+                    error = validation_error
             else:
                 return 0
         path = directory / f"{stage}-worker.json"
@@ -1030,6 +1187,8 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
         write_json(path, {**evidence, "status": "failed", "error": message,
                           "error_type": type(error).__name__})
         (directory / f"{stage}-error.log").write_text(traceback.format_exc())
+        if profile.get("deployment"):
+            raise error
         raise
 
 
@@ -1040,6 +1199,7 @@ def main(argv=None):
     parser.add_argument("--prepare-model", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--analyze-run", type=Path, help="Analyze saved artifacts on CPU without Isaac, ONNX or Modal")
+    parser.add_argument("--stand-run", type=Path, help="Verified deployment standing run required before moving trials")
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs/isaac")
     parser.add_argument("--worker", choices=("policy", "gpu", "balance", "dynamics"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
@@ -1052,16 +1212,35 @@ def main(argv=None):
         parser.error("Dynamics audit requires the placement profile and does not use --prepare-model")
     stages = ["gpu", "dynamics"] if args.stage == "dynamics" else (["policy"] if args.stage == "policy" else ["policy", "gpu", "balance"])
     if args.dry_run:
+        dry_contract, _ = trial_contract(profile)
         print(json.dumps({"status": "local_plan_only", "stages": stages, "asset": asset["asset_config"],
                           "control_steps": 0 if args.stage == "dynamics" else profile["control_steps"],
                           "simulated_seconds": 0 if args.stage == "dynamics" else profile["control_steps"]*0.02,
-                          "model_download_bytes": 1886682 if args.prepare_model else 0,
+                          "model_download_bytes": dry_contract["model"]["bytes"] if args.prepare_model else 0,
+                          "policy_role": dry_contract.get("policy_role", "balance"),
+                          "active_joints": sum(len(v) for v in asset["joint_groups"].values()),
+                          "functional_case": profile.get("functional_case"),
+                          "policy_phase": "after_physics" if profile.get("deployment") else "before_physics",
                           "contact_diagnostics": bool(profile.get("diagnostics")),
                           "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
                           "inertial_override": profile.get("inertial_override"),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0
+    prerequisite = None
+    if (profile.get("deployment") and profile["functional_case"] != "stand" and args.stage == "balance"
+            and not args.worker):
+        if args.stand_run is None:
+            parser.error("Moving deployment trials require --stand-run from a successful standing evaluation")
+        stand_dir = args.stand_run.expanduser().resolve()
+        stand_profile = json.loads((stand_dir / "profile.json").read_text())
+        if stand_profile.get("deployment") != profile["deployment"] or stand_profile.get("functional_case") != "stand":
+            parser.error("--stand-run must use the same reviewed deployment with a standing case")
+        if json.loads((stand_dir / "runtime-config.json").read_text()) != runtime:
+            parser.error("--stand-run must use the same runtime configuration")
+        validate_stage("balance", stand_dir, stand_profile)
+        prerequisite = {"run_id": stand_dir.name, "functional": analyze_run(stand_dir)["functional"],
+                        "controller_contract_sha256": file_sha256(stand_dir / "controller-contract.json")}
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Execute in the existing pinned Isaac image; use --dry-run on Mac")
     contract_path = ROOT / profile["controller_contract"]
@@ -1071,17 +1250,20 @@ def main(argv=None):
         return worker(args.worker, profile, asset, runtime, contract_path, args.run_dir)
     directory = args.output_root.expanduser().resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-wbc")
     directory.mkdir(parents=True)
+    if prerequisite is not None:
+        write_json(directory / "prerequisite-stand.json", prerequisite)
     write_json(directory / "profile.json", profile)
     write_json(directory / "asset-profile.json", asset)
     write_json(directory / "runtime-config.json", runtime)
-    write_json(directory / "controller-contract.json", json.loads(contract_path.read_text()))
+    effective_contract, _ = trial_contract(profile)
+    write_json(directory / "controller-contract.json", effective_contract)
     summary = {"status": "running", "stages": {}, "run_dir": str(directory)}
     write_json(directory / "summary.json", summary)
     try:
         from g1_wbc import load_contract, prepare_model
-        contract, _ = load_contract(contract_path)
+        contract, _ = trial_contract(profile)
         if args.prepare_model:
-            print("Preparing pinned 1,886,682-byte balance checkpoint and verifying SHA-256...", flush=True)
+            print(f"Preparing pinned {contract['model']['bytes']:,}-byte {contract.get('policy_role', 'balance')} checkpoint and verifying SHA-256...", flush=True)
         if args.stage != "dynamics":
             prepare_model(contract, args.prepare_model)
         for stage in stages:
@@ -1096,6 +1278,9 @@ def main(argv=None):
             summary["stages"][stage] = "passed"
             write_json(directory / "summary.json", summary)
         summary["status"] = {"policy": "passed_policy_contract", "balance": "passed_balance_rollout", "dynamics": "passed_dynamics_audit"}[args.stage]
+        if profile.get("deployment") and args.stage == "balance":
+            summary["functional"] = analyze_run(directory)["functional"]
+            summary["status"] = "passed_deployment_" + profile["functional_case"]
         return 0
     except BaseException as error:
         summary.update(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error=str(error))
@@ -1104,7 +1289,10 @@ def main(argv=None):
     finally:
         if profile.get("diagnostics") and (directory / "trajectory.jsonl").is_file():
             try:
-                write_json(directory / "diagnostics-summary.json", analyze_run(directory))
+                analysis = analyze_run(directory)
+                write_json(directory / "diagnostics-summary.json", analysis)
+                if "functional" in analysis:
+                    summary["functional"] = analysis["functional"]
             except (OSError, ValueError, RuntimeError, KeyError):
                 (directory / "diagnostics-error.log").write_text(traceback.format_exc())
         write_json(directory / "summary.json", summary)
