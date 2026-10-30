@@ -136,6 +136,42 @@ class RobotReference:
         return poses
 
 
+def joint_anchor_poses(reference: RobotReference, body_poses: dict, joint_frames: dict):
+    """Express USD joint pivots using measured body poses and authored offsets.
+
+    URDF child-link origins are joint pivots; USD rigid-body origins need not be.
+    Offsets come from USD physics metadata, never from fitting measured errors.
+    Body orientations remain unchanged, so the existing orientation checks apply.
+    """
+    expected = {name: (parent, child, axis) for name, parent, child, kind, _, axis
+                in reference.joints if kind == "revolute"}
+    if set(joint_frames) != set(expected):
+        raise RuntimeError("Incomplete USD joint-frame metadata")
+    result = {reference.root: body_poses[reference.root]}
+    for name, (parent, child, axis) in expected.items():
+        frame = joint_frames[name]
+        if (frame["parent"], frame["child"]) != (parent, child):
+            raise RuntimeError(f"USD joint body relationships differ: {name}")
+        direction = finite(frame["axis_in_child"], (3,))
+        wanted = finite(axis, (3,))
+        wanted /= np.linalg.norm(wanted)
+        if not np.allclose(direction, wanted, atol=1e-4, rtol=0):
+            raise RuntimeError(f"USD joint axis differs from URDF: {name}")
+        body = pose_matrix(body_poses[child])
+        position = body[:3, 3] + body[:3, :3] @ finite(frame["position_in_child"], (3,))
+        result[child] = np.r_[position, finite(body_poses[child], (7,))[3:]]
+    return result
+
+
+class FrameMismatchError(RuntimeError):
+    def __init__(self, report):
+        self.report = report
+        super().__init__(
+            f"Reference/asset frames differ: position={report['maximum_position_error_m']:.6g} m "
+            f"({report['worst_position_link']}), angle={report['maximum_angle_error_rad']:.6g} rad "
+            f"({report['worst_angle_link']})")
+
+
 def check_frames(reference: RobotReference, joint_positions: dict, world_poses: dict,
                  position_tolerance, angle_tolerance, source_to_asset=None):
     """Fit a single root-frame rotation, then require link poses to agree with FK."""
@@ -148,26 +184,36 @@ def check_frames(reference: RobotReference, joint_positions: dict, world_poses: 
     root = pose_matrix(world_poses["pelvis"])
     actual = {name: np.linalg.inv(root) @ pose_matrix(world_poses[name]) for name in names}
     if source_to_asset is None:
-        src = np.stack([local[n][:3, 3] for n in names])
-        dst = np.stack([actual[n][:3, 3] for n in names])
-        if np.linalg.matrix_rank(src) < 3:
+        if np.linalg.matrix_rank(np.stack([local[n][:3, 3] for n in names])) < 3:
             raise RuntimeError("Degenerate frame calibration geometry")
-        u, _, vt = np.linalg.svd(dst.T @ src)
+        # Fit orientations, which are independent of USD body-origin offsets.
+        cross = sum(actual[n][:3, :3] @ local[n][:3, :3].T
+                    for n in names if n != reference.root)
+        u, _, vt = np.linalg.svd(cross)
         source_to_asset = u @ np.diag([1, 1, np.linalg.det(u @ vt)]) @ vt
     rotation = finite(source_to_asset, (3, 3))
-    max_pos = max_angle = 0.0
+    errors = []
     for name in names:
         expected = local[name]
-        max_pos = max(max_pos, float(np.linalg.norm(rotation @ expected[:3, 3] - actual[name][:3, 3])))
+        difference = rotation @ expected[:3, 3] - actual[name][:3, 3]
+        angle = 0.0
         # The fitted offset relates the two root frames. The pelvis orientation
         # defines that offset, so it is not an independent child-frame check.
         if name != "pelvis":
             delta = (rotation @ expected[:3, :3]).T @ actual[name][:3, :3]
-            max_angle = max(max_angle, float(np.arccos(np.clip((np.trace(delta)-1)/2, -1, 1))))
-    if max_pos > position_tolerance or max_angle > angle_tolerance:
-        raise RuntimeError(f"Reference/asset frames differ: position={max_pos:.6g} m, angle={max_angle:.6g} rad")
-    return {"source_to_asset_rotation": rotation.tolist(), "links_checked": len(names),
-            "maximum_position_error_m": max_pos, "maximum_angle_error_rad": max_angle}
+            angle = float(np.arccos(np.clip((np.trace(delta)-1)/2, -1, 1)))
+        errors.append({"link": name, "position_error_m": float(np.linalg.norm(difference)),
+                       "position_difference_m": difference.tolist(), "angle_error_rad": angle})
+    position = max(errors, key=lambda e: e["position_error_m"])
+    angle = max(errors, key=lambda e: e["angle_error_rad"])
+    report = {"source_to_asset_rotation": rotation.tolist(), "links_checked": len(names),
+              "maximum_position_error_m": position["position_error_m"],
+              "maximum_angle_error_rad": angle["angle_error_rad"],
+              "worst_position_link": position["link"], "worst_angle_link": angle["link"],
+              "link_errors": errors}
+    if position["position_error_m"] > position_tolerance or angle["angle_error_rad"] > angle_tolerance:
+        raise FrameMismatchError(report)
+    return report
 
 
 def load_contract(path: Path):

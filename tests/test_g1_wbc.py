@@ -19,6 +19,12 @@ import g1_wbc as wbc
 import isaac_g1_wbc as runner
 
 
+def joint_frame_fixture(reference):
+    return {name: {"parent": parent, "child": child, "position_in_child": [0, 0, 0],
+                   "axis_in_child": list(axis)}
+            for name, parent, child, kind, _, axis in reference.joints if kind == "revolute"}
+
+
 class ControllerAdapterTests(unittest.TestCase):
     def setUp(self):
         self.contract, self.robot = wbc.load_contract(ROOT / "configs/g1_wbc_reference.json")
@@ -98,6 +104,82 @@ class ControllerAdapterTests(unittest.TestCase):
         self.assertEqual(set(expected), set(self.robot.limits))
         poses = self.robot.forward({n: 0 for n in expected})
         np.testing.assert_allclose(poses["left_hip_pitch_link"][:3, 3], [0, 0.064452, -0.1027], atol=1e-6)
+
+    def test_usd_body_origins_are_converted_using_authored_joint_pivots(self):
+        metadata = joint_frame_fixture(self.robot)
+        positions = {name: 0.1 for name in self.robot.limits}
+        local = self.robot.forward(positions)
+        body = {n: np.r_[v[:3, 3], wbc.matrix_quat_xyzw(v[:3, :3])] for n, v in local.items()}
+        for name, shift in (("waist_roll_joint", [0, 0, 0.009]),
+                            ("waist_pitch_joint", [0, 0, -0.010])):
+            frame = metadata[name]
+            child = frame["child"]
+            shift = np.asarray(shift)
+            body[child][:3] += local[child][:3, :3] @ shift
+            frame["position_in_child"] = (-shift).tolist()
+        with self.assertRaises(wbc.FrameMismatchError) as caught:
+            wbc.check_frames(self.robot, positions, body, 0.005, 0.02)
+        self.assertEqual(caught.exception.report["worst_position_link"], "torso_link")
+        anchors = wbc.joint_anchor_poses(self.robot, body, metadata)
+        report = wbc.check_frames(self.robot, positions, anchors, 0.005, 0.02)
+        self.assertEqual(report["links_checked"], 44)
+        self.assertLess(report["maximum_position_error_m"], 1e-10)
+        # A physically wrong pivot must still fail; no fitted offset hides it.
+        metadata["waist_pitch_joint"]["position_in_child"][2] += 0.02
+        with self.assertRaises(wbc.FrameMismatchError):
+            wbc.check_frames(self.robot, positions, wbc.joint_anchor_poses(self.robot, body, metadata), 0.005, 0.02)
+        metadata["waist_pitch_joint"]["axis_in_child"] = [1, 0, 0]
+        with self.assertRaisesRegex(RuntimeError, "axis differs"):
+            wbc.joint_anchor_poses(self.robot, body, metadata)
+        metadata.pop("waist_pitch_joint")
+        with self.assertRaisesRegex(RuntimeError, "Incomplete"):
+            wbc.joint_anchor_poses(self.robot, body, metadata)
+
+    def test_usd_reader_preserves_authored_pivots_and_rotates_joint_axis(self):
+        fields = {}
+        class Prim:
+            def GetName(self): return "left_hip_pitch_joint"
+            def GetPath(self): return "/World/envs/env_0/Robot/joints/left_hip_pitch_joint"
+            def IsA(self, schema): return True
+            def GetBody0Rel(self): return SimpleNamespace(GetTargets=lambda: ["/World/envs/env_0/Robot/pelvis"])
+            def GetBody1Rel(self): return SimpleNamespace(GetTargets=lambda: ["/World/envs/env_0/Robot/left_hip_pitch_link"])
+            def GetLocalPos1Attr(self): return SimpleNamespace(Get=lambda: [0, 0, 0.009])
+            def GetAxisAttr(self): return SimpleNamespace(Get=lambda: "X")
+            def GetLocalRot1Attr(self):
+                return SimpleNamespace(Get=lambda: SimpleNamespace(
+                    GetReal=lambda: np.sqrt(0.5), GetImaginary=lambda: [0, 0, np.sqrt(0.5)]))
+        module = ModuleType("pxr")
+        module.UsdPhysics = SimpleNamespace(RevoluteJoint=lambda prim: prim)
+        with mock.patch.dict(sys.modules, {"pxr": module}):
+            fields = runner.read_joint_frames(SimpleNamespace(Traverse=lambda: [Prim()]), self.robot)
+        self.assertEqual(fields["left_hip_pitch_joint"]["position_in_child"], [0, 0, 0.009])
+        np.testing.assert_allclose(fields["left_hip_pitch_joint"]["axis_in_child"], [0, 1, 0], atol=1e-12)
+
+    def test_worker_error_details_survive_empty_exceptions_and_kit_shutdown(self):
+        profile, asset, runtime = runner.load_plan(runner.DEFAULT_PROFILE)
+        with tempfile.TemporaryDirectory() as name, \
+                mock.patch.object(runner, "check_versions", return_value={}), \
+                mock.patch.object(wbc, "prepare_model", return_value=Path("unused.onnx")):
+            directory = Path(name)
+            for error in (AssertionError(), SystemExit()):
+                with self.subTest(error=type(error).__name__), \
+                        mock.patch.object(runner, "balance_check", side_effect=error), \
+                        self.assertRaises(type(error)):
+                    runner.worker("balance", profile, asset, runtime,
+                                  ROOT / profile["controller_contract"], directory)
+                evidence = json.loads((directory / "balance-worker.json").read_text())
+                self.assertTrue(evidence["error"])
+                self.assertEqual(evidence["error_type"], type(error).__name__)
+                self.assertIn(type(error).__name__, str(runner.stage_failure("balance", 1, directory)))
+            # Preexisting failure cause must survive a clean Kit exit.
+            (directory / "balance-worker.json").write_text(json.dumps({"status": "failed", "error": "Frame mismatch cause"}))
+            with mock.patch.object(runner, "balance_check", side_effect=SystemExit()), self.assertRaises(SystemExit):
+                runner.worker("balance", profile, asset, runtime, ROOT / profile["controller_contract"], directory)
+            self.assertEqual(json.loads((directory / "balance-worker.json").read_text())["error"], "Frame mismatch cause")
+            (directory / "balance-worker.json").write_text("invalid JSON")
+            (directory / "balance-error.log").unlink()
+            (directory / "balance.log").write_text("Original runtime failure\n")
+            self.assertIn("Original runtime failure", str(runner.stage_failure("balance", 1, directory)))
 
     def test_weight_cache_rejects_lfs_pointers_and_corruption_without_download(self):
         with tempfile.TemporaryDirectory() as name:
@@ -224,6 +306,7 @@ class ControllerLaunchTests(unittest.TestCase):
 
         class Simulation:
             physics_manager = type("PhysxManager", (), {"__module__": "isaaclab_physx.physics"})
+            stage = object()
             steps = 0
             def __init__(self, config): self.config = config
             def reset(self): pass
@@ -288,6 +371,7 @@ class ControllerLaunchTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as name, mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(wbc, "BalancePolicy", Policy), \
+                mock.patch.object(runner, "read_joint_frames", return_value=joint_frame_fixture(reference)), \
                 mock.patch.object(runner, "require_ffmpeg", return_value="unused-interface-double"), \
                 mock.patch.object(runner, "encode_recording", side_effect=encode):
             directory = Path(name)

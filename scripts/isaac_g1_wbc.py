@@ -19,6 +19,60 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 
 
+def read_joint_frames(stage, reference):
+    """Read authored joint pivots/axes; do not infer offsets from calibration."""
+    import numpy as np
+    from pxr import UsdPhysics
+    from g1_wbc import quat_xyzw_matrix
+
+    frames = {}
+    for prim in stage.Traverse():
+        name = prim.GetName()
+        if name not in reference.limits or not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        joint = UsdPhysics.RevoluteJoint(prim)
+        bodies = [joint.GetBody0Rel().GetTargets(), joint.GetBody1Rel().GetTargets()]
+        if any(len(paths) != 1 for paths in bodies):
+            raise RuntimeError(f"Invalid USD joint body bindings: {name}")
+        paths = [str(paths[0]) for paths in bodies]
+        if not all(path.startswith("/World/envs/env_0/Robot/") for path in paths):
+            continue
+        if name in frames:
+            raise RuntimeError(f"Duplicate USD joint: {name}")
+        quaternion = joint.GetLocalRot1Attr().Get()
+        xyzw = [*quaternion.GetImaginary(), quaternion.GetReal()]
+        axis = np.eye(3)[{"X": 0, "Y": 1, "Z": 2}[str(joint.GetAxisAttr().Get())]]
+        frames[name] = {"parent": paths[0].rsplit("/", 1)[-1],
+                        "child": paths[1].rsplit("/", 1)[-1],
+                        "position_in_child": list(joint.GetLocalPos1Attr().Get()),
+                        "axis_in_child": (quat_xyzw_matrix(xyzw) @ axis).tolist(),
+                        "joint_rotation_in_child_xyzw": xyzw, "usd_path": str(prim.GetPath())}
+    return frames
+
+
+def stage_failure(stage, code, directory):
+    """Keep failure evidence visible even when Kit exits with an empty error."""
+    path = directory / f"{stage}-worker.json"
+    try:
+        evidence = json.loads(path.read_text())
+        detail = evidence.get("error") or evidence.get("error_type")
+    except (OSError, ValueError, AttributeError):
+        detail = None
+    message = f"{stage} failed (exit {code}): {detail or 'no worker error message'}"
+    for name in (f"{stage}-error.log", f"{stage}.log"):
+        log = directory / name
+        try:
+            with log.open("rb") as source:
+                source.seek(0, 2)
+                source.seek(max(0, source.tell() - 16384))
+                tail = "\n".join(source.read().decode(errors="replace").splitlines()[-50:])
+        except OSError:
+            continue
+        if tail:
+            return RuntimeError(f"{message}\nLog tail ({log}):\n{tail}")
+    return RuntimeError(f"{message}; inspect {directory / (stage + '.log')}")
+
+
 def load_plan(path):
     profile = json.loads(path.read_text())
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
@@ -61,7 +115,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import BalancePolicy, ObservationHistory, check_frames, finite, matrix_quat_xyzw, quat_xyzw_matrix
+    from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, check_frames,
+                        finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
 
     encoder = require_ffmpeg(directory)
     torch.manual_seed(runtime["seed"])
@@ -157,6 +212,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         for i, n in enumerate(names):
             if not np.allclose(limits[i], [reference.limits[n]["lower"], reference.limits[n]["upper"]], atol=1e-4, rtol=0):
                 raise RuntimeError(f"Runtime joint limits differ from the reference: {n}")
+        joint_frames = read_joint_frames(sim.stage, reference)
+        write_json(directory / "joint-frames.json", joint_frames)
 
         def frames():
             poses = finite(array(robot.data.body_link_pose_w), (len(robot.body_names), 7))
@@ -168,8 +225,15 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             poses = frames()
             write_json(directory / f"frame-input-{label}.json", {
                 "joint_positions": positions, "body_poses_xyzw": {n: p.tolist() for n, p in poses.items()}})
-            return check_frames(reference, positions, poses,
-                                profile["frame_position_tolerance_m"], profile["frame_angle_tolerance_rad"], rotation)
+            anchors = joint_anchor_poses(reference, poses, joint_frames)
+            try:
+                report = check_frames(reference, positions, anchors,
+                                      profile["frame_position_tolerance_m"], profile["frame_angle_tolerance_rad"], rotation)
+            except FrameMismatchError as error:
+                write_json(directory / f"frame-comparison-{label}.json", error.report)
+                raise
+            write_json(directory / f"frame-comparison-{label}.json", report)
+            return report
 
         # Calibration uses measured link poses; it does not assume the asset's
         # configured wxyz root rotation equals an API xyzw root pose.
@@ -295,7 +359,7 @@ def validate_stage(stage, directory, profile):
         raise RuntimeError(f"Incomplete {stage} evidence")
     if stage == "balance":
         import numpy as np
-        from g1_wbc import finite, quat_xyzw_matrix
+        from g1_wbc import check_frames, finite, joint_anchor_poses, load_contract, quat_xyzw_matrix
         if evidence["steps_completed"] != profile["control_steps"] or evidence["resets"] != 0 or not evidence["controller_inference_verified"]:
             raise RuntimeError("Incomplete or reset balance rollout")
         records = [json.loads(line) for line in (directory / "trajectory.jsonl").read_text().splitlines()]
@@ -322,6 +386,13 @@ def validate_stage(stage, directory, profile):
                 raise RuntimeError("Missing initialization/frame evidence")
         if len(frames["probes"]) != 2:
             raise RuntimeError("Incomplete kinematic probes")
+        _, reference = load_contract(ROOT / profile["controller_contract"])
+        joint_frames = json.loads((directory / "joint-frames.json").read_text())
+        for label in ("calibration", "probe-0", "probe-1"):
+            measured = json.loads((directory / f"frame-input-{label}.json").read_text())
+            anchors = joint_anchor_poses(reference, measured["body_poses_xyzw"], joint_frames)
+            check_frames(reference, measured["joint_positions"], anchors,
+                         profile["frame_position_tolerance_m"], profile["frame_angle_tolerance_rad"], source_to_asset)
         for frame in [frames["calibration"], *frames["probes"]]:
             rotation = finite(frame["source_to_asset_rotation"], (3, 3))
             if (frame["links_checked"] < 30 or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6) or
@@ -377,8 +448,9 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
                 return 0
         path = directory / f"{stage}-worker.json"
         evidence = json.loads(path.read_text()) if path.exists() else {}
-        message = evidence.get("error", str(error)) if isinstance(error, SystemExit) else str(error)
-        write_json(path, {**evidence, "status": "failed", "error": message})
+        message = (evidence.get("error") if isinstance(error, SystemExit) else None) or str(error) or repr(error)
+        write_json(path, {**evidence, "status": "failed", "error": message,
+                          "error_type": type(error).__name__})
         (directory / f"{stage}-error.log").write_text(traceback.format_exc())
         raise
 
@@ -429,9 +501,7 @@ def main(argv=None):
             timeout = profile["stage_timeout_seconds"] if stage == "balance" else (120 if stage == "gpu" else 60)
             code = run_stage(command, directory / f"{stage}.log", timeout)
             if code:
-                path = directory / f"{stage}-worker.json"
-                detail = json.loads(path.read_text()).get("error", "") if path.exists() else ""
-                raise RuntimeError(f"{stage} failed (exit {code}): {detail}; inspect {stage}.log")
+                raise stage_failure(stage, code, directory)
             validate_stage(stage, directory, profile)
             summary["stages"][stage] = "passed"
             write_json(directory / "summary.json", summary)
