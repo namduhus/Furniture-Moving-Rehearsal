@@ -131,11 +131,13 @@ def run_worker(config, profile, asset, runtime, model_path, directory):
             surface = {"default": read_material(sim.stage, "/physicsScene/defaultMaterial"),
                        "ground": read_material(sim.stage, "/World/Ground/physicsMaterial"),
                        "box_env0": read_material(sim.stage, "/World/envs/env_0/Furniture/geometry/physicsMaterial")}
-            if (any(m["friction_combine_mode"] != "multiply" for m in surface.values()) or
-                    surface["box_env0"]["static_friction"] != profile["push_object"]["friction"]):
-                raise RuntimeError("Push friction materials differ from the reviewed profile")
             result["materials"] = surface
             write_json(directory / "rl-worker.json", result)
+            # USD stores friction as float32, so compare with the single-run object tolerance.
+            if (any(m["friction_combine_mode"] != "multiply" for m in surface.values()) or
+                    not np.allclose([surface["box_env0"]["static_friction"], surface["box_env0"]["dynamic_friction"]],
+                                    profile["push_object"]["friction"], atol=1e-6, rtol=0)):
+                raise RuntimeError("Push friction materials differ from the reviewed profile")
 
             names, bodies = list(robot.joint_names), list(robot.body_names)
             lower = asset["joint_groups"]["lower_body"]

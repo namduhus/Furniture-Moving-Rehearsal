@@ -182,8 +182,9 @@ class ParallelWorkerTests(unittest.TestCase):
                 mock.patch.object(rl, "apply_fixed_hands", side_effect=lambda stage, r, d, env: authored.append(env) or hands), \
                 mock.patch.object(rl, "apply_palm_override", return_value={"status": "authored_before_physics_reset"}), \
                 mock.patch.object(rl, "apply_source_contact", return_value=copy.deepcopy(report)), \
-                mock.patch.object(rl, "read_material", side_effect=lambda stage, path: {"path": path, "static_friction": 0.1 if "Furniture" in path else 1.0,
-                                                                                         "dynamic_friction": 0.1, "friction_combine_mode": "multiply"}), \
+                mock.patch.object(rl, "read_material", side_effect=lambda stage, path: {"path": path, "static_friction": float(np.float32(0.1)) if "Furniture" in path else 1.0,
+                                                                                         "dynamic_friction": float(np.float32(0.1)) if "Furniture" in path else 1.0,
+                                                                                         "friction_combine_mode": "multiply"}), \
                 mock.patch.object(rl, "read_joint_frames", return_value=joint_frame_fixture(reference)), \
                 mock.patch.object(rl, "read_collision_geometry", side_effect=lambda stage, poses: contact_geometry(poses)):
             directory = Path(tmp)
