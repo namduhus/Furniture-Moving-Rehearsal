@@ -701,7 +701,8 @@ def load_plan(path):
                 type(initialization["maximum_vertical_shift_m"]) not in (int, float) or
                 not 0 < initialization["maximum_vertical_shift_m"] <= 0.1):
             raise ValueError("Invalid initial placement experiment configuration")
-        if deployment and not valid_source_pose:
+        # A default-crouch start with clearance placement is reviewed only with the implicit arm hold.
+        if deployment and not valid_source_pose and profile.get("arm_hold") != "implicit":
             raise ValueError("Deployment requires the source root pose without height adjustment")
     if "inertial_override" in profile:
         if (not profile.get("initialization") or
@@ -967,8 +968,9 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             frame_evidence["probes"].append(probe)
         write_json(directory / "frames.json", {"status": "passed_kinematic_probes", **frame_evidence})
 
-        initial_joints = np.zeros(dofs) if deployment else defaults
-        root_height = profile["initialization"]["root_height_m"] if deployment else contract["height_command"]
+        source_pose = (profile.get("initialization") or {}).get("mode") == "source_pose"
+        initial_joints = np.zeros(dofs) if source_pose else defaults
+        root_height = profile["initialization"]["root_height_m"] if source_pose else contract["height_command"]
         root_pose = np.r_[0.0, 0.0, root_height, matrix_quat_xyzw(rotation.T)]
         robot.write_root_pose_to_sim_index(root_pose=device(root_pose))
         robot.write_root_velocity_to_sim_index(root_velocity=device(np.zeros(6)))
@@ -994,7 +996,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             write_json(directory / "initial-placement.json", placement)
             placement["before_clearance"] = collision_clearance(placement["before_geometry"])
             write_json(directory / "initial-placement.json", placement)
-            lift = 0.0 if deployment else placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
+            lift = 0.0 if source_pose else placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
             root_pose[2] += lift
             placement["vertical_shift_m"] = lift
             robot.write_root_pose_to_sim_index(root_pose=device(root_pose))
@@ -1355,8 +1357,8 @@ def main(argv=None):
         stand_dir = args.stand_run.expanduser().resolve()
         stand_profile = json.loads((stand_dir / "profile.json").read_text())
         if (stand_profile.get("deployment") != profile["deployment"] or stand_profile.get("functional_case") != "stand" or
-                any(stand_profile.get(k) != profile.get(k) for k in ("contact_override", "arm_hold"))):
-            parser.error("--stand-run must use the same reviewed deployment, contact and arm hold with a standing case")
+                any(stand_profile.get(k) != profile.get(k) for k in ("contact_override", "arm_hold", "initialization"))):
+            parser.error("--stand-run must use the same reviewed deployment, contact, arm hold and startup with a standing case")
         if json.loads((stand_dir / "runtime-config.json").read_text()) != runtime:
             parser.error("--stand-run must use the same runtime configuration")
         validate_stage("balance", stand_dir, stand_profile)

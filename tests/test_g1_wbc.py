@@ -355,6 +355,34 @@ class ControllerAdapterTests(unittest.TestCase):
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
+    def test_crouch_start_profiles_change_only_the_startup_placement(self):
+        placement = json.loads((ROOT / "configs/isaac_g1_placement.json").read_text())["initialization"]
+        for base, file in (("isaac_g1_arm_hold.json", "isaac_g1_crouch_start.json"),
+                           ("isaac_g1_arm_hold_forward.json", "isaac_g1_crouch_start_forward.json"),
+                           ("isaac_g1_arm_hold_turn.json", "isaac_g1_crouch_start_turn.json")):
+            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
+            after, crouch_asset, crouch_runtime = runner.load_plan(ROOT / "configs" / file)
+            self.assertEqual((asset, runtime), (crouch_asset, crouch_runtime))
+            self.assertEqual(after["initialization"], placement)
+            self.assertEqual({k: v for k, v in before.items() if k not in ("scope", "initialization")},
+                             {k: v for k, v in after.items() if k not in ("scope", "initialization")})
+            self.assertEqual(runner.trial_contract(before)[0], runner.trial_contract(after)[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            raw = json.loads((ROOT / "configs/isaac_g1_crouch_start.json").read_text())
+            contact = json.loads((ROOT / "configs/isaac_g1_contact.json").read_text())
+            for data in ({**contact, "initialization": raw["initialization"]},
+                         {**raw, "initialization": {**raw["initialization"], "minimum_clearance_m": 0}},
+                         {**raw, "initialization": {**raw["initialization"], "maximum_vertical_shift_m": 0.2}}):
+                path.write_text(json.dumps(data))
+                with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
+            stand = Path(tmp) / "stand"; stand.mkdir()
+            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_arm_hold.json").read_text())
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
+                runner.main(["--profile", str(ROOT / "configs/isaac_g1_crouch_start_forward.json"), "--stage", "balance",
+                             "--stand-run", str(stand)])
+            self.assertEqual(exit_error.exception.code, 2)
+
     def test_contact_authoring_deinstances_and_moves_only_sphere_centers(self):
         stage = SimpleNamespace(target="root", writes=[], GetSessionLayer=lambda: "session")
         self_test = self
@@ -1582,6 +1610,8 @@ class ControllerLaunchTests(unittest.TestCase):
             arm_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_arm_hold.json")
             arm_profile = {**arm_profile, "camera": deployment_profile["camera"]}
             arm_contract, _ = runner.trial_contract(arm_profile)
+            crouch_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_crouch_start.json")
+            crouch_profile = {**crouch_profile, "camera": deployment_profile["camera"]}
             def read_arm_dynamics(robot,rotation,usd_path,*,directory=None,filename="dynamics-runtime.json"):
                 snapshot = dynamics_fixture(arm_contract,reference,asset,body_names=robot.body_names,joint_names=names,
                     q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist(),implicit_arms=True)
@@ -1592,7 +1622,8 @@ class ControllerLaunchTests(unittest.TestCase):
                     ("contact-friction-mismatch", contact_profile, contract, read_dynamics, 0.5, "friction material"),
                     ("arm-hold", arm_profile, arm_contract, read_arm_dynamics, 1.0, None),
                     ("arm-hold-explicit-runtime", arm_profile, arm_contract, read_dynamics, 1.0, "actuator model"),
-                    ("contact-implicit-runtime", contact_profile, contract, read_arm_dynamics, 1.0, "actuator model")):
+                    ("contact-implicit-runtime", contact_profile, contract, read_arm_dynamics, 1.0, "actuator model"),
+                    ("crouch-start", crouch_profile, arm_contract, read_arm_dynamics, 1.0, None)):
                 contact_dir = directory / label; contact_dir.mkdir()
                 for file, value in (("profile.json",case_profile),("asset-profile.json",asset),("controller-contract.json",controller)):
                     (contact_dir/file).write_text(json.dumps(value))
@@ -1616,14 +1647,26 @@ class ControllerLaunchTests(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError,error):
                             runner.balance_check(case_profile,asset,runtime,controller,reference,Path("unused.onnx"),contact_dir)
                 upper_hold = instantiated[-1].robot.actuators["upper_hold"]
-                self.assertIsInstance(upper_hold, ImplicitConfig if case_profile is arm_profile else ExplicitConfig)
+                implicit_case = case_profile.get("arm_hold") == "implicit"
+                self.assertIsInstance(upper_hold, ImplicitConfig if implicit_case else ExplicitConfig)
                 self.assertEqual((upper_hold.stiffness["left_wrist_pitch_joint"], upper_hold.damping["left_wrist_pitch_joint"], upper_hold.armature), (100, 0.5, 0.01))
                 self.assertEqual(upper_hold.joint_effort_limit["left_wrist_pitch_joint"], 5)
                 if error is None:
                     runner.validate_stage("balance",contact_dir,case_profile)
                     analysis = runner.analyze_run(contact_dir)
                     self.assertEqual(analysis["contact_override"]["status"],"verified_source_contact")
-                    self.assertEqual(analysis["deployment"]["arm_hold"],"implicit" if case_profile is arm_profile else "explicit")
+                    self.assertEqual(analysis["deployment"]["arm_hold"],"implicit" if implicit_case else "explicit")
+                    initial = json.loads((contact_dir/"initial-state.json").read_text())
+                    placed = analysis["initial_placement"]
+                    if case_profile is crouch_profile:
+                        lower_indices = [names.index(n) for n in asset["joint_groups"]["lower_body"]]
+                        self.assertEqual([initial["wanted_joint_positions"][i] for i in lower_indices], arm_contract["default_lower_angles"])
+                        self.assertGreater(placed["vertical_shift_m"], 0)
+                        self.assertAlmostEqual(placed["minimum_clearance_after_m"], 0.001, places=6)
+                        self.assertAlmostEqual(placed["spawn_height_m"], 0.74+placed["vertical_shift_m"], places=6)
+                    else:
+                        self.assertEqual(initial["wanted_joint_positions"], [0.0]*29)
+                        self.assertEqual(placed["vertical_shift_m"], 0)
                     self.assertEqual(analysis["functional"]["status"],"passed_functional_evaluation")
                     self.assertEqual(len(Policy.observations),250)
                     for material in (instantiated[-1].ground.spawn.physics_material, created[-1].physics_material):

@@ -252,6 +252,14 @@ The [arm-hold profile](configs/isaac_g1_arm_hold.json) keeps the contact profile
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_arm_hold.json --stage balance
 ```
 
+#### Crouch-start profile
+
+The [crouch-start profile](configs/isaac_g1_crouch_start.json) keeps the arm-hold profile but starts in the policy's default crouch with 1 mm foot clearance instead of the source zero-angle pose. Forward/turn variants require a standing run with the same profile.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_crouch_start.json --stage balance
+```
+
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
 
 ### Record a G1 motion check
