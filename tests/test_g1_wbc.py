@@ -358,12 +358,47 @@ class ControllerAdapterTests(unittest.TestCase):
                  "joint_stiffness":"solver_joint_stiffness","joint_damping":"solver_joint_damping",
                  "joint_armature":"joint_armature","joint_effort_limits":"joint_effort_limits"}
         data=SimpleNamespace(**{k:SimpleNamespace(torch=Tensor([expected[v]]))for k,v in mapping.items()})
-        models={k:SimpleNamespace(joint_names=v["joint_names"],is_implicit_model=v["implicit"],
-                                 stiffness=Tensor([v["kp"]]),damping=Tensor([v["kd"]]))for k,v in expected["actuators"].items()}
-        robot=SimpleNamespace(data=data,body_names=expected["body_names"],joint_names=expected["joint_names"],actuators=models)
-        actual=runner.read_runtime_dynamics(robot,np.eye(3),"fixture.usd")
-        for key in mapping.values():self.assertEqual(actual[key],expected[key])
-        self.assertEqual(actual["actuators"]["arms"]["kp"],[40.0]*14)
+        class LabActuator(SimpleNamespace):pass
+        class ImplicitConfig:pass
+        class NativeActuator:pass  # Native owner has no Lab model attributes.
+        models={k:LabActuator(joint_names=v["joint_names"],is_implicit_model=v["implicit"],
+                             stiffness=Tensor([v["kp"]]),damping=Tensor([v["kd"]]))for k,v in expected["actuators"].items()}
+        configs={k:SimpleNamespace(joint_names_expr=list(reversed(v["joint_names"])))for k,v in expected["actuators"].items()}
+        robot=SimpleNamespace(data=data,body_names=expected["body_names"],joint_names=expected["joint_names"],actuators=models,
+            cfg=SimpleNamespace(actuators=configs),find_joints=lambda expr: ([],[n for n in expected["joint_names"]if n in expr]))
+        api=mock.Mock(side_effect=AssertionError("Lab model must not use native reads"))
+        module=ModuleType("isaaclab.actuators");module.ActuatorBase=LabActuator;module.ImplicitActuatorCfg=ImplicitConfig
+        native=ModuleType("isaaclab.actuators.newton");native.read_group_parameter=api
+        with mock.patch.dict(sys.modules,{"isaaclab":ModuleType("isaaclab"),"isaaclab.actuators":module,"isaaclab.actuators.newton":native}):
+            actual=runner.read_runtime_dynamics(robot,np.eye(3),"fixture.usd")
+            for key in mapping.values():self.assertEqual(actual[key],expected[key])
+            self.assertEqual(actual["actuators"]["arms"]["kp"],[40.0]*14)
+            self.assertEqual(actual["actuators"]["lower_body"]["parameter_source"],"isaaclab_model")
+            def native_values(collection,name,component,attr):
+                self.assertIs(collection,models);self.assertEqual((name,component),("lower_body","controller"))
+                return Tensor([expected["actuators"][name][attr]])
+            api.side_effect=native_values
+            for owner in (NativeActuator(),(NativeActuator(),NativeActuator())):
+                models["lower_body"]=owner
+                actual=runner.read_runtime_dynamics(robot,np.eye(3),"fixture.usd")
+                lower=actual["actuators"]["lower_body"]
+                self.assertEqual(lower["joint_names"],expected["actuators"]["lower_body"]["joint_names"])
+                self.assertEqual(lower["kp"],expected["actuators"]["lower_body"]["kp"])
+                self.assertEqual(lower["parameter_source"],"native_group_parameter_api")
+                self.assertFalse(lower["implicit"])
+                self.assertEqual(len(lower["owner_classes"]),len(owner)if isinstance(owner,tuple)else 1)
+            self.assertEqual(api.call_count,4)
+            with tempfile.TemporaryDirectory() as tmp:
+                api.side_effect=RuntimeError("native query failure")
+                with self.assertRaisesRegex(RuntimeError,"native query failure"):
+                    runner.read_runtime_dynamics(robot,np.eye(3),"fixture.usd",directory=Path(tmp))
+                partial=json.loads((Path(tmp)/"dynamics-runtime.json").read_text())
+                self.assertEqual(partial["status"],"partial_runtime_dynamics")
+                self.assertEqual(partial["body_mass_kg"],expected["body_mass_kg"])
+                self.assertEqual(partial["collection_phase"],"actuator:lower_body")
+                self.assertEqual(partial["collection_error"],"native query failure")
+                with self.assertRaisesRegex(ValueError,"Incomplete runtime dynamics capture"):
+                    wbc.dynamics_comparison(partial,self.robot,wbc.load_dynamics_reference(),self.contract,self.asset)
 
     def test_diagnostic_profile_preserves_the_working_control_configuration(self):
         baseline, asset, runtime = runner.load_plan(runner.DEFAULT_PROFILE)
@@ -858,7 +893,7 @@ class ControllerLaunchTests(unittest.TestCase):
             audit = directory/"audit";audit.mkdir()
             for file,value in (("profile.json",placement_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
                 (audit/file).write_text(json.dumps(value))
-            def read_dynamics(robot,rotation,usd_path):
+            def read_dynamics(robot,rotation,usd_path,*,directory=None):
                 snapshot=dynamics_fixture(contract,reference,asset,body_names=robot.body_names,joint_names=names,
                     q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist())
                 snapshot["source_to_asset_rotation"]=rotation.tolist()

@@ -371,8 +371,10 @@ def load_dynamics_reference():
 def dynamics_comparison(measured, reference, source, contract, asset):
     """Compare a static snapshot; differences are not evidence of a drift cause."""
     names, joints = measured["body_names"], measured["joint_names"]
-    if (measured["status"] != "captured_runtime_dynamics" or not names or
-            len(names) != len(set(names)) or set(joints) != set(reference.limits) or len(joints) != 43):
+    if measured["status"] != "captured_runtime_dynamics":
+        raise ValueError(f"Incomplete runtime dynamics capture at {measured.get('collection_phase', 'unknown phase')}: "
+                         f"{measured.get('collection_error', 'collection did not finish')}")
+    if (not names or len(names) != len(set(names)) or set(joints) != set(reference.limits) or len(joints) != 43):
         raise ValueError("Invalid dynamics body/joint mapping")
     count = len(names)
     masses = finite(measured["body_mass_kg"], (count,))
@@ -443,6 +445,7 @@ def dynamics_comparison(measured, reference, source, contract, asset):
                     if name in asset["joint_groups"]["lower_body"] else (0.0 if source_kp is not None else None),
                 "runtime_actuator": "implicit_pd" if group["implicit"] else "explicit_pd",
                 "runtime_class": group["class"], "runtime_kp": float(kp[i]), "runtime_kd": float(kd[i]),
+                "runtime_parameter_source": group.get("parameter_source", "not_recorded"),
                 "runtime_solver_stiffness": measured["solver_joint_stiffness"][index],
                 "runtime_solver_damping": measured["solver_joint_damping"][index],
                 "runtime_armature": measured["joint_armature"][index],
@@ -641,6 +644,7 @@ def contact_summary(samples, feet, threshold, physics_dt, decimation):
         support_counts.append(supported)
     report = {"samples": len(samples), "minimum_normal_force_n": threshold,
               "effort_clipped_samples_by_lower_body_index": clipping.tolist(), "feet": {},
+              "effort_telemetry_limitation": "Counts describe differences in recorded computed/applied staging buffers; they do not establish clipping in native actuator execution.",
               "interpretation": "Loaded rigid-body origin speed includes foot rolling; contact-point slip is not established by this metric alone."}
     if not samples:
         report["force_evidence_present"] = False

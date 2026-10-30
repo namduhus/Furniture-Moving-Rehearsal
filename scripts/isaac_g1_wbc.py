@@ -20,14 +20,18 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 
 
-def read_runtime_dynamics(robot, source_to_asset, usd_path):
+def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None):
     """Capture backend-reordered buffers and resolved actuator parameters."""
+    from isaaclab.actuators import ActuatorBase, ImplicitActuatorCfg
+    from isaaclab.actuators.newton import read_group_parameter
+    from g1_wbc import finite
+
     def array(value):
         value = value.torch if hasattr(value, "torch") else value
         return value[0].detach().cpu().numpy().copy().tolist()
 
     data = robot.data
-    return {"status": "captured_runtime_dynamics", "asset_usd_path": usd_path,
+    result = {"status": "partial_runtime_dynamics", "asset_usd_path": usd_path,
             "body_names": list(robot.body_names), "joint_names": list(robot.joint_names),
             "body_mass_kg": array(data.body_mass),
             "body_com_pose_b_xyzw": array(data.body_com_pose_b),
@@ -42,11 +46,51 @@ def read_runtime_dynamics(robot, source_to_asset, usd_path):
             "solver_joint_damping": array(data.joint_damping),
             "joint_armature": array(data.joint_armature),
             "joint_effort_limits": array(data.joint_effort_limits),
-            "source_to_asset_rotation": source_to_asset.tolist(),
-            "actuators": {name: {"joint_names": list(model.joint_names),
-                "class": type(model).__module__+"."+type(model).__name__,
-                "implicit": bool(model.is_implicit_model), "kp": array(model.stiffness), "kd": array(model.damping)}
-                for name,model in robot.actuators.items()}}
+            "source_to_asset_rotation": source_to_asset.tolist(), "actuators": {}}
+
+    def save():
+        if directory is not None:
+            write_json(directory / "dynamics-runtime.json", result)
+
+    save()  # Preserve physical data even if controller introspection fails.
+    try:
+        for name, owner in robot.actuators.items():
+            result["collection_phase"] = f"actuator:{name}"
+            save()
+            cfg = robot.cfg.actuators[name]
+            # Use the same public resolver/order as ActuatorCollection.
+            _, names = robot.find_joints(cfg.joint_names_expr)
+            if isinstance(owner, ActuatorBase):
+                if list(owner.joint_names) != list(names):
+                    raise RuntimeError(f"Actuator group joint order differs: {name}")
+                implicit = bool(owner.is_implicit_model)
+                kp, kd = array(owner.stiffness), array(owner.damping)
+                origin = "isaaclab_model"
+            else:
+                # PhysX can execute native controllers too. The raw owner may
+                # be shared between groups or be a tuple of merged actuators.
+                if isinstance(cfg, ImplicitActuatorCfg):
+                    raise RuntimeError(f"Unexpected native implicit group in the reviewed PhysX path: {name}")
+                kp = array(read_group_parameter(robot.actuators, name, "controller", "kp"))
+                kd = array(read_group_parameter(robot.actuators, name, "controller", "kd"))
+                implicit = False  # Reviewed PhysX native path selects explicit groups only.
+                origin = "native_group_parameter_api"
+            finite(kp, (len(names),))
+            finite(kd, (len(names),))
+            owners = owner if isinstance(owner, tuple) else (owner,)
+            classes = [type(o).__module__+"."+type(o).__name__ for o in owners]
+            result["actuators"][name] = {"joint_names": list(names), "class": ", ".join(classes),
+                "owner_classes": classes, "implicit": implicit, "kp": kp, "kd": kd,
+                "parameter_source": origin}
+            save()
+    except Exception as error:
+        result["collection_error"] = str(error) or repr(error)
+        save()
+        raise
+    result.pop("collection_phase", None)
+    result["status"] = "captured_runtime_dynamics"
+    save()
+    return result
 
 
 def analyze_dynamics(directory):
@@ -492,7 +536,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                 "sensor_body_names": list(contact_sensor.body_names), "foot_body_names": feet,
                 "physics_dt_seconds": asset["physics_dt"], "sensor_history_length": 1,
                 "force_scope": "Aggregate forces from all contact partners in the single-G1 ground-only scene",
-                "sampling": "Post-physics-step poses, world twists and forces; explicit efforts are those held over that step",
+                "sampling": "Post-physics-step poses, world twists and forces; efforts are recorded collection staging buffers",
+                "effort_telemetry_limitation": "Native execution bypasses these processed-command buffers; actual submitted effort and clipping are not established.",
                 "point_velocity_limitation": "Velocity is measured at the rigid-body origin, not a contact point"})
 
         names = list(robot.joint_names)
@@ -622,7 +667,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         if audit_only:
             from g1_wbc import load_dynamics_reference
             write_json(directory / "dynamics-reference.json", load_dynamics_reference())
-            write_json(directory / "dynamics-runtime.json", read_runtime_dynamics(robot, rotation, candidate.spawn.usd_path))
+            snapshot = read_runtime_dynamics(robot, rotation, candidate.spawn.usd_path, directory=directory)
+            write_json(directory / "dynamics-runtime.json", snapshot)
             comparison = analyze_dynamics(directory)
             write_json(directory / "dynamics-comparison.json", comparison)
             (directory / "dynamics-comparison.md").write_text(dynamics_table(comparison))
