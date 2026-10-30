@@ -35,6 +35,42 @@ def collision_fixture(poses):
                 for name,pose in poses.items()}}
 
 
+def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names=None, q=None, root=None, poses=None):
+    source = wbc.load_dynamics_reference()
+    joints = joint_names or asset["controller_reference"]["joint_order"]+asset["joint_groups"]["hands"]
+    positions = {n:0.0 for n in joints}
+    positions.update(zip(asset["joint_groups"]["lower_body"], contract["default_lower_angles"]))
+    q = np.asarray(q).tolist() if q is not None else [positions[n] for n in joints]
+    root = np.asarray(root).tolist() if root is not None else [0,0,0.786,0,0,0,1]
+    fk = reference.forward(dict(zip(joints,q,strict=True)))
+    names = body_names or list(reversed(source["bodies"]))
+    models = {};solver_kp={};solver_kd={}
+    for key,names_group in asset["joint_groups"].items():
+        implicit = key != "lower_body"
+        kp = contract["kp"] if not implicit else [contract["upper_hold_kp"] if key == "arms" else contract["hand_hold_kp"]]*len(names_group)
+        kd = contract["kd"] if not implicit else [contract["upper_hold_kd"] if key == "arms" else contract["hand_hold_kd"]]*len(names_group)
+        models[key] = {"joint_names":names_group,"class":"fixture."+key,"implicit":implicit,"kp":kp,"kd":kd}
+        solver_kp.update(zip(names_group,kp if implicit else [0]*len(names_group)))
+        solver_kd.update(zip(names_group,kd if implicit else [0]*len(names_group)))
+    fields = {"status":"captured_runtime_dynamics","body_names":names,"joint_names":joints,
+        "root_pose_xyzw":root,"source_to_asset_rotation":np.eye(3).tolist(),"joint_positions":q,
+        "joint_position_targets":q,"joint_velocity_targets":[0.0]*43,
+        "solver_joint_stiffness":[solver_kp[n]for n in joints],"solver_joint_damping":[solver_kd[n]for n in joints],
+        "joint_armature":[0.01 if n in asset["joint_groups"]["lower_body"]else 0.001 for n in joints],
+        "joint_effort_limits":[50.0]*43,"actuators":models,
+        "body_mass_kg":[],"body_com_pose_b_xyzw":[],"body_inertia_backend_kg_m2":[],"body_link_pose_w_xyzw":[]}
+    for name in names:
+        s=source["bodies"].get(name,{"mass_kg":0.01,"com_position_b_m":[0,0,0],"principal_inertia_kg_m2":[1e-5,2e-5,3e-5]})
+        fields["body_mass_kg"].append(s["mass_kg"])
+        fields["body_com_pose_b_xyzw"].append([*s["com_position_b_m"],0,0,0,1])
+        rotation=wbc.axis_rotation([0,1,0],0.5)
+        fields["body_inertia_backend_kg_m2"].append((rotation@np.diag(s["principal_inertia_kg_m2"])@rotation.T).reshape(9).tolist())
+        transform=wbc.pose_matrix(root)@fk[name]
+        fields["body_link_pose_w_xyzw"].append([*transform[:3,3],*wbc.matrix_quat_xyzw(transform[:3,:3])])
+    if poses is not None: fields["body_link_pose_w_xyzw"]=poses
+    return fields
+
+
 class ControllerAdapterTests(unittest.TestCase):
     def setUp(self):
         self.contract, self.robot = wbc.load_contract(ROOT / "configs/g1_wbc_reference.json")
@@ -279,6 +315,55 @@ class ControllerAdapterTests(unittest.TestCase):
                 mock.patch.object(runner, "run_stage", side_effect=AssertionError("worker called")), \
                 mock.patch("builtins.print"):
             self.assertEqual(runner.main(["--stage", "balance", "--prepare-model", "--dry-run"]), 0)
+            self.assertEqual(runner.main(["--stage","dynamics","--profile",str(ROOT/"configs/isaac_g1_placement.json"),"--dry-run"]),0)
+
+    def test_dynamics_comparison_maps_bodies_and_preserves_inertia_eigenvalues(self):
+        source = wbc.load_dynamics_reference()
+        with mock.patch.object(wbc,"DYNAMICS_REFERENCE_SHA256","0"*64),self.assertRaisesRegex(ValueError,"reference"):
+            wbc.load_dynamics_reference()
+        self.assertAlmostEqual(sum(b["mass_kg"]for b in source["bodies"].values()),34.3942352)
+        measured = dynamics_fixture(self.contract,self.robot,self.asset,
+            root=[1,2,3,*wbc.matrix_quat_xyzw(wbc.axis_rotation([0,0,1],0.7))])
+        report=wbc.dynamics_comparison(measured,self.robot,source,self.contract,self.asset)
+        self.assertAlmostEqual(report["totals"]["mass_difference_kg"],0.0)
+        np.testing.assert_allclose(report["totals"]["com_difference_m"],[0,0,0],atol=1e-12)
+        self.assertEqual(len(report["controls"]),43)
+        for row in report["bodies"]:
+            np.testing.assert_allclose(row["runtime_principal_inertia_kg_m2"],row["source_principal_inertia_kg_m2"],atol=1e-12)
+        elbow=next(r for r in report["controls"]if r["joint"]=="left_elbow_joint")
+        self.assertEqual((elbow["source_kp"],elbow["source_kd"]),(100.0,0.5))
+        self.assertEqual((elbow["runtime_kp"],elbow["runtime_kd"]),(40.0,2.0))
+        self.assertEqual(elbow["runtime_actuator"],"implicit_pd")
+        hand=next(r for r in report["controls"]if r["joint"]=="left_hand_thumb_0_joint")
+        self.assertFalse(hand["source_actuated"])
+        for corrupt in (lambda m:m["body_mass_kg"].__setitem__(0,0),
+                        lambda m:m["body_inertia_backend_kg_m2"][0].__setitem__(0,-1),
+                        lambda m:m["body_com_pose_b_xyzw"][0].__setitem__(0,float("nan")),
+                        lambda m:m["actuators"].pop("hands")):
+            invalid=copy.deepcopy(measured);corrupt(invalid)
+            with self.assertRaises(ValueError):wbc.dynamics_comparison(invalid,self.robot,source,self.contract,self.asset)
+
+    def test_runtime_dynamics_reader_collects_actual_buffers_and_actuator_parameters(self):
+        expected=dynamics_fixture(self.contract,self.robot,self.asset)
+        class Tensor:
+            def __init__(self,v):self.v=np.asarray(v)
+            def __getitem__(self,i):return Tensor(self.v[i])
+            def detach(self):return self
+            def cpu(self):return self
+            def numpy(self):return self.v
+        mapping={"body_mass":"body_mass_kg","body_com_pose_b":"body_com_pose_b_xyzw",
+                 "body_link_pose_w":"body_link_pose_w_xyzw","body_inertia":"body_inertia_backend_kg_m2",
+                 "root_link_pose_w":"root_pose_xyzw","joint_pos":"joint_positions",
+                 "joint_pos_target":"joint_position_targets","joint_vel_target":"joint_velocity_targets",
+                 "joint_stiffness":"solver_joint_stiffness","joint_damping":"solver_joint_damping",
+                 "joint_armature":"joint_armature","joint_effort_limits":"joint_effort_limits"}
+        data=SimpleNamespace(**{k:SimpleNamespace(torch=Tensor([expected[v]]))for k,v in mapping.items()})
+        models={k:SimpleNamespace(joint_names=v["joint_names"],is_implicit_model=v["implicit"],
+                                 stiffness=Tensor([v["kp"]]),damping=Tensor([v["kd"]]))for k,v in expected["actuators"].items()}
+        robot=SimpleNamespace(data=data,body_names=expected["body_names"],joint_names=expected["joint_names"],actuators=models)
+        actual=runner.read_runtime_dynamics(robot,np.eye(3),"fixture.usd")
+        for key in mapping.values():self.assertEqual(actual[key],expected[key])
+        self.assertEqual(actual["actuators"]["arms"]["kp"],[40.0]*14)
 
     def test_diagnostic_profile_preserves_the_working_control_configuration(self):
         baseline, asset, runtime = runner.load_plan(runner.DEFAULT_PROFILE)
@@ -603,7 +688,7 @@ class ControllerLaunchTests(unittest.TestCase):
             def fromarray(array): return Image()
             def save(self, path): Path(path).write_bytes(b"CPU interface image double")
 
-        candidate = Config(spawn=Config(fix_root_link=False, rigid_props=Config(disable_gravity=False)))
+        candidate = Config(spawn=Config(fix_root_link=False, rigid_props=Config(disable_gravity=False),usd_path="fixture.usd"))
         instantiated = []
 
         def instantiate(config):
@@ -770,6 +855,40 @@ class ControllerLaunchTests(unittest.TestCase):
                     runner.balance_check(placement_profile, asset, runtime, contract, reference, Path("unused.onnx"), geometry_failure)
             self.assertEqual(Simulation.steps, steps_before)
             self.assertEqual(Policy.observations, [])
+            audit = directory/"audit";audit.mkdir()
+            for file,value in (("profile.json",placement_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
+                (audit/file).write_text(json.dumps(value))
+            def read_dynamics(robot,rotation,usd_path):
+                snapshot=dynamics_fixture(contract,reference,asset,body_names=robot.body_names,joint_names=names,
+                    q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist())
+                snapshot["source_to_asset_rotation"]=rotation.tolist()
+                return snapshot
+            with mock.patch.object(runner,"read_runtime_dynamics",side_effect=read_dynamics), \
+                    mock.patch.object(runner,"read_collision_geometry",side_effect=lambda stage,poses:collision_fixture(poses)), \
+                    mock.patch.object(runner,"check_versions",return_value={}), \
+                    mock.patch.object(wbc,"prepare_model",side_effect=AssertionError("audit model access")), \
+                    mock.patch.object(wbc,"BalancePolicy",side_effect=AssertionError("audit ONNX access")), \
+                    mock.patch.object(runner,"require_ffmpeg",side_effect=AssertionError("audit video access")):
+                self.assertEqual(runner.worker("dynamics",placement_profile,asset,runtime,
+                    ROOT/placement_profile["controller_contract"],audit),0)
+                runner.validate_stage("dynamics",audit,placement_profile)
+                report=runner.analyze_run(audit)
+                self.assertEqual(report["status"],"compared_runtime_dynamics")
+                extras=sorted(set(robot.body_names)-wbc.load_dynamics_reference()["bodies"].keys())
+                self.assertEqual(report["runtime_only_bodies"],extras)
+                self.assertAlmostEqual(report["totals"]["mass_difference_kg"],len(extras)*0.01)
+                self.assertFalse(hasattr(instantiated[-1],"camera"))
+                self.assertFalse((audit/"trajectory.jsonl").exists())
+                self.assertFalse((audit/"rollout.mp4").exists())
+                self.assertEqual(Simulation.steps,steps_before)
+                self.assertEqual(Policy.observations,[])
+                with mock.patch("builtins.print"):
+                    self.assertEqual(runner.main(["--analyze-run",str(audit)]),0)
+                raw_path=audit/"dynamics-runtime.json"
+                invalid=json.loads(raw_path.read_text());invalid["body_mass_kg"][0]=-1
+                raw_path.write_text(json.dumps(invalid))
+                with self.assertRaisesRegex(ValueError,"mass"):
+                    runner.analyze_run(audit)
             invalid_dimensions = directory / "invalid-dimensions"
             invalid_dimensions.mkdir()
             def oversized_sphere(stage, poses):

@@ -1,2 +1,3 @@
 # Preserve vendor bytes checked by the reference SHA-256 contract.
 assets/references/g1_wbc.urdf -text whitespace=cr-at-eol
+assets/references/g1_wbc_dynamics.json text eol=lf

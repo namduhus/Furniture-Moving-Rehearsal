@@ -24,6 +24,7 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_COMMIT = "4141c34280abb67c82e115342a8720f4a83d750d"
+DYNAMICS_REFERENCE_SHA256 = "c61a85fc44fc74482285fb2efb09e4e0f8918a1a94a722c78bbf22887c0cad9d"
 
 
 def finite(value, shape=None):
@@ -358,6 +359,115 @@ class ObservationHistory:
         self.last_action = action.astype(np.float32)
         raw = finite(c["default_lower_angles"], (15,)) + c["action_scale"]*action
         return np.clip(raw, limits[:, 0], limits[:, 1]), int(np.count_nonzero((raw < limits[:, 0]) | (raw > limits[:, 1])))
+
+
+def load_dynamics_reference():
+    path = ROOT / "assets/references/g1_wbc_dynamics.json"
+    if hashlib.sha256(path.read_bytes()).hexdigest() != DYNAMICS_REFERENCE_SHA256:
+        raise ValueError("Dynamics reference differs from the reviewed source extraction")
+    return json.loads(path.read_text())
+
+
+def dynamics_comparison(measured, reference, source, contract, asset):
+    """Compare a static snapshot; differences are not evidence of a drift cause."""
+    names, joints = measured["body_names"], measured["joint_names"]
+    if (measured["status"] != "captured_runtime_dynamics" or not names or
+            len(names) != len(set(names)) or set(joints) != set(reference.limits) or len(joints) != 43):
+        raise ValueError("Invalid dynamics body/joint mapping")
+    count = len(names)
+    masses = finite(measured["body_mass_kg"], (count,))
+    com = finite(measured["body_com_pose_b_xyzw"], (count, 7))
+    poses = finite(measured["body_link_pose_w_xyzw"], (count, 7))
+    tensors = finite(measured["body_inertia_backend_kg_m2"], (count, 9)).reshape(count, 3, 3)
+    if np.any(masses <= 0) or not np.allclose(tensors, tensors.transpose(0,2,1), atol=1e-8, rtol=1e-5):
+        raise ValueError("Invalid runtime mass or nonsymmetric inertia")
+    principal = np.linalg.eigvalsh(tensors)
+    if np.any(principal <= 0):
+        raise ValueError("Runtime inertia is not positive definite")
+    for key in ("solver_joint_stiffness", "solver_joint_damping", "joint_armature"):
+        if np.any(finite(measured[key], (43,)) < 0):
+            raise ValueError(f"Invalid runtime {key}")
+    finite(measured["joint_effort_limits"], (43,))
+    targets = finite(measured["joint_position_targets"], (43,))
+    velocity_targets = finite(measured["joint_velocity_targets"], (43,))
+    q = dict(zip(joints, finite(measured["joint_positions"], (43,)), strict=True))
+    if source["actuated_joint_names"] != asset["controller_reference"]["joint_order"]:
+        raise ValueError("Source dynamics joint order differs from the reviewed policy")
+    root = pose_matrix(measured["root_pose_xyzw"])
+    rotation = root[:3,:3] @ finite(measured["source_to_asset_rotation"], (3,3))
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-6) or not np.isclose(np.linalg.det(rotation), 1):
+        raise ValueError("Invalid dynamics source-frame rotation")
+    # Published fingers are fixed. Evaluate their source pose at zero; retain
+    # all actual finger coordinates and the articulation difference in evidence.
+    source_q = {n: q[n] if n in source["actuated_joint_names"] else 0.0 for n in q}
+    fk = reference.forward(source_q)
+    actual_com = np.array([(pose_matrix(p) @ np.r_[c[:3],1])[:3] for p,c in zip(poses,com,strict=True)])
+    for c in com: quat_xyzw_matrix(c[3:])
+    actual_root_com = (rotation.T @ (actual_com-root[:3,3]).T).T
+    source_com = {n:(fk[n] @ np.r_[v["com_position_b_m"],1])[:3] for n,v in source["bodies"].items()}
+    source_mass = sum(v["mass_kg"] for v in source["bodies"].values())
+    source_total_com = sum(v["mass_kg"]*source_com[n] for n,v in source["bodies"].items())/source_mass
+    actual_total_com = np.average(actual_root_com, axis=0, weights=masses)
+    rows = []
+    for name in sorted(set(names) & source["bodies"].keys()):
+        i = names.index(name); s = source["bodies"][name]
+        source_principal = np.sort(finite(s["principal_inertia_kg_m2"], (3,)))
+        rows.append({"body": name, "source_mass_kg": s["mass_kg"], "runtime_mass_kg": float(masses[i]),
+                     "mass_difference_kg": float(masses[i]-s["mass_kg"]),
+                     "source_com_in_source_root_m": source_com[name].tolist(),
+                     "runtime_com_in_source_root_m": actual_root_com[i].tolist(),
+                     "com_difference_norm_m": float(np.linalg.norm(actual_root_com[i]-source_com[name])),
+                     "source_principal_inertia_kg_m2": source_principal.tolist(),
+                     "runtime_principal_inertia_kg_m2": principal[i].tolist()})
+    covered = set(); controls = []
+    for group in measured["actuators"].values():
+        model_names = group["joint_names"]
+        kp, kd = finite(group["kp"], (len(model_names),)), finite(group["kd"], (len(model_names),))
+        if (covered & set(model_names) or len(model_names) != len(set(model_names)) or
+                np.any(kp < 0) or np.any(kd < 0) or type(group["implicit"]) is not bool):
+            raise ValueError("Invalid runtime actuator evidence")
+        covered.update(model_names)
+        for i,name in enumerate(model_names):
+            if name in asset["joint_groups"]["lower_body"]:
+                index = asset["joint_groups"]["lower_body"].index(name)
+                source_kp, source_kd = source["lower_body"]["kp"][index], source["lower_body"]["kd"][index]
+            elif name in source["upper_body"]["joint_names"]:
+                source_kp, source_kd = source["upper_body"]["kp"], source["upper_body"]["kd"]
+            else:
+                source_kp = source_kd = None
+            index = joints.index(name)
+            controls.append({"joint": name, "source_actuated": source_kp is not None,
+                "source_actuator": "explicit_pd" if source_kp is not None else "fixed_joint",
+                "source_kp": source_kp, "source_kd": source_kd,
+                "source_target_position_rad": float(source["lower_body"]["default_angles"][asset["joint_groups"]["lower_body"].index(name)])
+                    if name in asset["joint_groups"]["lower_body"] else (0.0 if source_kp is not None else None),
+                "runtime_actuator": "implicit_pd" if group["implicit"] else "explicit_pd",
+                "runtime_class": group["class"], "runtime_kp": float(kp[i]), "runtime_kd": float(kd[i]),
+                "runtime_solver_stiffness": measured["solver_joint_stiffness"][index],
+                "runtime_solver_damping": measured["solver_joint_damping"][index],
+                "runtime_armature": measured["joint_armature"][index],
+                "source_joint_defaults": source["joint_defaults"],
+                "runtime_target_position_rad": float(targets[index]),
+                "runtime_target_velocity_rad_s": float(velocity_targets[index])})
+    if covered != set(joints):
+        raise ValueError("Runtime actuator evidence does not cover all joints")
+    return {"status": "compared_runtime_dynamics", "source_body_count": len(source["bodies"]),
+            "runtime_body_count": count, "source_actuated_joint_count": len(source["actuated_joint_names"]),
+            "runtime_actuated_joint_count": len(joints),
+            "totals": {"source_mass_kg": source_mass, "runtime_mass_kg": float(masses.sum()),
+                       "mass_difference_kg": float(masses.sum()-source_mass),
+                       "source_com_in_source_root_m": source_total_com.tolist(),
+                       "runtime_com_in_source_root_m": actual_total_com.tolist(),
+                       "com_difference_m": (actual_total_com-source_total_com).tolist()},
+            "source_only_bodies": sorted(source["bodies"].keys()-set(names)),
+            "runtime_only_bodies": sorted(set(names)-source["bodies"].keys()),
+            "bodies": rows, "controls": sorted(controls, key=lambda r:r["joint"]),
+            "balance_or_walking_verified": False,
+            "limitations": ["Static comparison at the recorded pose; no causal attribution or controller execution.",
+                "Published deployment data is not proof of the training distribution.",
+                "Inertia comparison uses eigenvalues only; raw backend tensor orientation is not normalized.",
+                "Same-name rows may differ because of split/merged bodies; all bodies contribute to total mass and COM.",
+                "Published fingers are fixed; runtime finger coordinates and articulation are retained separately."]}
 
 
 def collision_clearance(geometry):

@@ -1,4 +1,4 @@
-"""Verify the pinned balance policy and run one bounded Isaac G1 standing trial."""
+"""Inspect G1 dynamics or verify the pinned policy in a bounded standing trial."""
 
 from __future__ import annotations
 
@@ -18,6 +18,86 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 
 
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
+
+
+def read_runtime_dynamics(robot, source_to_asset, usd_path):
+    """Capture backend-reordered buffers and resolved actuator parameters."""
+    def array(value):
+        value = value.torch if hasattr(value, "torch") else value
+        return value[0].detach().cpu().numpy().copy().tolist()
+
+    data = robot.data
+    return {"status": "captured_runtime_dynamics", "asset_usd_path": usd_path,
+            "body_names": list(robot.body_names), "joint_names": list(robot.joint_names),
+            "body_mass_kg": array(data.body_mass),
+            "body_com_pose_b_xyzw": array(data.body_com_pose_b),
+            "body_link_pose_w_xyzw": array(data.body_link_pose_w),
+            "body_inertia_backend_kg_m2": array(data.body_inertia),
+            "inertia_semantics": "Raw pinned PhysX backend tensor; compare eigenvalues only, without assuming world or principal-axis orientation.",
+            "root_pose_xyzw": array(data.root_link_pose_w),
+            "joint_positions": array(data.joint_pos),
+            "joint_position_targets": array(data.joint_pos_target),
+            "joint_velocity_targets": array(data.joint_vel_target),
+            "solver_joint_stiffness": array(data.joint_stiffness),
+            "solver_joint_damping": array(data.joint_damping),
+            "joint_armature": array(data.joint_armature),
+            "joint_effort_limits": array(data.joint_effort_limits),
+            "source_to_asset_rotation": source_to_asset.tolist(),
+            "actuators": {name: {"joint_names": list(model.joint_names),
+                "class": type(model).__module__+"."+type(model).__name__,
+                "implicit": bool(model.is_implicit_model), "kp": array(model.stiffness), "kd": array(model.damping)}
+                for name,model in robot.actuators.items()}}
+
+
+def analyze_dynamics(directory):
+    from g1_wbc import dynamics_comparison, load_contract, load_dynamics_reference, placement_summary
+    profile = json.loads((directory / "profile.json").read_text())
+    asset = json.loads((directory / "asset-profile.json").read_text())
+    contract, reference = load_contract(ROOT / profile["controller_contract"])
+    if contract != json.loads((directory / "controller-contract.json").read_text()):
+        raise ValueError("Saved audit contract differs from the current reviewed contract")
+    source = load_dynamics_reference()
+    if source != json.loads((directory / "dynamics-reference.json").read_text()):
+        raise ValueError("Saved dynamics reference differs from the pinned extraction")
+    measured = json.loads((directory / "dynamics-runtime.json").read_text())
+    initial = json.loads((directory / "initial-state.json").read_text())
+    import numpy as np
+    validate_inventory(json.loads((directory / "asset-inventory.json").read_text()), asset)
+    if (initial["status"] != "passed_explicit_initialization" or
+            not np.allclose(initial["root_vel_world"], np.zeros(6), atol=1e-4, rtol=0) or
+            not np.allclose(initial["joint_velocities"], np.zeros(43), atol=1e-4, rtol=0) or
+            not np.allclose(measured["root_pose_xyzw"], initial["root_pose_xyzw"], atol=1e-6, rtol=0) or
+            not np.allclose(measured["joint_positions"], initial["joint_positions"], atol=1e-6, rtol=0)):
+        raise ValueError("Audit pose differs from the initialized state")
+    report = dynamics_comparison(measured, reference, source, contract, asset)
+    report["initial_placement"] = placement_summary(json.loads((directory / "initial-placement.json").read_text()),
+        profile["initialization"], contract["height_command"], initial["root_pose_xyzw"])
+    return report
+
+
+def dynamics_table(report):
+    totals = report["totals"]
+    lines = ["# Static G1 dynamics comparison", "",
+        "Measured runtime snapshot versus published deployment data. No controller execution or causal attribution.", "",
+        "| Quantity | Source | Runtime |", "| --- | ---: | ---: |",
+        f"| Total mass (kg) | {totals['source_mass_kg']:.8g} | {totals['runtime_mass_kg']:.8g} |",
+        f"| Rigid bodies | {report['source_body_count']} | {report['runtime_body_count']} |",
+        f"| Actuated joints | {report['source_actuated_joint_count']} | {report['runtime_actuated_joint_count']} |", "",
+        f"Whole-robot COM difference in the source root frame (m): {totals['com_difference_m']}", "",
+        "Same-name body rows may differ due to split/merged bodies. All runtime bodies contribute to totals.", "",
+        "| Body | Source mass (kg) | Runtime mass (kg) | COM difference (m) | Source principal inertia (kg m2) | Runtime principal inertia (kg m2) |",
+        "| --- | ---: | ---: | ---: | --- | --- |"]
+    for row in report["bodies"]:
+        lines.append(f"| {row['body']} | {row['source_mass_kg']:.8g} | {row['runtime_mass_kg']:.8g} | "
+            f"{row['com_difference_norm_m']:.6g} | {row['source_principal_inertia_kg_m2']} | {row['runtime_principal_inertia_kg_m2']} |")
+    lines.extend(["", f"Runtime-only bodies: {report['runtime_only_bodies']}", f"Source-only bodies: {report['source_only_bodies']}", "",
+        "| Joint | Source model | Runtime model | Source kp / kd | Runtime kp / kd | Runtime target (rad) |",
+        "| --- | --- | --- | --- | --- | ---: |"])
+    for row in report["controls"]:
+        source_gains = f"{row['source_kp']} / {row['source_kd']}" if row["source_actuated"] else "not actuated"
+        lines.append(f"| {row['joint']} | {row['source_actuator']} | {row['runtime_actuator']} | "
+                     f"{source_gains} | {row['runtime_kp']:.6g} / {row['runtime_kd']:.6g} | {row['runtime_target_position_rad']:.6g} |")
+    return "\n".join([*lines, "", *[f"- {s}" for s in report["limitations"]], ""])
 
 
 def read_collision_geometry(stage, body_poses):
@@ -120,6 +200,8 @@ def analyze_run(directory):
     from g1_wbc import ObservationHistory, contact_summary, finite, motion_summary
 
     directory = directory.expanduser().resolve()
+    if (directory / "dynamics-runtime.json").exists():
+        return analyze_dynamics(directory)
     profile = json.loads((directory / "profile.json").read_text())
     initial = json.loads((directory / "initial-state.json").read_text())
     records = [json.loads(line) for line in (directory / "trajectory.jsonl").read_text().splitlines()]
@@ -170,15 +252,15 @@ def analyze_run(directory):
 
 
 @contextmanager
-def record_worker_failure(directory, result):
+def record_worker_failure(directory, result, stage="balance"):
     """Persist the original cause before the enclosing Kit launcher can exit."""
     try:
         yield
     except BaseException as error:
         message = result.get("error") or str(error) or repr(error)
         result.update(status="failed", error=message, error_type=type(error).__name__)
-        write_json(directory / "balance-worker.json", result)
-        (directory / "balance-error.log").write_text(traceback.format_exc())
+        write_json(directory / f"{stage}-worker.json", result)
+        (directory / f"{stage}-error.log").write_text(traceback.format_exc())
         raise
 
 
@@ -294,16 +376,16 @@ def policy_check(contract, model_path):
             "balance_or_walking_verified": False}
 
 
-def balance_check(profile, asset, runtime, contract, reference, model_path, directory):
+def balance_check(profile, asset, runtime, contract, reference, model_path, directory, *, audit_only=False):
     import numpy as np
     import torch
     import warp as wp
     from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, actuator_limits, check_frames,
                         finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
 
-    encoder = require_ffmpeg(directory)
+    encoder = None if audit_only else require_ffmpeg(directory)
     torch.manual_seed(runtime["seed"])
-    policy = BalancePolicy(model_path, contract)
+    policy = None if audit_only else BalancePolicy(model_path, contract)
     history = ObservationHistory(contract)
     wp.config.enable_backward = False
     from isaaclab.app import launch_simulation
@@ -351,13 +433,14 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         ground = AssetBaseCfg(prim_path="/World/Ground", spawn=sim_utils.GroundPlaneCfg())
         light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=1500))
         robot = candidate
-        camera = CameraCfg(
-            prim_path="{ENV_REGEX_NS}/Camera", update_period=0,
-            width=profile["camera"]["width"], height=profile["camera"]["height"],
-            data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
-            spawn=sim_utils.PinholeCameraCfg(focal_length=24, horizontal_aperture=20.955,
-                                           clipping_range=(0.1, 100)),
-        )
+        if not audit_only:
+            camera = CameraCfg(
+                prim_path="{ENV_REGEX_NS}/Camera", update_period=0,
+                width=profile["camera"]["width"], height=profile["camera"]["height"],
+                data_types=["rgb"], renderer_cfg=IsaacRtxRendererCfg(),
+                spawn=sim_utils.PinholeCameraCfg(focal_length=24, horizontal_aperture=20.955,
+                                               clipping_range=(0.1, 100)),
+            )
         if diagnostics:
             feet_contact = ContactSensorCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/.*_ankle_roll_link", update_period=0.0,
@@ -369,10 +452,12 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         scene = SceneCfg(num_envs=1, env_spacing=3.0)
 
     cfg = LaunchCfg()
+    stage = "dynamics" if audit_only else "balance"
     result = {"status": "running", "steps_completed": 0, "resets": 0,
-              "controller": policy.metadata, "mode": "stand_only_zero_navigation",
+              "controller": policy.metadata if policy else {},
+              "mode": "static_dynamics_audit_no_control" if audit_only else "stand_only_zero_navigation",
               "controller_inference_verified": False, "walking_verified": False}
-    write_json(directory / "balance-worker.json", result)
+    write_json(directory / f"{stage}-worker.json", result)
     actuator_evidence = {"kp": kp, "kd": kd,
                          "configuration": {n: cfg.to_dict() for n, cfg in candidate.actuators.items()},
                          "limit_origin": contract["actuator_limit_origin"],
@@ -380,11 +465,11 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                          "upper_hold_gain_origin": contract["hold_gain_origin"]}
     write_json(directory / "actuators.json", actuator_evidence)
     with launch_simulation(cfg, {"headless": True, "device": runtime["device"],
-                                 "enable_cameras": True, "kit_args": "--allow-root"}), record_worker_failure(directory, result):
+                                 "enable_cameras": not audit_only, "kit_args": "--allow-root"}), record_worker_failure(directory, result, stage):
         sim = sim_utils.SimulationContext(cfg.sim)
         scene = instantiate(cfg.scene)
         sim.reset()
-        robot, camera = scene["robot"], scene["camera"]
+        robot, camera = scene["robot"], None if audit_only else scene["camera"]
 
         def tensor(value):
             return value.torch if hasattr(value, "torch") else value
@@ -534,6 +619,16 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             raise RuntimeError("Explicit initial joint/root state was not established")
         initial["status"] = "passed_explicit_initialization"
         write_json(directory / "initial-state.json", initial)
+        if audit_only:
+            from g1_wbc import load_dynamics_reference
+            write_json(directory / "dynamics-reference.json", load_dynamics_reference())
+            write_json(directory / "dynamics-runtime.json", read_runtime_dynamics(robot, rotation, candidate.spawn.usd_path))
+            comparison = analyze_dynamics(directory)
+            write_json(directory / "dynamics-comparison.json", comparison)
+            (directory / "dynamics-comparison.md").write_text(dynamics_table(comparison))
+            result["status"] = "passed_dynamics_audit"
+            write_json(directory / "dynamics-worker.json", result)
+            return
         history.reset()
         camera.set_world_poses_from_view(device([2.5, 2.5, 1.7]), device([0.0, 0.0, 0.7]))
         frame_count = 0
@@ -647,9 +742,17 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
 
 def validate_stage(stage, directory, profile):
     evidence = json.loads((directory / f"{stage}-worker.json").read_text())
-    wanted = {"policy": "passed_policy_contract", "gpu": "checks_completed", "balance": "passed_balance_rollout"}[stage]
+    wanted = {"policy": "passed_policy_contract", "gpu": "checks_completed", "balance": "passed_balance_rollout",
+              "dynamics": "passed_dynamics_audit"}[stage]
     if evidence.get("status") != wanted:
         raise RuntimeError(f"Incomplete {stage} evidence")
+    if stage == "dynamics":
+        if (evidence["steps_completed"] != 0 or evidence["controller_inference_verified"] is not False or
+                evidence["mode"] != "static_dynamics_audit_no_control"):
+            raise RuntimeError("Static dynamics audit unexpectedly executed a controller")
+        report = analyze_dynamics(directory)
+        if report["status"] != "compared_runtime_dynamics":
+            raise RuntimeError("Incomplete dynamics comparison")
     if stage == "balance":
         import numpy as np
         from g1_wbc import check_frames, finite, joint_anchor_poses, load_contract, quat_xyzw_matrix
@@ -745,6 +848,8 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
         contract, reference = load_contract(contract_path)
         if stage == "gpu":
             write_json(directory / "gpu-worker.json", {"status": "checks_completed", **gpu_check(runtime, directory)})
+        elif stage == "dynamics":
+            balance_check(profile, asset, runtime, contract, reference, None, directory, audit_only=True)
         else:
             path = prepare_model(contract)
             if stage == "policy":
@@ -753,7 +858,7 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
                 balance_check(profile, asset, runtime, contract, reference, path, directory)
         return 0
     except BaseException as error:
-        if stage == "balance" and isinstance(error, SystemExit) and error.code in (None, 0):
+        if stage in ("balance", "dynamics") and isinstance(error, SystemExit) and error.code in (None, 0):
             try:
                 validate_stage(stage, directory, profile)
             except (OSError, ValueError, RuntimeError, KeyError):
@@ -772,22 +877,25 @@ def worker(stage, profile, asset, runtime, contract_path, directory):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
-    parser.add_argument("--stage", choices=("policy", "balance"), default="policy")
+    parser.add_argument("--stage", choices=("policy", "balance", "dynamics"), default="policy")
     parser.add_argument("--prepare-model", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--analyze-run", type=Path, help="Analyze saved artifacts on CPU without Isaac, ONNX or Modal")
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs/isaac")
-    parser.add_argument("--worker", choices=("policy", "gpu", "balance"), help=argparse.SUPPRESS)
+    parser.add_argument("--worker", choices=("policy", "gpu", "balance", "dynamics"), help=argparse.SUPPRESS)
     parser.add_argument("--run-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.analyze_run:
         print(json.dumps(analyze_run(args.analyze_run), indent=2))
         return 0
     profile, asset, runtime = load_plan(args.profile)
-    stages = ["policy"] if args.stage == "policy" else ["policy", "gpu", "balance"]
+    if (args.stage == "dynamics" or args.worker == "dynamics") and (not profile.get("initialization") or args.prepare_model):
+        parser.error("Dynamics audit requires the placement profile and does not use --prepare-model")
+    stages = ["gpu", "dynamics"] if args.stage == "dynamics" else (["policy"] if args.stage == "policy" else ["policy", "gpu", "balance"])
     if args.dry_run:
         print(json.dumps({"status": "local_plan_only", "stages": stages, "asset": asset["asset_config"],
-                          "control_steps": profile["control_steps"], "simulated_seconds": profile["control_steps"]*0.02,
+                          "control_steps": 0 if args.stage == "dynamics" else profile["control_steps"],
+                          "simulated_seconds": 0 if args.stage == "dynamics" else profile["control_steps"]*0.02,
                           "model_download_bytes": 1886682 if args.prepare_model else 0,
                           "contact_diagnostics": bool(profile.get("diagnostics")),
                           "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
@@ -814,19 +922,20 @@ def main(argv=None):
         contract, _ = load_contract(contract_path)
         if args.prepare_model:
             print("Preparing pinned 1,886,682-byte balance checkpoint and verifying SHA-256...", flush=True)
-        prepare_model(contract, args.prepare_model)
+        if args.stage != "dynamics":
+            prepare_model(contract, args.prepare_model)
         for stage in stages:
             print(f"Running {stage}; log: {directory / (stage+'.log')}", flush=True)
             command = [sys.executable, str(Path(__file__).resolve()), "--profile", str(args.profile.resolve()),
                        "--worker", stage, "--run-dir", str(directory)]
-            timeout = profile["stage_timeout_seconds"] if stage == "balance" else (120 if stage == "gpu" else 60)
+            timeout = profile["stage_timeout_seconds"] if stage in ("balance", "dynamics") else (120 if stage == "gpu" else 60)
             code = run_stage(command, directory / f"{stage}.log", timeout)
             if code:
                 raise stage_failure(stage, code, directory)
             validate_stage(stage, directory, profile)
             summary["stages"][stage] = "passed"
             write_json(directory / "summary.json", summary)
-        summary["status"] = "passed_policy_contract" if args.stage == "policy" else "passed_balance_rollout"
+        summary["status"] = {"policy": "passed_policy_contract", "balance": "passed_balance_rollout", "dynamics": "passed_dynamics_audit"}[args.stage]
         return 0
     except BaseException as error:
         summary.update(status="interrupted" if isinstance(error, KeyboardInterrupt) else "failed", error=str(error))
