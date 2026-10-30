@@ -181,11 +181,24 @@ class ControllerAdapterTests(unittest.TestCase):
                 "root_pose_xyzw":[vx*i*0.02,0,0.793,0,0,np.sin(yaw_rate*i*0.01),np.cos(yaw_rate*i*0.01)],
                 "root_velocity_world":[vx,0,0,0,0,yaw_rate],"tilt_rad":0,
                 "action":[0]*15,"clipped_joint_targets":0} for i in range(1,251)]
-        for case, rows in (("stand",trace()),("forward",trace(0.2)),("turn",trace(yaw_rate=0.2))):
-            self.assertEqual(wbc.functional_summary(case,initial,rows)["status"],"passed_functional_evaluation")
-        for case, rows in (("stand",trace(-0.3)),("forward",trace(-0.2)),
-                           ("turn",trace(yaw_rate=-0.2)),("stand",trace()[:100])):
-            self.assertEqual(wbc.functional_summary(case,initial,rows)["status"],"failed_functional_evaluation")
+        start={"left_ankle_roll_link":[0,0.12],"right_ankle_roll_link":[0,-0.12]}
+        def feet(slide=0.0):
+            return [{"feet":{n:{"pose_xyzw":[xy[0]-slide*min(k,9)/9,xy[1],0.035,0,0,0,1]} for n,xy in start.items()}} for k in range(1000)]
+        def squat():
+            # Pelvis moves back 0.10 m and settles while the feet stay planted.
+            rows=trace()
+            for r in rows: r["root_pose_xyzw"][0]=-0.10*min(r["step"],40)/40
+            return rows
+        for case, rows in (("stand",trace()),("stand",squat()),("forward",trace(0.2)),("turn",trace(yaw_rate=0.2))):
+            self.assertEqual(wbc.functional_summary(case,initial,rows,start,feet())["status"],"passed_functional_evaluation")
+        self.assertAlmostEqual(wbc.functional_summary("stand",initial,squat(),start,feet())["maximum_pelvis_displacement_m"],0.10)
+        for case, rows, samples in (("stand",trace(-0.3),feet()),("forward",trace(-0.2),feet()),
+                                    ("turn",trace(yaw_rate=-0.2),feet()),("stand",trace()[:100],feet()),
+                                    ("stand",squat(),feet(0.03)),("stand",trace(),feet()[:999]),("stand",trace(),())):
+            self.assertEqual(wbc.functional_summary(case,initial,rows,start,samples)["status"],"failed_functional_evaluation")
+        result=wbc.functional_summary("stand",initial,trace(),start,feet(0.03))
+        self.assertFalse(result["checks"]["foot_displacement_within_0_02m"])
+        self.assertAlmostEqual(max(result["maximum_foot_displacement_m"].values()),0.03)
 
     def test_source_pose_accepts_actual_positive_submillimeter_gap_and_rejects_penetration(self):
         # Numeric fields supplied from run 20261030T082959.221472Z-wbc.
@@ -1587,7 +1600,7 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertEqual(instantiated[-1].robot.actuators["upper_hold"].armature,0.01)
             rejected_analysis = copy.deepcopy(analysis)
             rejected_analysis["functional"]["status"] = "failed_functional_evaluation"
-            rejected_analysis["functional"]["checks"]["displacement_within_0_10m"] = False
+            rejected_analysis["functional"]["checks"]["foot_displacement_within_0_02m"] = False
             with mock.patch.object(runner,"analyze_run",return_value=rejected_analysis), self.assertRaisesRegex(RuntimeError,"Functional gate failed"):
                 runner.validate_stage("balance",deployment_dir,deployment_profile)
 

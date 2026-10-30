@@ -591,7 +591,9 @@ def analyze_run(directory):
         if effective != contract:
             raise ValueError("Saved deployment controller differs from the pinned effective contract")
         report["deployment"] = validate_deployment_evidence(directory, asset, contract, profile.get("arm_hold") == "implicit")
-        report["functional"] = functional_summary(profile["functional_case"], initial, records)
+        placement = json.loads((directory / "initial-placement.json").read_text())
+        foot_start = {n: placement["after_geometry"]["feet"][n]["body_pose_xyzw"][:2] for n in diagnostics["foot_body_names"]}
+        report["functional"] = functional_summary(profile["functional_case"], initial, records, foot_start, samples)
         report["stationary_success_assessed"] = profile["functional_case"] == "stand" and report["status"] == "diagnostics_complete"
     return report
 

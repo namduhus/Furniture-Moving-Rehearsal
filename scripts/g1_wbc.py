@@ -337,7 +337,7 @@ def deployment_contract(contract, reference, command):
     return effective, reference
 
 
-def functional_summary(case, initial, records):
+def functional_summary(case, initial, records, foot_start=None, samples=()):
     """Project five-second acceptance gates, separate from fall/action guards."""
     motion = motion_summary(initial["root_pose_xyzw"], records)
     if len(records) != 250 or not np.isclose(motion["simulated_seconds"], 5):
@@ -352,9 +352,16 @@ def functional_summary(case, initial, records):
     tail_vx = float(velocity[-50:, 0].mean())
     tail_yaw_rate = float((yaw[-1] - yaw[-51]) / 1.0)
     checks = {"tilt_within_20_degrees": motion["maximum_tilt_degrees"] <= 20}
+    feet = None
     if case == "stand":
-        checks.update(displacement_within_0_10m=motion["maximum_xy_displacement_m"] <= 0.10,
-                      final_speed_within_0_10m_s=motion["final_planar_speed_m_s"] <= 0.10)
+        # Pelvis position also moves when the policy squats to its height command; planted feet show standing in place.
+        if not foot_start or len(samples) != 1000:
+            checks["complete_foot_trace"] = False
+        else:
+            feet = {n: float(np.max(np.linalg.norm(finite([s["feet"][n]["pose_xyzw"][:2] for s in samples], (1000, 2))
+                                                   - finite(xy, (2,)), axis=1))) for n, xy in foot_start.items()}
+            checks["foot_displacement_within_0_02m"] = max(feet.values()) <= 0.02
+        checks["final_speed_within_0_10m_s"] = motion["final_planar_speed_m_s"] <= 0.10
     elif case == "forward":
         checks.update(forward_progress_at_least_0_30m=float(delta[0]) >= 0.30,
                       lateral_drift_within_0_15m=float(np.max(np.abs(poses[:, 1]-initial["root_pose_xyzw"][1]))) <= 0.15,
@@ -371,6 +378,7 @@ def functional_summary(case, initial, records):
             "case": case, "checks": {k: bool(v) for k, v in checks.items()},
             "final_second_mean_vx_m_s": tail_vx, "final_second_mean_heading_rate_rad_s": tail_yaw_rate,
             "heading_change_rad": float(yaw[-1]-yaw[0]),
+            "maximum_pelvis_displacement_m": motion["maximum_xy_displacement_m"], "maximum_foot_displacement_m": feet,
             "criteria_origin": "Project acceptance proposal, not vendor thresholds; one bounded trial is not a robustness claim.",
             "on_failure": "Stop this gate; inspect the whole-contract evidence before proposing another physical change. No automatic retry or framework switch."}
 

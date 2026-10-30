@@ -223,7 +223,7 @@ Each case lasts five simulated seconds. All cases require maximum tilt at most 2
 
 | Case | Command | Functional acceptance |
 | --- | --- | --- |
-| Stand | Zero navigation | Maximum displacement at most 0.10 m; final planar speed at most 0.10 m/s |
+| Stand | Zero navigation | Each foot moves at most 0.02 m; final planar speed at most 0.10 m/s |
 | Forward | +0.2 m/s in x | Forward progress at least 0.30 m; maximum lateral drift at most 0.15 m; final-second mean x velocity 0.10–0.30 m/s; maximum heading change at most 0.20 rad |
 | Turn | +0.2 rad/s yaw | Positive heading change at least 0.30 rad; maximum displacement at most 0.20 m; final speed at most 0.15 m/s; final-second mean heading rate 0.10–0.30 rad/s |
 
