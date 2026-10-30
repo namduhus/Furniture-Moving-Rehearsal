@@ -71,6 +71,9 @@
   "upper_hold_kd": 2.0,
   "hand_hold_kp": 5.0,
   "hand_hold_kd": 0.5,
+  "lower_body_armature": 0.01,
+  "upper_body_armature": 0.001,
+  "actuation_origin": "Lower-body explicit PD uses the published deployment model's 0.01 armature. Arm/hand holding uses Isaac's implicit PD with its G1 configuration's 0.001 armature; holding gains remain project experiment parameters.",
   "hold_gain_origin": "Project experiment parameters; lower-body kp/kd and observation scales come from the pinned upstream configuration.",
   "model": {
     "url": "https://media.githubusercontent.com/media/NVlabs/GR00T-WholeBodyControl/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/policy/GR00T-WholeBodyControl-Balance.onnx",

@@ -224,6 +224,10 @@ def load_contract(path: Path):
         raise ValueError("Unexpected controller dimensions")
     for name in ("kp", "kd", "default_lower_angles"):
         finite(contract[name], (15,))
+    for name in ("lower_body_armature", "upper_body_armature"):
+        value = contract[name]
+        if type(value) not in (float, int) or not math.isfinite(value) or not 0.001 <= value <= 0.03:
+            raise ValueError(f"Unreviewed joint armature: {name}")
     reference = ROOT / contract["reference_urdf"]
     if hashlib.sha256(reference.read_bytes()).hexdigest() != contract["reference_urdf_sha256"]:
         raise ValueError("Reference URDF hash mismatch")
@@ -345,7 +349,9 @@ class ObservationHistory:
         c = self.contract
         action = finite(action, (15,))
         if np.max(np.abs(action)) > c["action_limit"]:
-            raise RuntimeError("Policy action exceeds the configured transfer bound")
+            index = int(np.argmax(np.abs(action)))
+            raise RuntimeError("Policy action exceeds the configured transfer bound: "
+                               f"index={index}, value={action[index]:.6g}, limit={c['action_limit']:.6g}")
         limits = finite(lower_limits, (15, 2))
         if np.any(limits[:, 0] >= limits[:, 1]):
             raise ValueError("Invalid lower-body limits")

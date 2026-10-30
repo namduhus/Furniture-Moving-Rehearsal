@@ -138,7 +138,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     history = ObservationHistory(contract)
     wp.config.enable_backward = False
     from isaaclab.app import launch_simulation
-    from isaaclab.actuators import IdealPDActuatorCfg
+    from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
     from isaaclab.assets import AssetBaseCfg
     from isaaclab.scene import InteractiveSceneCfg
     from isaaclab.sensors import CameraCfg
@@ -150,7 +150,6 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     from PIL import Image
 
     groups = asset["joint_groups"]
-    expected = sum(groups.values(), [])
     lower = groups["lower_body"]
     kp = {n: contract["kp"][i] for i, n in enumerate(lower)}
     kd = {n: contract["kd"][i] for i, n in enumerate(lower)}
@@ -159,12 +158,18 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         kd.update({n: contract[f"{prefix}_hold_kd"] for n in groups[key]})
     candidate = replace(G1_29DOF_CFG, prim_path="{ENV_REGEX_NS}/Robot")
     motor_limits = actuator_limits(contract, reference)
+    upper = groups["arms"] + groups["hands"]
     candidate.actuators = {"reference_pd": IdealPDActuatorCfg(
-        joint_names_expr=expected, stiffness=kp, damping=kd,
-        actuator_effort_limit={n: motor_limits[n]["effort"] for n in expected},
-        joint_effort_limit={n: motor_limits[n]["effort"] for n in expected},
-        joint_velocity_limit={n: motor_limits[n]["velocity"] for n in expected},
-        armature=0.0, friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
+        joint_names_expr=lower, stiffness={n: kp[n] for n in lower}, damping={n: kd[n] for n in lower},
+        actuator_effort_limit={n: motor_limits[n]["effort"] for n in lower},
+        joint_effort_limit={n: motor_limits[n]["effort"] for n in lower},
+        joint_velocity_limit={n: motor_limits[n]["velocity"] for n in lower},
+        armature=contract["lower_body_armature"], friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
+    ), "upper_hold": ImplicitActuatorCfg(
+        joint_names_expr=upper, stiffness={n: kp[n] for n in upper}, damping={n: kd[n] for n in upper},
+        joint_effort_limit={n: motor_limits[n]["effort"] for n in upper},
+        joint_velocity_limit={n: motor_limits[n]["velocity"] for n in upper},
+        armature=contract["upper_body_armature"], friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
     )}
 
     @configclass
@@ -190,10 +195,12 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
               "controller": policy.metadata, "mode": "stand_only_zero_navigation",
               "controller_inference_verified": False, "walking_verified": False}
     write_json(directory / "balance-worker.json", result)
-    write_json(directory / "actuators.json", {"kp": kp, "kd": kd,
-               "configuration": candidate.actuators["reference_pd"].to_dict(),
-               "limit_origin": contract["actuator_limit_origin"],
-               "upper_hold_gain_origin": contract["hold_gain_origin"]})
+    actuator_evidence = {"kp": kp, "kd": kd,
+                         "configuration": {n: cfg.to_dict() for n, cfg in candidate.actuators.items()},
+                         "limit_origin": contract["actuator_limit_origin"],
+                         "actuation_origin": contract["actuation_origin"],
+                         "upper_hold_gain_origin": contract["hold_gain_origin"]}
+    write_json(directory / "actuators.json", actuator_evidence)
     with launch_simulation(cfg, {"headless": True, "device": runtime["device"],
                                  "enable_cameras": True, "kit_args": "--allow-root"}), record_worker_failure(directory, result):
         sim = sim_utils.SimulationContext(cfg.sim)
@@ -220,6 +227,13 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                      "joint_position_limits": array(robot.data.joint_pos_limits).tolist()}
         write_json(directory / "asset-inventory.json", inventory)
         validate_inventory(inventory, asset)
+        applied_armature = finite(array(robot.data.joint_armature), (43,))
+        wanted_armature = np.array([contract["lower_body_armature"] if n in lower
+                                   else contract["upper_body_armature"] for n in names])
+        actuator_evidence["joint_armature"] = dict(zip(names, applied_armature.tolist(), strict=True))
+        write_json(directory / "actuators.json", actuator_evidence)
+        if not np.allclose(applied_armature, wanted_armature, rtol=0, atol=1e-7):
+            raise RuntimeError("Configured joint armature was not applied to the Isaac articulation")
         if set(reference.limits) != set(names):
             raise RuntimeError("Runtime model differs from the pinned URDF")
         indices = [names.index(n) for n in asset["controller_reference"]["joint_order"]]
@@ -321,7 +335,19 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                     pose, vel = array(robot.data.root_link_pose_w), array(robot.data.root_link_vel_w)
                     observation = history.observe(q[indices], dq[indices], pose[3:], vel[3:], rotation)
                     action = policy(observation)
-                    target, clipped = history.targets(action, limits[lower_indices])
+                    try:
+                        target, clipped = history.targets(action, limits[lower_indices])
+                    except (RuntimeError, ValueError):
+                        write_json(directory / "rejected-action.json", {
+                            "step": step+1, "sim_time_seconds": step*dt, "applied": False,
+                            "limit": contract["action_limit"], "maximum_absolute_action": float(np.max(np.abs(action))),
+                            "maximum_action_joint": lower[int(np.argmax(np.abs(action)))],
+                            "observation": observation.tolist(), "action": action.tolist(),
+                            "joint_positions": q.tolist(), "joint_velocities": dq.tolist(),
+                            "root_pose_xyzw": pose.tolist(), "root_velocity_world": vel.tolist(),
+                            "source_to_asset_rotation": rotation.tolist(),
+                            "controller_body_joint_indices": indices, "lower_body_joint_names": lower})
+                        raise
                     targets = defaults.copy()
                     targets[lower_indices] = target
                     robot.set_joint_position_target_index(target=device(targets))
@@ -402,7 +428,14 @@ def validate_stage(stage, directory, profile):
                 raise RuntimeError("Missing initialization/frame evidence")
         if len(frames["probes"]) != 2:
             raise RuntimeError("Incomplete kinematic probes")
-        _, reference = load_contract(ROOT / profile["controller_contract"])
+        contract, reference = load_contract(ROOT / profile["controller_contract"])
+        armature = json.loads((directory / "actuators.json").read_text())["joint_armature"]
+        asset, _ = load_asset_profile(ROOT / profile["asset_profile"])
+        if set(armature) != set(reference.limits) or any(
+                not np.isclose(value, contract["lower_body_armature"] if name in asset["joint_groups"]["lower_body"]
+                               else contract["upper_body_armature"], rtol=0, atol=1e-7)
+                for name, value in armature.items()):
+            raise RuntimeError("Incomplete or incorrect applied armature evidence")
         joint_frames = json.loads((directory / "joint-frames.json").read_text())
         for label in ("calibration", "probe-0", "probe-1"):
             measured = json.loads((directory / f"frame-input-{label}.json").read_text())

@@ -123,6 +123,12 @@ class ControllerAdapterTests(unittest.TestCase):
                         {"waist_pitch_joint": {"velocity": -1}}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 wbc.actuator_limits({**self.contract, "actuator_limit_overrides": changes}, self.robot)
+        for field in ("lower_body_armature", "upper_body_armature"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as name:
+                path = Path(name) / "contract.json"
+                path.write_text(json.dumps({**self.contract, field: 0.0}))
+                with self.assertRaisesRegex(ValueError, "armature"):
+                    wbc.load_contract(path)
 
     def test_usd_body_origins_are_converted_using_authored_joint_pivots(self):
         metadata = joint_frame_fixture(self.robot)
@@ -291,6 +297,10 @@ class ControllerLaunchTests(unittest.TestCase):
             @property
             def joint_pos_limits(self): return Tensor([limits])
             @property
+            def joint_armature(self):
+                return Tensor([[contract["lower_body_armature"] if n in asset["joint_groups"]["lower_body"]
+                                else contract["upper_body_armature"] for n in names]])
+            @property
             def root_link_pose_w(self): return Tensor([robot.pose])
             @property
             def root_link_vel_w(self): return Tensor([robot.velocity])
@@ -335,6 +345,12 @@ class ControllerLaunchTests(unittest.TestCase):
             def __init__(self, **kwargs): self.__dict__.update(kwargs)
             def to_dict(self): return self.__dict__
 
+        class ExplicitConfig(Config):
+            pass
+
+        class ImplicitConfig(Config):
+            pass
+
         class Simulation:
             physics_manager = type("PhysxManager", (), {"__module__": "isaaclab_physx.physics"})
             stage = object()
@@ -347,11 +363,12 @@ class ControllerLaunchTests(unittest.TestCase):
 
         class Policy:
             metadata = {"input": ["batch",516], "output": ["batch",15]}
+            output = np.zeros(15)
             def __init__(self, *args): pass
             def __call__(self, observation):
                 self.assert_shape = observation.shape == (516,)
                 if not self.assert_shape: raise AssertionError("Bad observation passed to policy")
-                return np.zeros(15)
+                return self.output
 
         class Image:
             @staticmethod
@@ -376,7 +393,7 @@ class ControllerLaunchTests(unittest.TestCase):
                       "as_tensor": lambda value, **kwargs: Tensor(np.asarray(value, dtype=np.float32))},
             "warp": {"config": Config(enable_backward=True)}, "isaaclab": {},
             "isaaclab.app": {"launch_simulation": lambda *args: nullcontext()},
-            "isaaclab.actuators": {"IdealPDActuatorCfg": Config},
+            "isaaclab.actuators": {"IdealPDActuatorCfg": ExplicitConfig, "ImplicitActuatorCfg": ImplicitConfig},
             "isaaclab.assets": {"AssetBaseCfg": Config},
             "isaaclab.scene": {"InteractiveSceneCfg": Config},
             "isaaclab.sensors": {"CameraCfg": Config},
@@ -412,11 +429,27 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].stiffness["waist_yaw_joint"], 250)
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].actuator_effort_limit["left_hip_roll_joint"], 88)
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].joint_velocity_limit["waist_pitch_joint"], 37)
+            actuators = instantiated[0].robot.actuators
+            self.assertIsInstance(actuators["reference_pd"], ExplicitConfig)
+            self.assertIsInstance(actuators["upper_hold"], ImplicitConfig)
+            self.assertEqual(set(actuators["reference_pd"].joint_names_expr), set(asset["joint_groups"]["lower_body"]))
+            self.assertEqual(set(actuators["upper_hold"].joint_names_expr), set(asset["joint_groups"]["arms"] + asset["joint_groups"]["hands"]))
+            self.assertEqual(actuators["reference_pd"].armature, 0.01)
+            self.assertEqual(actuators["upper_hold"].armature, 0.001)
             self.assertTrue(np.allclose(robot.pose[3:], [0,0,0,1]))
             evidence = json.loads((directory / "balance-worker.json").read_text())
             self.assertTrue(evidence["controller_inference_verified"])
             self.assertFalse(evidence["walking_verified"])
             self.assertEqual(len(list(directory.glob("frame-input-*.json"))), 3)
+            motor_path = directory / "actuators.json"
+            motor = json.loads(motor_path.read_text())
+            original = motor["joint_armature"]["left_ankle_roll_joint"]
+            motor["joint_armature"]["left_ankle_roll_joint"] = 0.0
+            motor_path.write_text(json.dumps(motor))
+            with self.assertRaisesRegex(RuntimeError, "armature"):
+                runner.validate_stage("balance", directory, profile)
+            motor["joint_armature"]["left_ankle_roll_joint"] = original
+            motor_path.write_text(json.dumps(motor))
             records = [json.loads(l) for l in (directory / "trajectory.jsonl").read_text().splitlines()]
             records[1]["root_height_m"] = 0.1
             (directory / "trajectory.jsonl").write_text("\n".join(json.dumps(r) for r in records))
@@ -435,6 +468,19 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertEqual(failure["status"], "failed")
             self.assertEqual(failure["steps_completed"], 1)
             self.assertIn("Balance guard", failure["error"])
+            rejected = directory / "rejected"
+            rejected.mkdir()
+            steps_before = Simulation.steps
+            Policy.output = np.full(15, 6.0)
+            with self.assertRaisesRegex(RuntimeError, "transfer bound"):
+                runner.balance_check(profile, asset, runtime, contract, reference, Path("unused.onnx"), rejected)
+            snapshot = json.loads((rejected / "rejected-action.json").read_text())
+            self.assertEqual(snapshot["step"], 1)
+            self.assertEqual(snapshot["maximum_absolute_action"], 6.0)
+            self.assertFalse(snapshot["applied"])
+            self.assertEqual(snapshot["limit"], 5.0)
+            self.assertEqual(len(snapshot["observation"]), 516)
+            self.assertEqual(Simulation.steps, steps_before)
 
 if __name__ == "__main__":
     unittest.main()
