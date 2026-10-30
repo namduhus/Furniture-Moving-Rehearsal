@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from fractions import Fraction
 import json
@@ -17,6 +18,19 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 
 
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
+
+
+@contextmanager
+def record_worker_failure(directory, result):
+    """Persist the original cause before the enclosing Kit launcher can exit."""
+    try:
+        yield
+    except BaseException as error:
+        message = result.get("error") or str(error) or repr(error)
+        result.update(status="failed", error=message, error_type=type(error).__name__)
+        write_json(directory / "balance-worker.json", result)
+        (directory / "balance-error.log").write_text(traceback.format_exc())
+        raise
 
 
 def read_joint_frames(stage, reference):
@@ -115,7 +129,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, check_frames,
+    from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, actuator_limits, check_frames,
                         finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
 
     encoder = require_ffmpeg(directory)
@@ -144,11 +158,12 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         kp.update({n: contract[f"{prefix}_hold_kp"] for n in groups[key]})
         kd.update({n: contract[f"{prefix}_hold_kd"] for n in groups[key]})
     candidate = replace(G1_29DOF_CFG, prim_path="{ENV_REGEX_NS}/Robot")
+    motor_limits = actuator_limits(contract, reference)
     candidate.actuators = {"reference_pd": IdealPDActuatorCfg(
         joint_names_expr=expected, stiffness=kp, damping=kd,
-        actuator_effort_limit={n: reference.limits[n]["effort"] for n in expected},
-        joint_effort_limit={n: reference.limits[n]["effort"] for n in expected},
-        joint_velocity_limit={n: reference.limits[n]["velocity"] for n in expected},
+        actuator_effort_limit={n: motor_limits[n]["effort"] for n in expected},
+        joint_effort_limit={n: motor_limits[n]["effort"] for n in expected},
+        joint_velocity_limit={n: motor_limits[n]["velocity"] for n in expected},
         armature=0.0, friction=0.0, dynamic_friction=0.0, viscous_friction=0.0,
     )}
 
@@ -177,9 +192,10 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     write_json(directory / "balance-worker.json", result)
     write_json(directory / "actuators.json", {"kp": kp, "kd": kd,
                "configuration": candidate.actuators["reference_pd"].to_dict(),
+               "limit_origin": contract["actuator_limit_origin"],
                "upper_hold_gain_origin": contract["hold_gain_origin"]})
     with launch_simulation(cfg, {"headless": True, "device": runtime["device"],
-                                 "enable_cameras": True, "kit_args": "--allow-root"}):
+                                 "enable_cameras": True, "kit_args": "--allow-root"}), record_worker_failure(directory, result):
         sim = sim_utils.SimulationContext(cfg.sim)
         scene = instantiate(cfg.scene)
         sim.reset()

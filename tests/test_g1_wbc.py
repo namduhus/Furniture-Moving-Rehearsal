@@ -1,6 +1,6 @@
 """Numerical convention and controller-transfer failure checks, without a GPU."""
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import copy
 import hashlib
 import json
@@ -105,6 +105,25 @@ class ControllerAdapterTests(unittest.TestCase):
         poses = self.robot.forward({n: 0 for n in expected})
         np.testing.assert_allclose(poses["left_hip_pitch_link"][:3, 3], [0, 0.064452, -0.1027], atol=1e-6)
 
+    def test_reference_revision_matches_deployment_geometry_and_preserves_trial_limits(self):
+        self.assertEqual(self.contract["reference_urdf_source_path"],
+                         "gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf")
+        joints = {name: origin for name, _, _, _, origin, _ in self.robot.joints}
+        np.testing.assert_allclose(joints["waist_roll_joint"][:3, 3], [-0.0039635, 0, 0.044], atol=1e-10)
+        np.testing.assert_allclose(joints["waist_pitch_joint"][:3, 3], [0, 0, 0], atol=1e-10)
+        np.testing.assert_allclose(joints["left_shoulder_pitch_joint"][:3, 3], [0.0039563, 0.10022, 0.24778], atol=1e-10)
+        limits = wbc.actuator_limits(self.contract, self.robot)
+        self.assertEqual(limits["left_hip_roll_joint"], {"effort": 88.0, "velocity": 32.0})
+        self.assertEqual(limits["left_ankle_pitch_joint"], {"effort": 50.0, "velocity": 37.0})
+        self.assertEqual(limits["waist_pitch_joint"], {"effort": 50.0, "velocity": 37.0})
+        self.assertEqual(limits["left_hand_thumb_0_joint"]["velocity"], 6.857)
+        self.assertEqual(self.robot.limits["left_hip_roll_joint"]["effort"], 139.0)
+        for changes in ({"unknown_joint": {"effort": 1}},
+                        {"waist_pitch_joint": {"effort": float("nan")}},
+                        {"waist_pitch_joint": {"velocity": -1}}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                wbc.actuator_limits({**self.contract, "actuator_limit_overrides": changes}, self.robot)
+
     def test_usd_body_origins_are_converted_using_authored_joint_pivots(self):
         metadata = joint_frame_fixture(self.robot)
         positions = {name: 0.1 for name in self.robot.limits}
@@ -180,6 +199,18 @@ class ControllerAdapterTests(unittest.TestCase):
             (directory / "balance-error.log").unlink()
             (directory / "balance.log").write_text("Original runtime failure\n")
             self.assertIn("Original runtime failure", str(runner.stage_failure("balance", 1, directory)))
+            @contextmanager
+            def kit_shutdown():
+                try:
+                    yield
+                finally:
+                    raise SystemExit(1)
+            with self.assertRaises(SystemExit):
+                with kit_shutdown(), runner.record_worker_failure(directory, {"status": "running"}):
+                    raise RuntimeError("Original frame mismatch before Kit shutdown")
+            evidence = json.loads((directory / "balance-worker.json").read_text())
+            self.assertEqual(evidence["error"], "Original frame mismatch before Kit shutdown")
+            self.assertIn("Original frame mismatch", str(runner.stage_failure("balance", 1, directory)))
 
     def test_weight_cache_rejects_lfs_pointers_and_corruption_without_download(self):
         with tempfile.TemporaryDirectory() as name:
@@ -379,6 +410,8 @@ class ControllerLaunchTests(unittest.TestCase):
             runner.validate_stage("balance", directory, profile)
             self.assertEqual(Simulation.steps, 16)
             self.assertEqual(instantiated[0].robot.actuators["reference_pd"].stiffness["waist_yaw_joint"], 250)
+            self.assertEqual(instantiated[0].robot.actuators["reference_pd"].actuator_effort_limit["left_hip_roll_joint"], 88)
+            self.assertEqual(instantiated[0].robot.actuators["reference_pd"].joint_velocity_limit["waist_pitch_joint"], 37)
             self.assertTrue(np.allclose(robot.pose[3:], [0,0,0,1]))
             evidence = json.loads((directory / "balance-worker.json").read_text())
             self.assertTrue(evidence["controller_inference_verified"])

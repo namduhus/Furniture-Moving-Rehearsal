@@ -1,7 +1,7 @@
 {
   "source_commit": "4141c34280abb67c82e115342a8720f4a83d750d",
   "reference_urdf": "assets/references/g1_wbc.urdf",
-  "reference_urdf_sha256": "3dcb9c361753f464fa1f0238cdf800af842909628fd153733075607881c12d62",
+  "reference_urdf_sha256": "36992ed4097fd4041a849a7619285e02d8529cfcc5f9e71c8574ee2381b7a48a",
   "kp": [
     150,
     150,
@@ -80,5 +80,48 @@
     "license": "licenses/GR00T-WBC.txt",
     "attribution": "Licensed by NVIDIA Corporation under the NVIDIA Open Model License."
   },
-  "onnxruntime_version": "1.26.0"
+  "onnxruntime_version": "1.26.0",
+  "reference_urdf_source_path": "gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf",
+  "reference_urdf_bytes": 51892,
+  "actuator_limit_overrides": {
+    "left_hip_roll_joint": {
+      "effort": 88.0,
+      "velocity": 32.0
+    },
+    "left_ankle_pitch_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "left_ankle_roll_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "right_hip_roll_joint": {
+      "effort": 88.0,
+      "velocity": 32.0
+    },
+    "right_ankle_pitch_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "right_ankle_roll_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "waist_roll_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "waist_pitch_joint": {
+      "effort": 50.0,
+      "velocity": 37.0
+    },
+    "left_hand_thumb_0_joint": {
+      "velocity": 6.857
+    },
+    "right_hand_thumb_0_joint": {
+      "velocity": 6.857
+    }
+  },
+  "actuator_limit_origin": "Preserve the previously reviewed trial effort/velocity bounds while correcting the kinematic reference revision. Overrides are experiment settings, not a claim of identical vendor or policy-training dynamics."
 }

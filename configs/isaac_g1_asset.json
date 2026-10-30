@@ -59,7 +59,7 @@
     "repository": "https://github.com/NVlabs/GR00T-WholeBodyControl",
     "commit": "4141c34280abb67c82e115342a8720f4a83d750d",
     "config_path": "decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.yaml",
-    "model_path": "decoupled_wbc/control/robot_model/model_data/g1/g1_29dof_with_hand.urdf",
+    "model_path": "gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf",
     "joint_order": [
       "left_hip_pitch_joint",
       "left_hip_roll_joint",

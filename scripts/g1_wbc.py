@@ -227,7 +227,23 @@ def load_contract(path: Path):
     reference = ROOT / contract["reference_urdf"]
     if hashlib.sha256(reference.read_bytes()).hexdigest() != contract["reference_urdf_sha256"]:
         raise ValueError("Reference URDF hash mismatch")
-    return contract, RobotReference(reference)
+    robot = RobotReference(reference)
+    actuator_limits(contract, robot)
+    return contract, robot
+
+
+def actuator_limits(contract, reference):
+    """Keep experiment motor bounds explicit and separate from FK revision data."""
+    limits = {name: {key: values[key] for key in ("effort", "velocity")}
+              for name, values in reference.limits.items()}
+    for name, changes in contract.get("actuator_limit_overrides", {}).items():
+        if name not in limits or not changes or set(changes) - {"effort", "velocity"}:
+            raise ValueError("Invalid actuator limit override")
+        for key, value in changes.items():
+            if type(value) not in (float, int) or not math.isfinite(value) or value <= 0:
+                raise ValueError("Actuator limits must be finite and positive")
+            limits[name][key] = value
+    return limits
 
 
 def prepare_model(contract, allow_download=False):
