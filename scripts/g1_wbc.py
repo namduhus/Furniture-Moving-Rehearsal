@@ -390,14 +390,21 @@ def collision_clearance(geometry):
             paths.add(path)
             local = finite(shape["body_from_shape"], (4, 4))
             radius = float(finite(shape["radius_m"]))
-            if not np.allclose(local[3], [0, 0, 0, 1], atol=1e-9, rtol=0) or not 0 < radius <= 0.1:
-                raise ValueError("Invalid foot sphere dimensions")
+            if not np.allclose(local[3], [0, 0, 0, 1], atol=1e-9, rtol=0):
+                raise ValueError(f"Invalid foot sphere transform: {path}")
+            if radius <= 0:
+                raise ValueError(f"Invalid foot sphere radius: {path}, local_radius={radius:.9g}")
             world = body @ local
             gram = world[:3, :3].T @ world[:3, :3]
             scale = float(np.sqrt(np.trace(gram)/3))
             if scale <= 0 or not np.allclose(gram, np.eye(3)*scale**2, atol=1e-9, rtol=1e-6):
-                raise ValueError("Nonuniform sphere scaling is not supported by the clearance experiment")
+                raise ValueError(f"Nonuniform sphere scaling is not supported by the clearance experiment: {path}")
             radius_world = radius*scale
+            # USD may represent a small collider as a scaled unit sphere.
+            # Bound its physical size, rather than the untransformed attribute.
+            if not np.isfinite(radius_world) or not 0 < radius_world <= 0.1:
+                raise ValueError(f"Invalid foot sphere dimensions: {path}, local_radius={radius:.9g}, "
+                                 f"world_scale={scale:.9g}, world_radius_m={radius_world:.9g}, maximum_m=0.1")
             bottom = float(world[2, 3]-radius_world)
             colliders.append({"collision_path": path, "center_world_m": world[:3, 3].tolist(),
                               "radius_world_m": radius_world, "bottom_world_z_m": bottom,

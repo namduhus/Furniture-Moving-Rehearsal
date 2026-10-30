@@ -499,6 +499,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                 return read_collision_geometry(sim.stage, {n: poses[n].tolist() for n in diagnostics["foot_body_names"]})
 
             placement["before_geometry"] = geometry()
+            write_json(directory / "initial-placement.json", placement)
             placement["before_clearance"] = collision_clearance(placement["before_geometry"])
             write_json(directory / "initial-placement.json", placement)
             lift = placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
@@ -509,6 +510,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             scene.update(0.0)
             placement["after_root_pose_xyzw"] = array(robot.data.root_link_pose_w).tolist()
             placement["after_geometry"] = geometry()
+            write_json(directory / "initial-placement.json", placement)
             placement["after_clearance"] = collision_clearance(placement["after_geometry"])
             placement["status"] = "measured_initial_placement"
             write_json(directory / "initial-placement.json", placement)

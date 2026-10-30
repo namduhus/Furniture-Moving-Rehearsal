@@ -390,6 +390,33 @@ class ControllerAdapterTests(unittest.TestCase):
             corrupt(bad)
             with self.assertRaises(ValueError): wbc.placement_summary(bad, settings, 0.74, after_root)
 
+    def test_scaled_unit_spheres_match_direct_radii_and_world_size_guard_remains_enforced(self):
+        feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        direct = collision_fixture({n:[0,0,0.05,0,0,0,1] for n in feet})
+        expected = wbc.collision_clearance(direct)
+        for radius,scale in ((1.0,0.005), (0.5,0.01), (0.0025,2.0)):
+            scaled = copy.deepcopy(direct)
+            for foot in scaled["feet"].values():
+                shape = foot["colliders"][0]
+                shape["radius_m"] = radius
+                matrix = np.asarray(shape["body_from_shape"])
+                matrix[:3,:3] *= scale
+                shape["body_from_shape"] = matrix.tolist()
+            actual = wbc.collision_clearance(scaled)
+            with self.subTest(radius=radius,scale=scale):
+                self.assertAlmostEqual(actual["minimum_clearance_m"], expected["minimum_clearance_m"])
+                for name in feet:
+                    self.assertAlmostEqual(actual["feet"][name]["colliders"][0]["radius_world_m"], 0.005)
+        for radius,scale in ((0.005,100.0), (1.0,1.0), (0.0,1.0), (-1.0,0.005)):
+            invalid = copy.deepcopy(direct)
+            shape = invalid["feet"][feet[0]]["colliders"][0]
+            shape["radius_m"] = radius
+            matrix = np.asarray(shape["body_from_shape"])
+            matrix[:3,:3] *= scale
+            shape["body_from_shape"] = matrix.tolist()
+            with self.subTest(radius=radius,scale=scale), self.assertRaisesRegex(ValueError, feet[0]):
+                wbc.collision_clearance(invalid)
+
     def test_usd_clearance_reader_uses_body_relative_geometry_with_stale_world_transforms(self):
         feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
         class Matrix:
@@ -421,13 +448,21 @@ class ControllerAdapterTests(unittest.TestCase):
         module.Gf = SimpleNamespace(Vec3d=lambda *v: np.array(v))
         module.Usd = SimpleNamespace(PrimRange=lambda root, flags: [root,*shapes[root.path]], TraverseInstanceProxies=lambda: None)
         module.UsdPhysics = SimpleNamespace(CollisionAPI=lambda p: SimpleNamespace(GetCollisionEnabledAttr=lambda: SimpleNamespace(Get=lambda:p.enabled)))
+        radius = [0.005]
         module.UsdGeom = SimpleNamespace(GetStageUpAxis=lambda stage: "Z", GetStageMetersPerUnit=lambda stage: 1.0,
             XformCache=lambda: SimpleNamespace(GetLocalToWorldTransform=lambda p:Matrix(matrices[p.path])),
-            Sphere=lambda p:SimpleNamespace(GetRadiusAttr=lambda:SimpleNamespace(Get=lambda:0.005)))
+            Sphere=lambda p:SimpleNamespace(GetRadiusAttr=lambda:SimpleNamespace(Get=lambda:radius[0])))
         with mock.patch.dict(sys.modules, {"pxr":module}):
             geometry = runner.read_collision_geometry(SimpleNamespace(GetPrimAtPath=lambda p:roots[p]), actual)
             self.assertAlmostEqual(wbc.collision_clearance(geometry)["minimum_clearance_m"], 0.015)
             self.assertEqual(len(geometry["feet"][feet[0]]["colliders"]), 1)
+            radius[0] = 1.0
+            for name in feet:
+                path = f"/World/envs/env_0/Robot/{name}"
+                local = np.eye(4)*0.005; local[3,3]=1.0; local[2,3]=-0.03
+                matrices[path+"/collisions/Sphere"] = matrices[path] @ local
+            scaled = runner.read_collision_geometry(SimpleNamespace(GetPrimAtPath=lambda p:roots[p]), actual)
+            self.assertAlmostEqual(wbc.collision_clearance(scaled)["minimum_clearance_m"], 0.015)
             shapes[f"/World/envs/env_0/Robot/{feet[0]}"][0].kind = "Mesh"
             with self.assertRaisesRegex(RuntimeError, "Unsupported initial foot collider"):
                 runner.read_collision_geometry(SimpleNamespace(GetPrimAtPath=lambda p:roots[p]), actual)
@@ -733,6 +768,21 @@ class ControllerLaunchTests(unittest.TestCase):
             with mock.patch.object(runner, "read_collision_geometry", side_effect=too_low):
                 with self.assertRaisesRegex(RuntimeError, "above the configured bound"):
                     runner.balance_check(placement_profile, asset, runtime, contract, reference, Path("unused.onnx"), geometry_failure)
+            self.assertEqual(Simulation.steps, steps_before)
+            self.assertEqual(Policy.observations, [])
+            invalid_dimensions = directory / "invalid-dimensions"
+            invalid_dimensions.mkdir()
+            def oversized_sphere(stage, poses):
+                result = collision_fixture(poses)
+                for foot in result["feet"].values(): foot["colliders"][0]["radius_m"] = 1.0
+                return result
+            with mock.patch.object(runner, "read_collision_geometry", side_effect=oversized_sphere):
+                with self.assertRaisesRegex(ValueError, "world_radius_m=1"):
+                    runner.balance_check(placement_profile, asset, runtime, contract, reference, Path("unused.onnx"), invalid_dimensions)
+            partial = json.loads((invalid_dimensions / "initial-placement.json").read_text())
+            self.assertEqual(partial["status"], "measuring_initial_placement")
+            self.assertEqual(partial["before_geometry"]["feet"]["left_ankle_roll_link"]["colliders"][0]["radius_m"], 1.0)
+            self.assertNotIn("before_clearance", partial)
             self.assertEqual(Simulation.steps, steps_before)
             self.assertEqual(Policy.observations, [])
             with mock.patch.object(wbc, "prepare_model", side_effect=AssertionError("model accessed")), \
