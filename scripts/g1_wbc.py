@@ -237,6 +237,82 @@ def load_contract(path: Path):
     return contract, robot
 
 
+def palm_inertial_reference(contract):
+    """Diagonalize the pinned left-palm tensor in its link frame, in SI units."""
+    path = ROOT / contract["reference_urdf"]
+    if hashlib.sha256(path.read_bytes()).hexdigest() != contract["reference_urdf_sha256"]:
+        raise ValueError("Reference URDF hash mismatch")
+    inertial = ET.parse(path).getroot().find("link[@name='left_hand_palm_link']/inertial")
+    mass = float(inertial.find("mass").attrib["value"])
+    origin = inertial.find("origin")
+    com = finite([float(v) for v in origin.attrib["xyz"].split()], (3,))
+    rpy = finite([float(v) for v in origin.attrib.get("rpy", "0 0 0").split()], (3,))
+    rotation = (axis_rotation([0, 0, 1], rpy[2]) @ axis_rotation([0, 1, 0], rpy[1]) @
+                axis_rotation([1, 0, 0], rpy[0]))
+    data = {k: float(v) for k, v in inertial.find("inertia").attrib.items()}
+    tensor = finite([[data["ixx"], data["ixy"], data["ixz"]],
+                     [data["ixy"], data["iyy"], data["iyz"]],
+                     [data["ixz"], data["iyz"], data["izz"]]], (3, 3))
+    tensor = rotation @ tensor @ rotation.T
+    moments, axes = np.linalg.eigh(tensor)
+    if not math.isfinite(mass) or mass <= 0 or np.min(moments) <= 0 or moments[-1] > sum(moments[:2]) + 1e-12:
+        raise ValueError("Invalid palm mass or physical inertia")
+    if np.linalg.det(axes) < 0:
+        axes[:, -1] *= -1
+    quat = matrix_quat_xyzw(axes)
+    if not np.allclose(axes @ np.diag(moments) @ axes.T, tensor, atol=1e-12, rtol=0):
+        raise ValueError("Palm inertia diagonalization failed")
+    return {"body": "left_hand_palm_link", "reference_urdf": contract["reference_urdf"],
+            "reference_urdf_sha256": contract["reference_urdf_sha256"], "mass_kg": mass,
+            "com_b_m": com.tolist(), "inertia_b_kg_m2": tensor.tolist(),
+            "principal_inertia_kg_m2": moments.tolist(), "principal_axes_xyzw": quat.tolist()}
+
+
+def palm_override_summary(evidence, expected):
+    """Validate authored and actual SI values; tensor orientation matters here."""
+    saved_reference = evidence["reference"]
+    if (any(saved_reference[k] != expected[k] for k in ("body", "reference_urdf", "reference_urdf_sha256")) or
+            evidence["applied_before_reset"] is not True or
+            evidence["edit_layer"] != "session" or
+            evidence["prim_path"] != "/World/envs/env_0/Robot/left_hand/left_hand_palm_link"):
+        raise ValueError("Invalid palm inertial override provenance")
+    if evidence["before_usd"]["right"] != evidence["after_usd"]["right"]:
+        raise ValueError("Right-palm USD properties changed during left-palm override")
+
+    def tensor_from_usd(value):
+        rotation = quat_xyzw_matrix(value["principal_axes_xyzw"])
+        return rotation @ np.diag(finite(value["principal_inertia_kg_m2"], (3,))) @ rotation.T
+
+    # LAPACK eigenvector signs/roundoff can differ between Mac and Linux.
+    # Compare the represented tensor, not an arbitrary eigenvector basis.
+    for key, shape in (("mass_kg", ()), ("com_b_m", (3,)), ("inertia_b_kg_m2", (3, 3))):
+        if not np.allclose(finite(saved_reference[key], shape), finite(expected[key], shape), atol=1e-12, rtol=0):
+            raise ValueError("Saved palm reference differs from the pinned URDF")
+    if not np.allclose(tensor_from_usd(saved_reference), expected["inertia_b_kg_m2"], atol=1e-12, rtol=0):
+        raise ValueError("Saved palm principal axes do not represent the pinned tensor")
+
+    def compare(actual, wanted, tensor, label):
+        errors = {"mass_kg": abs(float(finite(actual["mass_kg"], ()))-wanted["mass_kg"]),
+                  "com_m": float(np.max(np.abs(finite(actual["com_b_m"], (3,))-finite(wanted["com_b_m"], (3,))))),
+                  "inertia_kg_m2": float(np.max(np.abs(finite(tensor, (3, 3))-finite(wanted["inertia_b_kg_m2"], (3, 3)))))}
+        if any(errors[k] > tolerance for k, tolerance in (("mass_kg", 1e-6), ("com_m", 1e-6), ("inertia_kg_m2", 1e-8))):
+            raise ValueError(f"Palm inertial override mismatch ({label}): {errors}")
+        return errors
+
+    authored = evidence["after_usd"]["left"]
+    if authored["has_mass_api"] is not True:
+        raise ValueError("Left-palm PhysicsMassAPI was not applied")
+    result = {"authored_left_max_absolute_errors": compare(authored, expected, tensor_from_usd(authored), "authored left")}
+    right = evidence["after_usd"]["right"]
+    right_expected = {**right, "inertia_b_kg_m2": tensor_from_usd(right).tolist()}
+    for side, wanted in (("left", expected), ("right", right_expected)):
+        actual = evidence["runtime"][side]
+        result[f"runtime_{side}_max_absolute_errors"] = compare(actual, wanted, actual["inertia_b_kg_m2"], f"runtime {side}")
+    return {"status": "verified_palm_inertial_override", **result,
+            "tolerances": {"mass_kg": 1e-6, "com_m": 1e-6, "inertia_kg_m2": 1e-8},
+            "tensor_semantics": "Pinned PhysX tensor API: at COM, rigid-body-prim frame, column-major; no world-frame rotation."}
+
+
 def actuator_limits(contract, reference):
     """Keep experiment motor bounds explicit and separate from FK revision data."""
     limits = {name: {key: values[key] for key in ("effort", "velocity")}

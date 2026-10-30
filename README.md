@@ -174,6 +174,28 @@ The bounded stages are GPU preflight and a static audit. No image or dependency 
 
 Analyze a copied audit on the Mac with the same `--analyze-run outputs/isaac/RUN_ID` command. `passed_dynamics_audit` means static collection and evidence validation completed; it does not establish balance, walking or a drift cause. Native collection must be validated on the selected worker before relying on the comparison. Existing deadlines/billing apply, with no automatic retry or parameter change.
 
+### Compare left-palm inertial properties
+
+The separate [palm profile](configs/isaac_g1_palm.json) preserves the placement profile's policy, observation history, controllers/gains, joint limits, fingers, armatures, contacts, seed and timing. It changes only the left palm's mass, body-local COM and full inertia to the existing hash-pinned rev 1.0 URDF. It derives principal moments and a proper principal-axis rotation from the left tensor, including its mirrored off-diagonal terms. The right-hand values are not copied.
+
+The runner applies [USD mass properties](https://openusd.org/dev/api/class_usd_physics_mass_a_p_i.html) in the stage's session layer after spawning and before physics reset. It rejects an already initialized articulation, unexpected palm paths/proxies or stage units other than meters/kilograms. It does not save changes into the vendor asset. `palm-inertial-override.json` retains source/hash, before/after authored properties and actual runtime mass/COM/inertia for both palms, including values from a failed application. Right-palm authored values must remain unchanged.
+
+First perform one static audit in the existing remote Isaac image:
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_palm.json --stage dynamics
+```
+
+Inspect `palm-inertial-override.json` for `passed_palm_inertial_override` and the run summary for `passed_dynamics_audit`. Only after this succeeds, perform one bounded five-second comparison:
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_palm.json --stage balance
+```
+
+The verification checks mass within 1e-6 kg, COM components within 1e-6 m and full inertia entries within 1e-8 kg m². These are project float-buffer acceptance tolerances. For this focused PhysX check, the [tensor API](https://docs.omniverse.nvidia.com/kit/docs/omni_physics/109.0/extensions/runtime/source/omni.physics.tensors/docs/api/python.html#omni.physics.tensors.impl.api.ArticulationView.get_inertias) specifies column-major inertia at COM in the rigid-body-prim frame; the pinned Isaac implementation forwards that data in public body order. The comparison therefore checks tensor orientation as well as moments. Historical general dynamics reports retain their eigenvalue-only comparison. An application mismatch stops before kinematic probes or policy actions. CPU replay rechecks the saved override and, for static audits, its agreement with the full raw snapshot.
+
+Compare displacement, final speed, tilt, foot contacts and arm motion against the placement profile; matching physical properties alone does not establish stationary control. The static audit and rollout are separate manual runs with existing deadlines and billing, not an automatic loop. No image rebuild or dependency change is required. Actual application and motion still require GPU validation. Stop the Modal session with `fmr-stop` when finished.
+
 ### Record a G1 motion check
 
 The separate [recording profile](configs/isaac_record.json) uses one environment, seed 0, zero actions, a 640 x 360 camera and 500 environment steps. It captures every two steps. At this task's 0.02 s control step, that produces 250 frames at 25 FPS covering 10 simulated seconds. Video timing comes from the actual environment step size, not wall-clock execution speed. This is a recording/runtime check, not a trained walking policy.
@@ -309,6 +331,7 @@ Keep this table current in the same commit as each new module or third-party add
 | Zero-command contact diagnostics and CPU analysis | Created during the hackathon | Optional per-physics-step foot forces/twists, authored material inspection, effort-buffer comparisons with native-execution limits, policy input/state capture and saved-run analysis with evidence validation | [Diagnostic profile](configs/isaac_g1_diagnostics.json), [runner and analyzer](scripts/isaac_g1_wbc.py), [summary mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing Isaac sensor and USD APIs |
 | Geometry-based initial placement comparison | Created during the hackathon | Current-body/relative-USD collision geometry capture, bounded initial vertical translation independent of the policy height command, and saved clearance revalidation | [Placement profile](configs/isaac_g1_placement.json), [runner](scripts/isaac_g1_wbc.py), [clearance mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing OpenUSD APIs |
 | Static G1 dynamics and control audit | Created during the hackathon | Shared-runner static collection, mass/COM and principal-inertia comparison, resolved actuator/solver inspection, readable tables and CPU evidence replay | [Runner](scripts/isaac_g1_wbc.py), [comparison mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); uses existing Isaac/PhysX APIs |
+| Left-palm inertial comparison | Created during the hackathon | Separate placement-preserving profile, pinned left-tensor diagonalization, session-layer authoring before reset, actual mass/COM/full-inertia guards and CPU evidence replay | [Profile](configs/isaac_g1_palm.json), [runner](scripts/isaac_g1_wbc.py), [mathematics](scripts/g1_wbc.py), [checks](tests/test_g1_wbc.py); derives values from the existing attributed URDF |
 | G1 deployment dynamics reference | Derived third-party robot/controller data | Hash-pinned inertial and control parameters extracted from the published deployment model/configuration/source; not a simulator or a new robot/policy | [Derived reference and source hashes](assets/references/g1_wbc_dynamics.json), [NVIDIA source terms](licenses/GR00T-WBC.txt), [Unitree notice](licenses/UNITREE-BSD-3-CLAUSE.txt) |
 | GR00T-WBC balance checkpoint and G1 reference kinematics | Third-party model and robot data | Downloaded pretrained balance inference and reference-only frame checks; no original robot or pretrained-policy claim | [Pinned NVIDIA controller source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), [upstream rev 1.0 URDF](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf), [local reference](assets/references/g1_wbc.urdf), [NVIDIA code/model terms](licenses/GR00T-WBC.txt), [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt); weights remain Git-ignored |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |

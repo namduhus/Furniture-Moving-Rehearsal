@@ -20,6 +20,102 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 
 
+def apply_palm_override(stage, robot, contract, directory):
+    """Author only the left palm in the session layer before physics reset."""
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+    from g1_wbc import palm_inertial_reference
+
+    wanted = palm_inertial_reference(contract)
+    path = "/World/envs/env_0/Robot/left_hand/left_hand_palm_link"
+    report = {"status": "preparing_palm_inertial_override", "reference": wanted,
+              "prim_path": path, "edit_layer": "session", "applied_before_reset": False}
+    write_json(directory / "palm-inertial-override.json", report)
+    if robot.is_initialized:
+        raise RuntimeError("Palm inertial override must precede physics initialization")
+    if UsdGeom.GetStageMetersPerUnit(stage) != 1.0 or UsdPhysics.GetStageKilogramsPerUnit(stage) != 1.0:
+        raise RuntimeError("Palm inertial override requires meter/kilogram stage units")
+
+    def read(side):
+        body_path = f"/World/envs/env_0/Robot/{side}_hand/{side}_hand_palm_link"
+        prim = stage.GetPrimAtPath(body_path)
+        if not prim or not prim.HasAPI(UsdPhysics.RigidBodyAPI) or prim.IsInstanceProxy():
+            raise RuntimeError(f"Expected a non-proxy palm rigid body: {body_path}")
+        api = UsdPhysics.MassAPI(prim)
+        result = {"has_mass_api": bool(prim.HasAPI(UsdPhysics.MassAPI))}
+        for name, attribute in (("mass_kg", api.GetMassAttr()), ("com_b_m", api.GetCenterOfMassAttr()),
+                                ("principal_inertia_kg_m2", api.GetDiagonalInertiaAttr()),
+                                ("principal_axes_xyzw", api.GetPrincipalAxesAttr())):
+            if attribute and attribute.HasAuthoredValueOpinion():
+                value = attribute.Get()
+                if name == "principal_axes_xyzw":
+                    result[name] = [*map(float, value.GetImaginary()), float(value.GetReal())]
+                elif name == "mass_kg":
+                    result[name] = float(value)
+                else:
+                    result[name] = list(map(float, value))
+        return result
+
+    report["before_usd"] = {side: read(side) for side in ("left", "right")}
+    write_json(directory / "palm-inertial-override.json", report)
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        api = UsdPhysics.MassAPI.Apply(stage.GetPrimAtPath(path))
+        quat = wanted["principal_axes_xyzw"]
+        for attr, value in ((api.CreateMassAttr(), wanted["mass_kg"]),
+                            (api.CreateCenterOfMassAttr(), Gf.Vec3f(*wanted["com_b_m"])),
+                            (api.CreateDiagonalInertiaAttr(), Gf.Vec3f(*wanted["principal_inertia_kg_m2"])),
+                            (api.CreatePrincipalAxesAttr(), Gf.Quatf(quat[3], Gf.Vec3f(*quat[:3])))):
+            if not attr.Set(value):
+                raise RuntimeError("Unable to author left-palm inertial property")
+    report["after_usd"] = {side: read(side) for side in ("left", "right")}
+    report.update(status="authored_before_physics_reset", applied_before_reset=True)
+    write_json(directory / "palm-inertial-override.json", report)
+    return report
+
+
+def read_palm_runtime(robot):
+    """Read the pinned PhysX body's local COM and full inertia in public order."""
+    import numpy as np
+
+    def array(value):
+        value = value.torch if hasattr(value, "torch") else value
+        return value[0].detach().cpu().numpy().copy()
+
+    masses, poses, inertias = (array(robot.data.body_mass), array(robot.data.body_com_pose_b),
+                              array(robot.data.body_inertia))
+    result = {}
+    for side in ("left", "right"):
+        name = f"{side}_hand_palm_link"
+        if list(robot.body_names).count(name) != 1:
+            raise RuntimeError(f"Expected exactly one runtime palm: {name}")
+        i = robot.body_names.index(name)
+        result[side] = {"mass_kg": float(masses[i]), "com_b_m": poses[i, :3].tolist(),
+                        "com_pose_b_xyzw": poses[i].tolist(),
+                        "inertia_b_kg_m2": np.asarray(inertias[i]).reshape(3, 3, order="F").tolist()}
+    return result
+
+
+def analyze_palm_override(directory, profile, contract, measured=None):
+    if not profile.get("inertial_override"):
+        return None
+    from g1_wbc import palm_inertial_reference, palm_override_summary, finite
+    import numpy as np
+
+    evidence = json.loads((directory / "palm-inertial-override.json").read_text())
+    if evidence["status"] != "passed_palm_inertial_override":
+        raise ValueError("Incomplete palm inertial override evidence")
+    report = palm_override_summary(evidence, palm_inertial_reference(contract))
+    if measured is not None:
+        for side in ("left", "right"):
+            i = measured["body_names"].index(f"{side}_hand_palm_link")
+            actual = evidence["runtime"][side]
+            if (abs(actual["mass_kg"]-measured["body_mass_kg"][i]) > 1e-7 or
+                    not np.allclose(finite(actual["com_b_m"], (3,)), finite(measured["body_com_pose_b_xyzw"][i], (7,))[:3], atol=1e-7, rtol=0) or
+                    not np.allclose(finite(actual["inertia_b_kg_m2"], (3, 3)),
+                        finite(measured["body_inertia_backend_kg_m2"][i], (9,)).reshape(3, 3, order="F"), atol=1e-10, rtol=0)):
+                raise ValueError("Palm override evidence differs from the static dynamics snapshot")
+    return report
+
+
 def read_runtime_dynamics(robot, source_to_asset, usd_path, *, directory=None):
     """Capture backend-reordered buffers and resolved actuator parameters."""
     from isaaclab.actuators import ActuatorBase, ImplicitActuatorCfg
@@ -116,6 +212,8 @@ def analyze_dynamics(directory):
     report = dynamics_comparison(measured, reference, source, contract, asset)
     report["initial_placement"] = placement_summary(json.loads((directory / "initial-placement.json").read_text()),
         profile["initialization"], contract["height_command"], initial["root_pose_xyzw"])
+    if profile.get("inertial_override"):
+        report["inertial_override"] = analyze_palm_override(directory, profile, contract, measured)
     return report
 
 
@@ -258,6 +356,9 @@ def analyze_run(directory):
         report["initial_placement"] = placement_summary(
             json.loads((directory / "initial-placement.json").read_text()), profile["initialization"],
             json.loads((directory / "controller-contract.json").read_text())["height_command"], initial["root_pose_xyzw"])
+    if profile.get("inertial_override"):
+        report["inertial_override"] = analyze_palm_override(directory, profile,
+            json.loads((directory / "controller-contract.json").read_text()))
     if not profile.get("diagnostics"):
         report["limitation"] = "This historical run did not record contact forces or policy inputs; foot slip cannot be determined."
         return report
@@ -366,8 +467,8 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "scope"}:
-            raise ValueError("Trial extensions may only add diagnostics and reviewed initial placement")
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "scope"}:
+            raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm override")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
         if (not isinstance(diagnostics, dict) or
@@ -384,6 +485,10 @@ def load_plan(path):
                 type(initialization["maximum_vertical_shift_m"]) not in (int, float) or
                 not 0 < initialization["maximum_vertical_shift_m"] <= 0.1):
             raise ValueError("Invalid initial placement experiment configuration")
+    if "inertial_override" in profile:
+        if (not profile.get("initialization") or
+                profile["inertial_override"] != {"body": "left_hand_palm_link", "source": "pinned_urdf"}):
+            raise ValueError("Only the pinned left-palm inertial override with initial placement is reviewed")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if type(profile["control_steps"]) is not int or not 4 <= profile["control_steps"] <= 500:
         raise ValueError("Standing trial needs 4-500 control steps")
@@ -512,8 +617,16 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                                  "enable_cameras": not audit_only, "kit_args": "--allow-root"}), record_worker_failure(directory, result, stage):
         sim = sim_utils.SimulationContext(cfg.sim)
         scene = instantiate(cfg.scene)
+        palm_override = apply_palm_override(sim.stage, scene["robot"], contract, directory) if profile.get("inertial_override") else None
         sim.reset()
         robot, camera = scene["robot"], None if audit_only else scene["camera"]
+        if palm_override is not None:
+            from g1_wbc import palm_override_summary, palm_inertial_reference
+            palm_override["runtime"] = read_palm_runtime(robot)
+            write_json(directory / "palm-inertial-override.json", palm_override)
+            palm_override["verification"] = palm_override_summary(palm_override, palm_inertial_reference(contract))
+            palm_override["status"] = "passed_palm_inertial_override"
+            write_json(directory / "palm-inertial-override.json", palm_override)
 
         def tensor(value):
             return value.torch if hasattr(value, "torch") else value
@@ -945,6 +1058,7 @@ def main(argv=None):
                           "model_download_bytes": 1886682 if args.prepare_model else 0,
                           "contact_diagnostics": bool(profile.get("diagnostics")),
                           "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
+                          "inertial_override": profile.get("inertial_override"),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0

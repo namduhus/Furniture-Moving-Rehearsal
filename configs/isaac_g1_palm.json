@@ -1,0 +1,17 @@
+{
+  "base_profile": "configs/isaac_g1_balance.json",
+  "diagnostics": {
+    "foot_body_names": ["left_ankle_roll_link", "right_ankle_roll_link"],
+    "minimum_normal_force_n": 1.0
+  },
+  "initialization": {
+    "mode": "collision_clearance",
+    "minimum_clearance_m": 0.001,
+    "maximum_vertical_shift_m": 0.1
+  },
+  "inertial_override": {
+    "body": "left_hand_palm_link",
+    "source": "pinned_urdf"
+  },
+  "scope": "Change only left-palm mass, local COM and full inertia to the pinned URDF. Preserve the existing placement, policy, actuators, gains, contacts and timing; verify actual values before control."
+}

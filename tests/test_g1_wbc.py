@@ -71,6 +71,28 @@ def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names
     return fields
 
 
+def palm_fixture(contract):
+    reference = wbc.palm_inertial_reference(contract)
+    left = {k: copy.deepcopy(reference[k]) for k in ("mass_kg", "com_b_m", "principal_inertia_kg_m2", "principal_axes_xyzw")}
+    left["has_mass_api"] = True
+    mirror = np.diag([1, -1, 1])
+    right_tensor = mirror @ np.array(reference["inertia_b_kg_m2"]) @ mirror
+    moments, axes = np.linalg.eigh(right_tensor)
+    if np.linalg.det(axes) < 0: axes[:, -1] *= -1
+    right = {"has_mass_api": True, "mass_kg": reference["mass_kg"],
+             "com_b_m": (mirror @ reference["com_b_m"]).tolist(),
+             "principal_inertia_kg_m2": moments.tolist(), "principal_axes_xyzw": wbc.matrix_quat_xyzw(axes).tolist()}
+    return {"status": "passed_palm_inertial_override", "reference": reference,
+        "applied_before_reset": True, "edit_layer": "session",
+        "prim_path": "/World/envs/env_0/Robot/left_hand/left_hand_palm_link",
+        "before_usd": {"left": {"has_mass_api": False}, "right": copy.deepcopy(right)},
+        "after_usd": {"left": left, "right": right},
+        "runtime": {"left": {"mass_kg": reference["mass_kg"], "com_b_m": reference["com_b_m"],
+                             "inertia_b_kg_m2": reference["inertia_b_kg_m2"]},
+                    "right": {"mass_kg": right["mass_kg"], "com_b_m": right["com_b_m"],
+                              "inertia_b_kg_m2": right_tensor.tolist()}}}
+
+
 class ControllerAdapterTests(unittest.TestCase):
     def setUp(self):
         self.contract, self.robot = wbc.load_contract(ROOT / "configs/g1_wbc_reference.json")
@@ -467,6 +489,166 @@ class ControllerAdapterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.load_plan(path)
 
+    def test_palm_profile_preserves_placement_and_rejects_other_interventions(self):
+        base, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
+        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "configs/isaac_g1_palm.json")
+        self.assertEqual((asset, runtime), (trial_asset, trial_runtime))
+        self.assertEqual({k: v for k, v in base.items() if k != "scope"},
+                         {k: v for k, v in trial.items() if k not in ("scope", "inertial_override")})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            for override in (None, {"body": "right_hand_palm_link", "source": "pinned_urdf"},
+                             {"body": "left_hand_palm_link", "source": "guessed"},
+                             {**trial["inertial_override"], "mass_kg": 1}):
+                path.write_text(json.dumps({**trial, "inertial_override": override}))
+                with self.subTest(override=override), self.assertRaises(ValueError): runner.load_plan(path)
+        with mock.patch.object(wbc, "prepare_model", side_effect=AssertionError("model access")), \
+                mock.patch.object(runner, "run_stage", side_effect=AssertionError("GPU launch")), mock.patch("builtins.print"):
+            self.assertEqual(runner.main(["--profile", str(ROOT / "configs/isaac_g1_palm.json"), "--stage", "dynamics", "--dry-run"]), 0)
+
+    def test_palm_tensor_preserves_mirrored_offdiagonals_and_proper_axes(self):
+        reference = wbc.palm_inertial_reference(self.contract)
+        self.assertEqual(reference["mass_kg"], 0.37283854)
+        self.assertLess(reference["com_b_m"][1], 0)
+        tensor = np.array(reference["inertia_b_kg_m2"])
+        self.assertAlmostEqual(tensor[0, 1], -0.00001595519465, places=14)
+        self.assertAlmostEqual(tensor[1, 2], -0.00000042279435, places=14)
+        axes = wbc.quat_xyzw_matrix(reference["principal_axes_xyzw"])
+        self.assertAlmostEqual(np.linalg.det(axes), 1)
+        np.testing.assert_allclose(axes @ np.diag(reference["principal_inertia_kg_m2"]) @ axes.T, tensor, atol=1e-12, rtol=0)
+        with mock.patch.object(wbc.hashlib, "sha256", return_value=SimpleNamespace(hexdigest=lambda: "wrong")):
+            with self.assertRaisesRegex(ValueError, "hash mismatch"): wbc.palm_inertial_reference(self.contract)
+
+    def test_palm_verification_rejects_missing_mass_wrong_axes_and_mirrored_com(self):
+        evidence = palm_fixture(self.contract)
+        expected = evidence["reference"]
+        self.assertEqual(wbc.palm_override_summary(evidence, expected)["status"], "verified_palm_inertial_override")
+        equivalent = copy.deepcopy(evidence)
+        axes = wbc.quat_xyzw_matrix(expected["principal_axes_xyzw"]) @ np.diag([-1, -1, 1])
+        equivalent["reference"]["principal_axes_xyzw"] = wbc.matrix_quat_xyzw(axes).tolist()
+        equivalent["reference"]["principal_inertia_kg_m2"][0] += 1e-16
+        self.assertEqual(wbc.palm_override_summary(equivalent, expected)["status"], "verified_palm_inertial_override")
+        variants = []
+        invalid = copy.deepcopy(evidence); invalid["runtime"]["left"]["mass_kg"] = 0.214904502; variants.append(invalid)
+        invalid = copy.deepcopy(evidence); invalid["runtime"]["left"]["com_b_m"][1] *= -1; variants.append(invalid)
+        invalid = copy.deepcopy(evidence); invalid["runtime"]["left"]["inertia_b_kg_m2"] = evidence["runtime"]["right"]["inertia_b_kg_m2"]; variants.append(invalid)
+        invalid = copy.deepcopy(evidence); invalid["runtime"]["left"]["mass_kg"] = float("nan"); variants.append(invalid)
+        invalid = copy.deepcopy(evidence); invalid["before_usd"]["right"]["mass_kg"] = 1; variants.append(invalid)
+        invalid = copy.deepcopy(evidence); invalid["applied_before_reset"] = False; variants.append(invalid)
+        for invalid in variants:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError): wbc.palm_override_summary(invalid, expected)
+        # The wrong mirrored tensor has the same spectrum: eigenvalues alone cannot validate this override.
+        np.testing.assert_allclose(np.linalg.eigvalsh(evidence["runtime"]["left"]["inertia_b_kg_m2"]),
+                                   np.linalg.eigvalsh(evidence["runtime"]["right"]["inertia_b_kg_m2"]))
+
+    def test_palm_override_authors_session_only_and_rejects_late_or_wrong_unit_edits(self):
+        evidence = palm_fixture(self.contract)
+        stage = SimpleNamespace(target="root", writes=[], units=1.0)
+        values = {"left": {}, "right": copy.deepcopy(evidence["after_usd"]["right"])}
+
+        class Quat:
+            def __init__(self, real, imaginary): self.real, self.imaginary = float(np.float32(real)), imaginary
+            def GetReal(self): return self.real
+            def GetImaginary(self): return self.imaginary
+
+        class Attribute:
+            def __init__(self, side, key): self.side, self.key = side, key
+            def HasAuthoredValueOpinion(self): return self.key in values[self.side]
+            def Get(self):
+                value = values[self.side][self.key]
+                return Quat(value[3], value[:3]) if self.key == "principal_axes_xyzw" else value
+            def Set(self, value):
+                self_test.assertEqual(stage.target, "session")
+                self_test.assertEqual(self.side, "left")
+                if isinstance(value, Quat): value = [*value.GetImaginary(), value.GetReal()]
+                values[self.side][self.key] = copy.deepcopy(value)
+                stage.writes.append(self.key)
+                return True
+
+        class Prim:
+            def __init__(self, side): self.side = side
+            def HasAPI(self, api): return api == "Rigid" or values[self.side].get("has_mass_api", False)
+            def IsInstanceProxy(self): return False
+
+        class MassAPI:
+            def __init__(self, prim): self.side = prim.side
+            @staticmethod
+            def Apply(prim):
+                self_test.assertEqual(stage.target, "session")
+                values[prim.side]["has_mass_api"] = True
+                return MassAPI(prim)
+            def GetMassAttr(self): return Attribute(self.side, "mass_kg")
+            def GetCenterOfMassAttr(self): return Attribute(self.side, "com_b_m")
+            def GetDiagonalInertiaAttr(self): return Attribute(self.side, "principal_inertia_kg_m2")
+            def GetPrincipalAxesAttr(self): return Attribute(self.side, "principal_axes_xyzw")
+            CreateMassAttr = GetMassAttr
+            CreateCenterOfMassAttr = GetCenterOfMassAttr
+            CreateDiagonalInertiaAttr = GetDiagonalInertiaAttr
+            CreatePrincipalAxesAttr = GetPrincipalAxesAttr
+
+        @contextmanager
+        def edit(stage, layer):
+            old = stage.target; stage.target = layer
+            try: yield
+            finally: stage.target = old
+
+        self_test = self
+        stage.GetPrimAtPath = lambda path: Prim("left" if "/left_hand/" in path else "right")
+        stage.GetSessionLayer = lambda: "session"
+        pxr = SimpleNamespace(Gf=SimpleNamespace(Vec3f=lambda *v: np.array(v, dtype=np.float32).tolist(), Quatf=Quat),
+            Usd=SimpleNamespace(EditContext=edit), UsdGeom=SimpleNamespace(GetStageMetersPerUnit=lambda s:s.units),
+            UsdPhysics=SimpleNamespace(MassAPI=MassAPI, RigidBodyAPI="Rigid", GetStageKilogramsPerUnit=lambda s:1.0))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"pxr": pxr}):
+            directory = Path(tmp)
+            report = runner.apply_palm_override(stage, SimpleNamespace(is_initialized=False), self.contract, directory)
+            report["runtime"] = evidence["runtime"]
+            wbc.palm_override_summary(report, evidence["reference"])
+            self.assertEqual(stage.target, "root")
+            self.assertEqual(len(stage.writes), 4)
+            self.assertFalse(report["before_usd"]["left"]["has_mass_api"])
+            self.assertEqual(report["before_usd"]["right"], report["after_usd"]["right"])
+            self.assertEqual(json.loads((directory / "palm-inertial-override.json").read_text())["status"], "authored_before_physics_reset")
+            for initialized, units in ((True, 1.0), (False, 0.01)):
+                stage.units = units
+                with self.assertRaises(RuntimeError):
+                    runner.apply_palm_override(stage, SimpleNamespace(is_initialized=initialized), self.contract, directory)
+                self.assertEqual(len(stage.writes), 4)
+
+    def test_palm_runtime_reader_maps_names_and_static_replay_checks_shared_raw_values(self):
+        evidence = palm_fixture(self.contract)
+        sides = ["right", "left"]
+
+        class Tensor:
+            def __init__(self, value): self.value = np.array(value, dtype=np.float32)
+            def __getitem__(self, key): return Tensor(self.value[key])
+            def detach(self): return self
+            def cpu(self): return self
+            def numpy(self): return self.value
+
+        masses = [evidence["runtime"][s]["mass_kg"] for s in sides]
+        poses = [[*evidence["runtime"][s]["com_b_m"], *evidence["after_usd"][s]["principal_axes_xyzw"]] for s in sides]
+        tensors = [np.array(evidence["runtime"][s]["inertia_b_kg_m2"]).reshape(9, order="F").tolist() for s in sides]
+        robot = SimpleNamespace(body_names=[f"{s}_hand_palm_link" for s in sides], data=SimpleNamespace(
+            body_mass=SimpleNamespace(torch=Tensor([masses])), body_com_pose_b=Tensor([poses]), body_inertia=Tensor([tensors])))
+        evidence["runtime"] = runner.read_palm_runtime(robot)
+        wbc.palm_override_summary(evidence, evidence["reference"])
+        measured = {"body_names": robot.body_names, "body_mass_kg": masses,
+                    "body_com_pose_b_xyzw": poses, "body_inertia_backend_kg_m2": tensors}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = directory / "palm-inertial-override.json"
+            path.write_text(json.dumps(evidence))
+            profile = {"inertial_override": {"body": "left_hand_palm_link", "source": "pinned_urdf"}}
+            result = runner.analyze_palm_override(directory, profile, self.contract, measured)
+            self.assertEqual(result["status"], "verified_palm_inertial_override")
+            measured["body_mass_kg"][1] -= 0.01
+            with self.assertRaisesRegex(ValueError, "differs from the static dynamics snapshot"):
+                runner.analyze_palm_override(directory, profile, self.contract, measured)
+            evidence["status"] = "authored_before_physics_reset"
+            path.write_text(json.dumps(evidence))
+            with self.assertRaisesRegex(ValueError, "Incomplete palm"):
+                runner.analyze_palm_override(directory, profile, self.contract)
+
     def test_clearance_uses_full_sphere_surface_and_rejects_invalid_or_changed_geometry(self):
         feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
         geometry = collision_fixture({n: [0,0,0.02,0,0,0,1] for n in feet})
@@ -660,6 +842,7 @@ class ControllerLaunchTests(unittest.TestCase):
             joint_names = names
             body_names = list(reference.forward({n: 0 for n in names}))
             is_fixed_base = False
+            is_initialized = False
             q = np.zeros(43)
             dq = np.zeros(43)
             pose = np.r_[0, 0, 0.75, wbc.matrix_quat_xyzw(wbc.axis_rotation([1,0,0], 0.7))]
@@ -702,7 +885,7 @@ class ControllerLaunchTests(unittest.TestCase):
             stage = object()
             steps = 0
             def __init__(self, config): self.config = config
-            def reset(self): pass
+            def reset(self): robot.is_initialized = True
             def forward(self): pass
             def render(self): pass
             def step(self, *, render): Simulation.steps += 1
@@ -728,6 +911,7 @@ class ControllerLaunchTests(unittest.TestCase):
 
         def instantiate(config):
             instantiated.append(config)
+            robot.is_initialized = False
             scene = Scene(robot=robot, camera=Camera())
             if hasattr(config, "feet_contact"):
                 scene["feet_contact"] = SimpleNamespace(
@@ -924,6 +1108,45 @@ class ControllerLaunchTests(unittest.TestCase):
                 raw_path.write_text(json.dumps(invalid))
                 with self.assertRaisesRegex(ValueError,"mass"):
                     runner.analyze_run(audit)
+            palm_profile = {**placement_profile, "inertial_override": {"body": "left_hand_palm_link", "source": "pinned_urdf"}}
+            palm = directory / "palm"; palm.mkdir()
+            for file, value in (("profile.json", palm_profile), ("asset-profile.json", asset), ("controller-contract.json", contract)):
+                (palm / file).write_text(json.dumps(value))
+            Policy.observations.clear()
+            steps_before = Simulation.steps
+            override = palm_fixture(contract)
+            def author_palm(stage, target, controller, directory):
+                self.assertFalse(target.is_initialized)
+                self.assertEqual(Simulation.steps, steps_before)
+                self.assertFalse(Policy.observations)
+                report = copy.deepcopy(override)
+                report["status"] = "authored_before_physics_reset"
+                return report
+            def read_palms(target):
+                self.assertTrue(target.is_initialized)
+                self.assertEqual(Simulation.steps, steps_before)
+                self.assertFalse(Policy.observations)
+                return copy.deepcopy(override["runtime"])
+            with mock.patch.object(runner, "apply_palm_override", side_effect=author_palm), \
+                    mock.patch.object(runner, "read_palm_runtime", side_effect=read_palms), \
+                    mock.patch.object(runner, "read_collision_geometry", side_effect=lambda stage, poses: collision_fixture(poses)):
+                runner.balance_check(palm_profile, asset, runtime, contract, reference, Path("unused.onnx"), palm)
+                runner.validate_stage("balance", palm, palm_profile)
+                self.assertEqual(runner.analyze_run(palm)["inertial_override"]["status"], "verified_palm_inertial_override")
+                self.assertEqual(Simulation.steps-steps_before, 16)
+                self.assertEqual(len(Policy.observations), 4)
+                failed = directory / "palm-not-applied"; failed.mkdir()
+                incorrect = copy.deepcopy(override["runtime"]); incorrect["left"]["mass_kg"] = 0.214904502
+                Policy.observations.clear()
+                steps_before = Simulation.steps
+                with mock.patch.object(runner, "read_palm_runtime", return_value=incorrect), self.assertRaisesRegex(ValueError, "override mismatch"):
+                    runner.balance_check(palm_profile, asset, runtime, contract, reference, Path("unused.onnx"), failed)
+                self.assertEqual(Simulation.steps, steps_before)
+                self.assertFalse(Policy.observations)
+                partial = json.loads((failed / "palm-inertial-override.json").read_text())
+                self.assertEqual(partial["runtime"]["left"]["mass_kg"], 0.214904502)
+                self.assertNotEqual(partial["status"], "passed_palm_inertial_override")
+                self.assertFalse((failed / "trajectory.jsonl").exists())
             invalid_dimensions = directory / "invalid-dimensions"
             invalid_dimensions.mkdir()
             def oversized_sphere(stage, poses):
