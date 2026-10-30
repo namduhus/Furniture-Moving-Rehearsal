@@ -272,7 +272,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Parallel push environments (RL stage 2)
 
-[`scripts/isaac_g1_rl.py`](scripts/isaac_g1_rl.py) builds parallel copies of the slider push with the frozen GR00T walk policy, checks that every copy carries the qualified setup, and measures throughput against the single-environment baseline. It does not train.
+[`scripts/isaac_g1_rl.py`](scripts/isaac_g1_rl.py) builds parallel copies of the slider push with the frozen GR00T walk policy, checks that every copy carries the qualified setup, and measures throughput against the single-environment baseline. It does not train. The [256-environment config](configs/isaac_g1_rl_throughput_256.json) is a shorter scaling check with per-phase timing.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_rl.py --config configs/isaac_g1_rl_throughput.json

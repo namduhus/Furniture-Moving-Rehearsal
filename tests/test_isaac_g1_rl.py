@@ -62,6 +62,9 @@ class BatchAdapterTests(unittest.TestCase):
             policy.batch(np.zeros((4, 515)))
         config, profile, _, _ = rl.load_config(rl.DEFAULT_CONFIG)
         self.assertEqual((config["num_envs"], profile["push_object"]["friction"]), (64, 0.1))
+        scaling, scaling_profile, _, _ = rl.load_config(ROOT / "configs/isaac_g1_rl_throughput_256.json")
+        self.assertEqual((scaling["num_envs"], scaling["control_steps"]), (256, 100))
+        self.assertEqual(scaling_profile, profile)
         raw = json.loads(rl.DEFAULT_CONFIG.read_text())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rl.json"
@@ -199,6 +202,9 @@ class ParallelWorkerTests(unittest.TestCase):
         self.assertEqual((result["fallen_envs"], result["invalid_action_envs"]), (0, 0))
         self.assertAlmostEqual(result["box_progress_m"]["median"], 0.0004*(120-80), places=6)
         self.assertAlmostEqual(result["simulated_seconds_per_env"], 0.6)
+        self.assertEqual(set(result["phase_seconds"]), {"write", "step", "update", "read_observe", "policy", "command"})
+        self.assertLessEqual(sum(result["phase_seconds"].values()), result["wall_seconds"])
+        self.assertAlmostEqual(result["seconds_per_physics_step"], result["wall_seconds"]/120)
 
 
 if __name__ == "__main__":

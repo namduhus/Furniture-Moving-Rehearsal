@@ -1,0 +1,8 @@
+{
+  "push_profile": "configs/isaac_g1_push_sliders.json",
+  "num_envs": 256,
+  "control_steps": 100,
+  "env_spacing_m": 4.0,
+  "stage_timeout_seconds": 600,
+  "scope": "RL stage 2 scaling: 256 parallel copies of the qualified slider push for 2 simulated seconds with per-phase host timing, to compare against the 64-environment run 20261030T170156.129277Z-rl and tell fixed per-step cost from per-environment cost. No training; box progress is not comparable to the 5 s baseline."
+}

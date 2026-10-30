@@ -199,23 +199,33 @@ def run_worker(config, profile, asset, runtime, model_path, directory):
             invalid = np.zeros(count, dtype=bool)
             clipped = np.zeros(count, dtype=int)
             physics_dt = asset["physics_dt"]
-            policy_seconds = 0.0
+            # Host-side phase timing; GPU work not finished by sim.step surfaces at the next device-to-host read.
+            phases = dict.fromkeys(("write", "step", "update", "read_observe", "policy", "command"), 0.0)
+
+            def timed(phase, call, *args, **kwargs):
+                tic = time.perf_counter()
+                value = call(*args, **kwargs)
+                phases[phase] += time.perf_counter() - tic
+                return value
+
             start = time.perf_counter()
             for _ in range(steps):
                 # Source schedule: default targets for the first interval, inference after each physics interval.
                 for _ in range(asset["control_decimation"]):
-                    scene.write_data_to_sim()
-                    sim.step(render=False)
-                    scene.update(physics_dt)
+                    timed("write", scene.write_data_to_sim)
+                    timed("step", sim.step, render=False)
+                    timed("update", scene.update, physics_dt)
+                tic = time.perf_counter()
                 pose = finite(batch(robot.data.root_link_pose_w), (count, 7))
                 observation = history.observe(batch(robot.data.joint_pos)[:, indices], batch(robot.data.joint_vel)[:, indices],
                                               pose[:, 3:], batch(robot.data.root_link_vel_w)[:, 3:], rotation, commands, rpys)
+                phases["read_observe"] += time.perf_counter() - tic
+                actions = timed("policy", policy.batch, observation)
                 tic = time.perf_counter()
-                actions = policy.batch(observation)
-                policy_seconds += time.perf_counter() - tic
                 lower_targets, clip_count, bad = history.targets(actions, limits)
                 targets[:, lower_indices] = lower_targets
                 robot.set_joint_position_target_index(target=device(targets))
+                phases["command"] += time.perf_counter() - tic
                 clipped += clip_count
                 invalid |= bad
                 gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ rotation)[:, 2, :]
@@ -224,7 +234,8 @@ def run_worker(config, profile, asset, runtime, model_path, directory):
             wall = time.perf_counter() - start
             box_end = finite(batch(box.data.root_link_pose_w), (count, 7))
             progress = box_end[:, 0] - box_start[:, 0]
-            result.update(status="passed_rl_throughput", wall_seconds=wall, policy_seconds=policy_seconds,
+            result.update(status="passed_rl_throughput", wall_seconds=wall, policy_seconds=phases["policy"],
+                          phase_seconds=phases, seconds_per_physics_step=wall/(steps*asset["control_decimation"]),
                           env_steps_per_second=count*steps/wall,
                           realtime_factor=count*steps*physics_dt*asset["control_decimation"]/wall,
                           simulated_seconds_per_env=steps*physics_dt*asset["control_decimation"],
@@ -275,7 +286,7 @@ def main(argv=None):
     evidence_path = directory / "rl-worker.json"
     evidence = json.loads(evidence_path.read_text()) if evidence_path.exists() else {"status": "missing"}
     summary = {"status": evidence.get("status") if code == 0 else "failed", "exit_code": code, "run_dir": str(directory),
-               **{k: evidence.get(k) for k in ("env_steps_per_second", "realtime_factor", "fallen_envs",
+               **{k: evidence.get(k) for k in ("env_steps_per_second", "realtime_factor", "phase_seconds", "fallen_envs",
                                                "invalid_action_envs", "box_progress_m", "error")}}
     write_json(directory / "summary.json", summary)
     print(json.dumps(summary), flush=True)
