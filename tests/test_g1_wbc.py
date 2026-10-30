@@ -403,6 +403,8 @@ class ControllerAdapterTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in base.items() if k not in ("scope", "functional_case")},
                          {k: v for k, v in push.items() if k not in ("scope", "functional_case", "push_object", "rpy_command")})
         self.assertEqual(runner.trial_contract(push)[0]["policy_role"], "walk")
+        sliders, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_push_sliders.json")
+        self.assertEqual({**push, "scope": None, "push_object": {**push["push_object"], "friction": 0.1}}, {**sliders, "scope": None})
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
             raw = json.loads((ROOT / "configs/isaac_g1_push.json").read_text())

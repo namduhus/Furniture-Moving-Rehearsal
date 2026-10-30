@@ -268,6 +268,8 @@ The [push profile](configs/isaac_g1_push.json) adds a 0.7 x 0.8 x 1.0 m, 10 kg b
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_push.json --stage balance --stand-run outputs/isaac/STAND_RUN_ID
 ```
 
+The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for box-floor friction 0.1, representing furniture sliders; slider placement itself is not simulated.
+
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
 
 ### Record a G1 motion check
