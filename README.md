@@ -260,6 +260,14 @@ The [crouch-start profile](configs/isaac_g1_crouch_start.json) keeps the arm-hol
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_crouch_start.json --stage balance
 ```
 
+#### Box push
+
+The [push profile](configs/isaac_g1_push.json) adds a 0.7 x 0.8 x 1.0 m, 10 kg box (friction 0.3) 0.1 m ahead of the hands and walks forward with the arms in the hold pose. The gate requires the box to move at least 0.20 m without tipping past 10 degrees. Ground friction combines by multiplication so the feet keep 1.0 and the box keeps its own coefficient.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --profile configs/isaac_g1_push.json --stage balance --stand-run outputs/isaac/STAND_RUN_ID
+```
+
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
 
 ### Record a G1 motion check

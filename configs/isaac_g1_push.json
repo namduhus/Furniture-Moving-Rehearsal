@@ -1,0 +1,41 @@
+{
+  "base_profile": "configs/isaac_g1_balance.json",
+  "diagnostics": {
+    "foot_body_names": [
+      "left_ankle_roll_link",
+      "right_ankle_roll_link"
+    ],
+    "minimum_normal_force_n": 1.0
+  },
+  "initialization": {
+    "mode": "collision_clearance",
+    "minimum_clearance_m": 0.001,
+    "maximum_vertical_shift_m": 0.1
+  },
+  "inertial_override": {
+    "body": "left_hand_palm_link",
+    "source": "pinned_urdf"
+  },
+  "contact_override": {
+    "source": "assets/references/g1_wbc_contact.json"
+  },
+  "arm_hold": "implicit",
+  "push_object": {
+    "size_m": [
+      0.7,
+      0.8,
+      1.0
+    ],
+    "mass_kg": 10.0,
+    "friction": 0.3,
+    "gap_m": 0.1
+  },
+  "scope": "Straight push of a 0.7 x 0.8 x 1.0 m, 10 kg box (friction 0.3) using the qualified crouch-start forward walk with arms in the hold pose; ground/default friction combine by multiply keeps feet at 1.0.",
+  "deployment": "assets/references/g1_wbc_deployment.json",
+  "command": [
+    0.2,
+    0,
+    0
+  ],
+  "functional_case": "push"
+}

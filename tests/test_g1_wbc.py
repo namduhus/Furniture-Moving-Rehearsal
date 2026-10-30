@@ -396,6 +396,47 @@ class ControllerAdapterTests(unittest.TestCase):
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
+    def test_push_profile_object_checks_and_gate(self):
+        base, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_crouch_start_forward.json")
+        push, push_asset, push_runtime = runner.load_plan(ROOT / "configs/isaac_g1_push.json")
+        self.assertEqual((asset, runtime), (push_asset, push_runtime))
+        self.assertEqual({k: v for k, v in base.items() if k not in ("scope", "functional_case")},
+                         {k: v for k, v in push.items() if k not in ("scope", "functional_case", "push_object")})
+        self.assertEqual(runner.trial_contract(push)[0]["policy_role"], "walk")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            raw = json.loads((ROOT / "configs/isaac_g1_push.json").read_text())
+            forward = json.loads((ROOT / "configs/isaac_g1_crouch_start_forward.json").read_text())
+            for data in ({**raw, "push_object": {**raw["push_object"], "mass_kg": 500}},
+                         {**raw, "push_object": {**raw["push_object"], "size_m": [0.7, 0.8]}},
+                         {**raw, "push_object": {**raw["push_object"], "friction": 0}},
+                         {**raw, "push_object": {**raw["push_object"], "anchor": "weld"}},
+                         {k: v for k, v in raw.items() if k != "push_object"},
+                         {**forward, "push_object": raw["push_object"]}):
+                path.write_text(json.dumps(data))
+                with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
+        settings = push["push_object"]
+        evidence = {"size_m": [0.7, 0.8, 1.0], "palm_reach_m": 0.241, "runtime_mass_kg": 10.0,
+                    "material": {"static_friction": 0.3, "dynamic_friction": 0.3, "friction_combine_mode": "multiply"},
+                    "initial_pose_xyzw": [0.241+0.1+0.35, 0, 0.5, 0, 0, 0, 1]}
+        self.assertAlmostEqual(wbc.push_object_summary(evidence, settings)["near_face_x_m"], 0.341)
+        for key, value in (("runtime_mass_kg", 9.0), ("material", {**evidence["material"], "friction_combine_mode": "max"}),
+                           ("initial_pose_xyzw", [1.0, 0, 0.5, 0, 0, 0, 1]),
+                           ("initial_pose_xyzw", [0.691, 0, 0.5, *wbc.matrix_quat_xyzw(wbc.axis_rotation([0, 1, 0], 0.1))])):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                wbc.push_object_summary({**evidence, key: value}, settings)
+        initial = {"root_pose_xyzw": [0, 0, 0.785, 0, 0, 0, 1]}
+        def trace(dx, tip=0.0):
+            quat = wbc.matrix_quat_xyzw(wbc.axis_rotation([0, 1, 0], tip)).tolist()
+            return [{"step": i, "sim_time_seconds": i*0.02, "root_pose_xyzw": [0.0006*i, 0, 0.75, 0, 0, 0, 1],
+                     "root_velocity_world": [0.03, 0, 0, 0, 0, 0], "tilt_rad": 0, "action": [0]*15, "clipped_joint_targets": 0,
+                     "object_pose_xyzw": [0.691+dx*i/250, 0, 0.5, *quat]} for i in range(1, 251)]
+        start = [0.691, 0, 0.5, 0, 0, 0, 1]
+        self.assertEqual(wbc.functional_summary("push", initial, trace(0.3), object_start=start)["status"], "passed_functional_evaluation")
+        for rows, failed in ((trace(0.05), "object_progress_at_least_0_20m"), (trace(0.3, tip=0.3), "object_tilt_within_10_degrees")):
+            result = wbc.functional_summary("push", initial, rows, object_start=start)
+            self.assertFalse(result["checks"][failed])
+
     def test_contact_authoring_deinstances_and_moves_only_sphere_centers(self):
         stage = SimpleNamespace(target="root", writes=[], GetSessionLayer=lambda: "session")
         self_test = self
@@ -1303,7 +1344,24 @@ class ControllerLaunchTests(unittest.TestCase):
                     data=SimpleNamespace(net_normal_forces_w=Tensor([[[0,0,200],[0,0,100]]]),
                         net_friction_forces_w=Tensor([[[-20,0,0],[-10,0,0]]]),
                         net_forces_w=Tensor([[[-20,0,200],[-10,0,100]]])))
+            if hasattr(config, "furniture"):
+                scene["furniture"] = SimpleNamespace(data=FurnitureData(config.furniture))
             return scene
+
+        class FurnitureData:
+            """Pushed object double: slides 0.4 mm along x per physics step after spawning."""
+            def __init__(self, config): self.config, self.start = config, Simulation.steps
+            @property
+            def root_link_pose_w(self):
+                x, y, z = self.config.init_state.pos
+                return Tensor([[x+0.0004*(Simulation.steps-self.start), y, z, 0, 0, 0, 1]])
+            @property
+            def root_link_vel_w(self): return Tensor([[0.08, 0, 0, 0, 0, 0]])
+            @property
+            def body_mass(self): return Tensor([[self.config.spawn.mass_props.mass]])
+
+        class RigidObjectConfig(Config):
+            InitialStateCfg = Config
 
         def replace(value, **kwargs):
             value = copy.deepcopy(value)
@@ -1317,11 +1375,13 @@ class ControllerLaunchTests(unittest.TestCase):
             "warp": {"config": Config(enable_backward=True)}, "isaaclab": {},
             "isaaclab.app": {"launch_simulation": lambda *args: nullcontext()},
             "isaaclab.actuators": {"IdealPDActuatorCfg": ExplicitConfig, "ImplicitActuatorCfg": ImplicitConfig},
-            "isaaclab.assets": {"AssetBaseCfg": Config},
+            "isaaclab.assets": {"AssetBaseCfg": Config, "RigidObjectCfg": RigidObjectConfig},
             "isaaclab.scene": {"InteractiveSceneCfg": Config},
             "isaaclab.sensors": {"CameraCfg": Config, "ContactSensorCfg": Config},
             "isaaclab.sim": {"GroundPlaneCfg": Config, "DomeLightCfg": Config, "PinholeCameraCfg": Config,
-                             "SimulationCfg": Config, "SimulationContext": Simulation},
+                             "SimulationCfg": Config, "SimulationContext": Simulation, "CuboidCfg": Config,
+                             "PreviewSurfaceCfg": Config, "UsdPhysicsRigidBodyCfg": Config, "MassCfg": Config,
+                             "UsdPhysicsCollisionCfg": Config},
             "isaaclab.utils": {"configclass": lambda c: c, "instantiate": instantiate, "replace": replace},
             "isaaclab_assets": {"G1_29DOF_CFG": candidate}, "isaaclab_physx": {},
             "isaaclab_physx.physics": {"PhysxCfg": Config}, "isaaclab_physx.sim": {}, "isaaclab_physx.sim.spawners": {},
@@ -1613,8 +1673,12 @@ class ControllerLaunchTests(unittest.TestCase):
             def author_contact(stage, target, directory):
                 self.assertFalse(target.is_initialized)
                 return {**copy.deepcopy(authored), "status": "authored_before_physics_reset"}
+            surface = {"combine": "max", "box_friction": 0.3}
             def read_material(stage, path):
-                return {"path": path, "static_friction": materials[path], "dynamic_friction": 1.0, "friction_combine_mode": "max"}
+                if path == "/World/envs/env_0/Furniture/geometry/physicsMaterial":
+                    return {"path": path, "static_friction": surface["box_friction"], "dynamic_friction": surface["box_friction"],
+                            "friction_combine_mode": "multiply"}
+                return {"path": path, "static_friction": materials[path], "dynamic_friction": 1.0, "friction_combine_mode": surface["combine"]}
             created = []
             initialize = Simulation.__init__
             def record_simulation(self, config):
@@ -1630,17 +1694,23 @@ class ControllerLaunchTests(unittest.TestCase):
                     q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist(),implicit_arms=True)
                 snapshot["source_to_asset_rotation"] = rotation.tolist()
                 return snapshot
-            for label, case_profile, controller, dynamics, ground, error in (
-                    ("contact", contact_profile, contract, read_dynamics, 1.0, None),
-                    ("contact-friction-mismatch", contact_profile, contract, read_dynamics, 0.5, "friction material"),
-                    ("arm-hold", arm_profile, arm_contract, read_arm_dynamics, 1.0, None),
-                    ("arm-hold-explicit-runtime", arm_profile, arm_contract, read_dynamics, 1.0, "actuator model"),
-                    ("contact-implicit-runtime", contact_profile, contract, read_arm_dynamics, 1.0, "actuator model"),
-                    ("crouch-start", crouch_profile, arm_contract, read_arm_dynamics, 1.0, None)):
+            push_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_push.json")
+            push_profile = {**push_profile, "camera": deployment_profile["camera"]}
+            push_contract, _ = runner.trial_contract(push_profile)
+            for label, case_profile, controller, dynamics, ground, error, box_friction in (
+                    ("contact", contact_profile, contract, read_dynamics, 1.0, None, 0.3),
+                    ("contact-friction-mismatch", contact_profile, contract, read_dynamics, 0.5, "friction material", 0.3),
+                    ("arm-hold", arm_profile, arm_contract, read_arm_dynamics, 1.0, None, 0.3),
+                    ("arm-hold-explicit-runtime", arm_profile, arm_contract, read_dynamics, 1.0, "actuator model", 0.3),
+                    ("contact-implicit-runtime", contact_profile, contract, read_arm_dynamics, 1.0, "actuator model", 0.3),
+                    ("crouch-start", crouch_profile, arm_contract, read_arm_dynamics, 1.0, None, 0.3),
+                    ("push", push_profile, push_contract, read_arm_dynamics, 1.0, None, 0.3),
+                    ("push-box-friction-mismatch", push_profile, push_contract, read_arm_dynamics, 1.0, "Push object differs", 0.6)):
                 contact_dir = directory / label; contact_dir.mkdir()
                 for file, value in (("profile.json",case_profile),("asset-profile.json",asset),("controller-contract.json",controller)):
                     (contact_dir/file).write_text(json.dumps(value))
                 materials["/World/Ground/physicsMaterial"] = ground
+                surface.update(combine="multiply" if case_profile.get("push_object") else "max", box_friction=box_friction)
                 Policy.observations.clear()
                 steps_before = Simulation.steps
                 with ExitStack() as patches:
@@ -1671,7 +1741,7 @@ class ControllerLaunchTests(unittest.TestCase):
                     self.assertEqual(analysis["deployment"]["arm_hold"],"implicit" if implicit_case else "explicit")
                     initial = json.loads((contact_dir/"initial-state.json").read_text())
                     placed = analysis["initial_placement"]
-                    if case_profile is crouch_profile:
+                    if case_profile["initialization"]["mode"] == "collision_clearance":
                         lower_indices = [names.index(n) for n in asset["joint_groups"]["lower_body"]]
                         self.assertEqual([initial["wanted_joint_positions"][i] for i in lower_indices], arm_contract["default_lower_angles"])
                         self.assertGreater(placed["vertical_shift_m"], 0)
@@ -1683,7 +1753,13 @@ class ControllerLaunchTests(unittest.TestCase):
                     self.assertEqual(analysis["functional"]["status"],"passed_functional_evaluation")
                     self.assertEqual(len(Policy.observations),250)
                     for material in (instantiated[-1].ground.spawn.physics_material, created[-1].physics_material):
-                        self.assertEqual((material.static_friction, material.dynamic_friction, material.friction_combine_mode), (1.0, 1.0, "max"))
+                        self.assertEqual((material.static_friction, material.dynamic_friction, material.friction_combine_mode), (1.0, 1.0, surface["combine"]))
+                    if case_profile is push_profile:
+                        box = instantiated[-1].furniture
+                        self.assertEqual((box.spawn.size, box.spawn.mass_props.mass, box.spawn.physics_material.static_friction), ((0.7, 0.8, 1.0), 10.0, 0.3))
+                        self.assertAlmostEqual(analysis["push_object"]["near_face_x_m"], 0.1+json.loads((contact_dir/"push-object.json").read_text())["palm_reach_m"])
+                        self.assertAlmostEqual(analysis["functional"]["object"]["progress_m"], 0.4, places=6)
+                        self.assertEqual(controller["policy_role"], "walk")
                 else:
                     self.assertEqual(Simulation.steps, steps_before)
                     self.assertFalse(Policy.observations)

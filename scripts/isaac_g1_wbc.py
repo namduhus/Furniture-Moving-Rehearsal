@@ -542,7 +542,8 @@ def analyze_run(directory):
             raise ValueError("Incomplete source contact evidence")
         report["contact_override"] = contact_override_summary(evidence,
             json.loads((directory / "initial-placement.json").read_text()),
-            json.loads((directory / "deployment-runtime.json").read_text()))
+            json.loads((directory / "deployment-runtime.json").read_text()),
+            "multiply" if profile.get("push_object") else None)
     if not profile.get("diagnostics"):
         report["limitation"] = "This historical run did not record contact forces or policy inputs; foot slip cannot be determined."
         return report
@@ -593,7 +594,15 @@ def analyze_run(directory):
         report["deployment"] = validate_deployment_evidence(directory, asset, contract, profile.get("arm_hold") == "implicit")
         placement = json.loads((directory / "initial-placement.json").read_text())
         foot_start = {n: placement["after_geometry"]["feet"][n]["body_pose_xyzw"][:2] for n in diagnostics["foot_body_names"]}
-        report["functional"] = functional_summary(profile["functional_case"], initial, records, foot_start, samples)
+        object_start = None
+        if profile.get("push_object"):
+            from g1_wbc import push_object_summary
+            pushed = json.loads((directory / "push-object.json").read_text())
+            if pushed["status"] != "passed_push_object":
+                raise ValueError("Incomplete push object evidence")
+            report["push_object"] = push_object_summary(pushed, profile["push_object"])
+            object_start = pushed["initial_pose_xyzw"]
+        report["functional"] = functional_summary(profile["functional_case"], initial, records, foot_start, samples, object_start)
         report["stationary_success_assessed"] = profile["functional_case"] == "stand" and report["status"] == "diagnostics_complete"
     return report
 
@@ -669,7 +678,7 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "arm_hold", "deployment", "command", "functional_case", "scope"}:
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "arm_hold", "push_object", "deployment", "command", "functional_case", "scope"}:
             raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm/contact overrides")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
@@ -684,7 +693,7 @@ def load_plan(path):
     if deployment is not None:
         from g1_wbc import load_deployment_reference
         source = load_deployment_reference()
-        commands = {"stand": [0, 0, 0], "forward": [0.2, 0, 0], "turn": [0, 0, 0.2]}
+        commands = {"stand": [0, 0, 0], "forward": [0.2, 0, 0], "turn": [0, 0, 0.2], "push": [0.2, 0, 0]}
         if (deployment != "assets/references/g1_wbc_deployment.json" or
                 profile.get("functional_case") not in commands or
                 profile.get("command") != commands.get(profile.get("functional_case")) or
@@ -715,6 +724,16 @@ def load_plan(path):
         raise ValueError("Only the pinned source foot contact within the deployment protocol is reviewed")
     if "arm_hold" in profile and (not profile.get("contact_override") or profile["arm_hold"] != "implicit"):
         raise ValueError("Only an implicit arm hold on the source-contact deployment is reviewed")
+    push = profile.get("push_object")
+    if (push is not None or profile.get("functional_case") == "push") and (
+            profile.get("functional_case") != "push" or profile.get("arm_hold") != "implicit" or not isinstance(push, dict) or
+            set(push) != {"size_m", "mass_kg", "friction", "gap_m"} or
+            not isinstance(push["size_m"], list) or len(push["size_m"]) != 3 or
+            any(type(v) not in (int, float) or not 0.1 <= v <= 2.0 for v in push["size_m"]) or
+            type(push["mass_kg"]) not in (int, float) or not 0.5 <= push["mass_kg"] <= 100 or
+            type(push["friction"]) not in (int, float) or not 0.05 <= push["friction"] <= 1.0 or
+            type(push["gap_m"]) not in (int, float) or not 0 <= push["gap_m"] <= 0.5):
+        raise ValueError("Invalid push object experiment configuration")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if deployment:
         asset["fixed_hand_joints"] = asset["joint_groups"]["hands"]
@@ -813,17 +832,35 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         dynamic_friction=0.1 if deployment else 0.0, viscous_friction=0.001 if deployment else 0.0,
     )}
     material = {}
+    push = profile.get("push_object")
+    combine_mode = "multiply" if push else None
     if profile.get("contact_override"):
         from g1_wbc import load_contact_reference
         from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
-        # Bind the source coefficient to the ground and to unbound foot colliders.
-        material = {"physics_material": PhysxRigidBodyMaterialCfg(**load_contact_reference()["isaac_material"])}
+        # Bind the source coefficient to the ground and to unbound foot colliders. Multiply keeps
+        # foot-ground friction at 1.0 x 1.0 while a pushed object keeps its own coefficient.
+        surface = load_contact_reference()["isaac_material"]
+        material = {"physics_material": PhysxRigidBodyMaterialCfg(**{**surface, **({"friction_combine_mode": combine_mode} if push else {})})}
+    if push:
+        from isaaclab.assets import RigidObjectCfg
+        # The default-pose palm reach places the object's near face gap_m ahead of the hands.
+        palm_reach = float(reference.forward({**dict.fromkeys(reference.limits, 0.0),
+            **dict(zip(lower, contract["default_lower_angles"]))})["left_hand_palm_link"][0, 3])
+        furniture_cfg = RigidObjectCfg(prim_path="{ENV_REGEX_NS}/Furniture", spawn=sim_utils.CuboidCfg(
+            size=tuple(push["size_m"]), visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.55, 0.38, 0.22)),
+            rigid_props=sim_utils.UsdPhysicsRigidBodyCfg(), mass_props=sim_utils.MassCfg(mass=push["mass_kg"]),
+            collision_props=sim_utils.UsdPhysicsCollisionCfg(), physics_material_path="physicsMaterial",
+            physics_material=PhysxRigidBodyMaterialCfg(static_friction=push["friction"], dynamic_friction=push["friction"],
+                                                       friction_combine_mode="multiply")),
+            init_state=RigidObjectCfg.InitialStateCfg(pos=(palm_reach+push["gap_m"]+push["size_m"][0]/2, 0.0, push["size_m"][2]/2)))
 
     @configclass
     class SceneCfg(InteractiveSceneCfg):
         ground = AssetBaseCfg(prim_path="/World/Ground", spawn=sim_utils.GroundPlaneCfg(**material))
         light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=1500))
         robot = candidate
+        if push:
+            furniture = furniture_cfg
         if not audit_only:
             camera = CameraCfg(
                 prim_path="{ENV_REGEX_NS}/Camera", update_period=0,
@@ -1019,9 +1056,20 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                                              "ground": read_material(sim.stage, "/World/Ground/physicsMaterial")}
             write_json(directory / "contact-override.json", contact_override)
             contact_override["verification"] = contact_override_summary(contact_override, placement,
-                json.loads((directory / "deployment-runtime.json").read_text()))
+                json.loads((directory / "deployment-runtime.json").read_text()), combine_mode)
             contact_override["status"] = "passed_source_contact"
             write_json(directory / "contact-override.json", contact_override)
+        furniture = scene["furniture"] if push else None
+        if push:
+            from g1_wbc import push_object_summary
+            pushed = {"status": "measuring_push_object", "size_m": list(push["size_m"]), "palm_reach_m": palm_reach,
+                      "material": read_material(sim.stage, "/World/envs/env_0/Furniture/geometry/physicsMaterial"),
+                      "runtime_mass_kg": float(array(furniture.data.body_mass)[0]),
+                      "initial_pose_xyzw": array(furniture.data.root_link_pose_w).tolist()}
+            write_json(directory / "push-object.json", pushed)
+            pushed["verification"] = push_object_summary(pushed, push)
+            pushed["status"] = "passed_push_object"
+            write_json(directory / "push-object.json", pushed)
         pose = finite(array(robot.data.root_link_pose_w), (7,))
         q = finite(array(robot.data.joint_pos), (dofs,))
         velocity = finite(array(robot.data.root_link_vel_w), (6,))
@@ -1141,6 +1189,9 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
                               "joint_positions": q.tolist(), "joint_velocities": dq.tolist()}
                     if diagnostics:
                         record.update(policy_observation=observation.tolist(), policy_input_state=input_state)
+                    if push:
+                        record.update(object_pose_xyzw=finite(array(furniture.data.root_link_pose_w), (7,)).tolist(),
+                                      object_velocity_world=finite(array(furniture.data.root_link_vel_w), (6,)).tolist())
                     if deployment:
                         record.update(policy_phase="after_physics", policy_input_time_seconds=(step+1)*dt,
                                       applied_action=applied_action.tolist(), command=profile["command"])
@@ -1348,6 +1399,7 @@ def main(argv=None):
                           "inertial_override": profile.get("inertial_override"),
                           "contact_override": profile.get("contact_override"),
                           "arm_hold": profile.get("arm_hold", "explicit" if profile.get("deployment") else None),
+                          "push_object": profile.get("push_object"),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0

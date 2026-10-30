@@ -265,9 +265,12 @@ def source_sphere_center(center, reference):
     return sources[matches[0]]
 
 
-def contact_override_summary(evidence, placement, runtime):
+def contact_override_summary(evidence, placement, runtime, combine_mode=None):
     """Check source sphere centers, unchanged foot inertia and friction materials before control."""
     reference = load_contact_reference()
+    if combine_mode is not None:
+        # Multiply keeps foot-ground friction at 1.0 x 1.0 while an object keeps its own coefficient.
+        reference = {**reference, "isaac_material": {**reference["isaac_material"], "friction_combine_mode": combine_mode}}
     if (evidence["reference_sha256"] != CONTACT_REFERENCE_SHA256 or evidence["edit_layer"] != "session" or
             evidence["applied_before_reset"] is not True or set(evidence["feet"]) != set(reference["foot_bodies"])):
         raise ValueError("Invalid source contact provenance")
@@ -337,7 +340,28 @@ def deployment_contract(contract, reference, command):
     return effective, reference
 
 
-def functional_summary(case, initial, records, foot_start=None, samples=()):
+def push_object_summary(evidence, settings):
+    """Check the spawned object's size, mass, friction and resting pose before control."""
+    size = finite(settings["size_m"], (3,))
+    pose = finite(evidence["initial_pose_xyzw"], (7,))
+    material = evidence["material"]
+    wanted_x = evidence["palm_reach_m"] + settings["gap_m"] + size[0]/2
+    if (not np.allclose(finite(evidence["size_m"], (3,)), size, atol=1e-9, rtol=0) or
+            not np.isclose(evidence["runtime_mass_kg"], settings["mass_kg"], atol=1e-4, rtol=0) or
+            material["friction_combine_mode"] != "multiply" or
+            not np.allclose([material["static_friction"], material["dynamic_friction"]], settings["friction"], atol=1e-6, rtol=0) or
+            not np.allclose(pose[:3], [wanted_x, 0, size[2]/2], atol=0.01, rtol=0) or
+            object_tilt_degrees(pose) > 1.0):
+        raise ValueError("Push object differs from the reviewed configuration")
+    return {"status": "verified_push_object", "size_m": size.tolist(), "mass_kg": settings["mass_kg"],
+            "friction": settings["friction"], "near_face_x_m": float(pose[0]-size[0]/2)}
+
+
+def object_tilt_degrees(pose):
+    return float(np.degrees(np.arccos(np.clip(quat_xyzw_matrix(finite(pose, (7,))[3:])[2, 2], -1, 1))))
+
+
+def functional_summary(case, initial, records, foot_start=None, samples=(), object_start=None):
     """Project five-second acceptance gates, separate from fall/action guards."""
     motion = motion_summary(initial["root_pose_xyzw"], records)
     if len(records) != 250 or not np.isclose(motion["simulated_seconds"], 5):
@@ -367,6 +391,15 @@ def functional_summary(case, initial, records, foot_start=None, samples=()):
                       lateral_drift_within_0_15m=float(np.max(np.abs(poses[:, 1]-initial["root_pose_xyzw"][1]))) <= 0.15,
                       final_second_vx_in_0_10_to_0_30m_s=0.10 <= tail_vx <= 0.30,
                       heading_change_within_0_20rad=float(np.max(np.abs(yaw-yaw[0]))) <= 0.20)
+    elif case == "push":
+        start = finite(object_start, (7,))
+        objects = finite([r["object_pose_xyzw"] for r in records], (250, 7))
+        pushed = {"progress_m": float(objects[-1, 0]-start[0]),
+                  "maximum_lateral_drift_m": float(np.max(np.abs(objects[:, 1]-start[1]))),
+                  "maximum_tilt_degrees": max(object_tilt_degrees(p) for p in objects)}
+        checks.update(object_progress_at_least_0_20m=pushed["progress_m"] >= 0.20,
+                      object_lateral_drift_within_0_15m=pushed["maximum_lateral_drift_m"] <= 0.15,
+                      object_tilt_within_10_degrees=pushed["maximum_tilt_degrees"] <= 10)
     elif case == "turn":
         checks.update(positive_turn_at_least_0_30rad=float(yaw[-1]-yaw[0]) >= 0.30,
                       displacement_within_0_20m=motion["maximum_xy_displacement_m"] <= 0.20,
@@ -379,6 +412,7 @@ def functional_summary(case, initial, records, foot_start=None, samples=()):
             "final_second_mean_vx_m_s": tail_vx, "final_second_mean_heading_rate_rad_s": tail_yaw_rate,
             "heading_change_rad": float(yaw[-1]-yaw[0]),
             "maximum_pelvis_displacement_m": motion["maximum_xy_displacement_m"], "maximum_foot_displacement_m": feet,
+            **({"object": pushed} if case == "push" else {}),
             "criteria_origin": "Project acceptance proposal, not vendor thresholds; one bounded trial is not a robustness claim.",
             "on_failure": "Stop this gate; inspect the whole-contract evidence before proposing another physical change. No automatic retry or framework switch."}
 
