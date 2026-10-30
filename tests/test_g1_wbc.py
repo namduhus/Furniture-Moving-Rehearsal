@@ -35,7 +35,7 @@ def collision_fixture(poses):
                 for name,pose in poses.items()}}
 
 
-def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names=None, q=None, root=None, poses=None):
+def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names=None, q=None, root=None, poses=None, implicit_arms=False):
     source = wbc.load_dynamics_reference()
     joints = joint_names or asset["controller_reference"]["joint_order"]+asset["joint_groups"]["hands"]
     positions = {n:0.0 for n in joints}
@@ -46,7 +46,7 @@ def dynamics_fixture(contract, reference, asset, *, body_names=None, joint_names
     names = body_names or list(reversed(source["bodies"]))
     models = {};solver_kp={};solver_kd={}
     for key,names_group in asset["joint_groups"].items():
-        implicit = key != "lower_body" and not contract.get("deployment_sha256")
+        implicit = key != "lower_body" and (implicit_arms or not contract.get("deployment_sha256"))
         kp = contract["kp"] if key == "lower_body" else [contract["upper_hold_kp"] if key == "arms" else contract["hand_hold_kp"]]*len(names_group)
         kd = contract["kd"] if key == "lower_body" else [contract["upper_hold_kd"] if key == "arms" else contract["hand_hold_kd"]]*len(names_group)
         models[key] = {"joint_names":names_group,"class":"fixture."+key,"implicit":implicit,"kp":kp,"kd":kd}
@@ -325,6 +325,33 @@ class ControllerAdapterTests(unittest.TestCase):
             (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_deployment.json").read_text())
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
                 runner.main(["--profile", str(ROOT / "configs/isaac_g1_contact_forward.json"), "--stage", "balance",
+                             "--stand-run", str(stand)])
+            self.assertEqual(exit_error.exception.code, 2)
+
+    def test_arm_hold_profiles_change_only_the_arm_actuator_model(self):
+        for base, file in (("isaac_g1_contact.json", "isaac_g1_arm_hold.json"),
+                           ("isaac_g1_contact_forward.json", "isaac_g1_arm_hold_forward.json"),
+                           ("isaac_g1_contact_turn.json", "isaac_g1_arm_hold_turn.json")):
+            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
+            after, arm_asset, arm_runtime = runner.load_plan(ROOT / "configs" / file)
+            self.assertEqual((asset, runtime), (arm_asset, arm_runtime))
+            self.assertEqual({k: v for k, v in before.items() if k != "scope"},
+                             {k: v for k, v in after.items() if k not in ("scope", "arm_hold")})
+            explicit, implicit = runner.trial_contract(before)[0], runner.trial_contract(after)[0]
+            self.assertEqual({k: v for k, v in explicit.items() if k != "actuation_origin"},
+                             {k: v for k, v in implicit.items() if k != "actuation_origin"})
+            self.assertIn("implicit", implicit["actuation_origin"])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            raw = json.loads((ROOT / "configs/isaac_g1_arm_hold.json").read_text())
+            deployment = json.loads((ROOT / "configs/isaac_g1_deployment.json").read_text())
+            for data in ({**raw, "arm_hold": "explicit"}, {**raw, "arm_hold": {"kp": 40}}, {**deployment, "arm_hold": "implicit"}):
+                path.write_text(json.dumps(data))
+                with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
+            stand = Path(tmp) / "stand"; stand.mkdir()
+            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_contact.json").read_text())
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
+                runner.main(["--profile", str(ROOT / "configs/isaac_g1_arm_hold_forward.json"), "--stage", "balance",
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
@@ -1551,10 +1578,25 @@ class ControllerLaunchTests(unittest.TestCase):
             initialize = Simulation.__init__
             def record_simulation(self, config):
                 created.append(config); initialize(self, config)
-            for label in ("contact", "contact-friction-mismatch"):
+            # The implicit arm hold changes only the arm actuator model and its PhysX drive gains.
+            arm_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_arm_hold.json")
+            arm_profile = {**arm_profile, "camera": deployment_profile["camera"]}
+            arm_contract, _ = runner.trial_contract(arm_profile)
+            def read_arm_dynamics(robot,rotation,usd_path,*,directory=None,filename="dynamics-runtime.json"):
+                snapshot = dynamics_fixture(arm_contract,reference,asset,body_names=robot.body_names,joint_names=names,
+                    q=robot.q,root=robot.pose,poses=robot.data.body_link_pose_w.value[0].tolist(),implicit_arms=True)
+                snapshot["source_to_asset_rotation"] = rotation.tolist()
+                return snapshot
+            for label, case_profile, controller, dynamics, ground, error in (
+                    ("contact", contact_profile, contract, read_dynamics, 1.0, None),
+                    ("contact-friction-mismatch", contact_profile, contract, read_dynamics, 0.5, "friction material"),
+                    ("arm-hold", arm_profile, arm_contract, read_arm_dynamics, 1.0, None),
+                    ("arm-hold-explicit-runtime", arm_profile, arm_contract, read_dynamics, 1.0, "actuator model"),
+                    ("contact-implicit-runtime", contact_profile, contract, read_arm_dynamics, 1.0, "actuator model")):
                 contact_dir = directory / label; contact_dir.mkdir()
-                for file, value in (("profile.json",contact_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
+                for file, value in (("profile.json",case_profile),("asset-profile.json",asset),("controller-contract.json",controller)):
                     (contact_dir/file).write_text(json.dumps(value))
+                materials["/World/Ground/physicsMaterial"] = ground
                 Policy.observations.clear()
                 steps_before = Simulation.steps
                 with ExitStack() as patches:
@@ -1563,21 +1605,25 @@ class ControllerLaunchTests(unittest.TestCase):
                             (runner,"read_palm_runtime",{"side_effect":read_palms}),
                             (runner,"apply_source_contact",{"side_effect":author_contact}),
                             (runner,"read_material",{"side_effect":read_material}),
-                            (runner,"read_runtime_dynamics",{"side_effect":read_dynamics}),
+                            (runner,"read_runtime_dynamics",{"side_effect":dynamics}),
                             (runner,"read_joint_frames",{"return_value":joint_frame_fixture(reference)}),
                             (runner,"read_collision_geometry",{"side_effect":lambda stage,poses:contact_geometry(poses)}),
                             (Simulation,"__init__",{"new":record_simulation})):
                         patches.enter_context(mock.patch.object(target,name,**kwargs))
-                    if label == "contact":
-                        runner.balance_check(contact_profile,asset,runtime,contract,reference,Path("unused.onnx"),contact_dir)
+                    if error is None:
+                        runner.balance_check(case_profile,asset,runtime,controller,reference,Path("unused.onnx"),contact_dir)
                     else:
-                        materials["/World/Ground/physicsMaterial"] = 0.5
-                        with self.assertRaisesRegex(ValueError,"friction material"):
-                            runner.balance_check(contact_profile,asset,runtime,contract,reference,Path("unused.onnx"),contact_dir)
-                if label == "contact":
-                    runner.validate_stage("balance",contact_dir,contact_profile)
+                        with self.assertRaisesRegex(ValueError,error):
+                            runner.balance_check(case_profile,asset,runtime,controller,reference,Path("unused.onnx"),contact_dir)
+                upper_hold = instantiated[-1].robot.actuators["upper_hold"]
+                self.assertIsInstance(upper_hold, ImplicitConfig if case_profile is arm_profile else ExplicitConfig)
+                self.assertEqual((upper_hold.stiffness["left_wrist_pitch_joint"], upper_hold.damping["left_wrist_pitch_joint"], upper_hold.armature), (100, 0.5, 0.01))
+                self.assertEqual(upper_hold.joint_effort_limit["left_wrist_pitch_joint"], 5)
+                if error is None:
+                    runner.validate_stage("balance",contact_dir,case_profile)
                     analysis = runner.analyze_run(contact_dir)
                     self.assertEqual(analysis["contact_override"]["status"],"verified_source_contact")
+                    self.assertEqual(analysis["deployment"]["arm_hold"],"implicit" if case_profile is arm_profile else "explicit")
                     self.assertEqual(analysis["functional"]["status"],"passed_functional_evaluation")
                     self.assertEqual(len(Policy.observations),250)
                     for material in (instantiated[-1].ground.spawn.physics_material, created[-1].physics_material):
@@ -1586,7 +1632,7 @@ class ControllerLaunchTests(unittest.TestCase):
                     self.assertEqual(Simulation.steps, steps_before)
                     self.assertFalse(Policy.observations)
                     self.assertFalse((contact_dir/"trajectory.jsonl").exists())
-                    self.assertEqual(json.loads((contact_dir/"contact-override.json").read_text())["materials"]["ground"]["static_friction"],0.5)
+            self.assertEqual(json.loads((directory/"contact-friction-mismatch"/"contact-override.json").read_text())["materials"]["ground"]["static_friction"],0.5)
 
 if __name__ == "__main__":
     unittest.main()

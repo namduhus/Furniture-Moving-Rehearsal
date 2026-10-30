@@ -23,7 +23,12 @@ DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 def trial_contract(profile):
     from g1_wbc import load_contract, deployment_contract
     contract, reference = load_contract(ROOT / profile["controller_contract"])
-    return deployment_contract(contract, reference, profile["command"]) if profile.get("deployment") else (contract, reference)
+    if not profile.get("deployment"):
+        return contract, reference
+    contract, reference = deployment_contract(contract, reference, profile["command"])
+    if profile.get("arm_hold") == "implicit":
+        contract = {**contract, "actuation_origin": "15 policy joints use explicit PD; 14 arm joints hold with implicit PhysX PD at the source gains; all body joints keep source armature 0.01; finger joints are fixed in the USD session layer."}
+    return contract, reference
 
 
 def apply_fixed_hands(stage, robot, directory):
@@ -58,10 +63,11 @@ def apply_fixed_hands(stage, robot, directory):
     write_json(directory / "deployment-joints.json", evidence)
 
 
-def validate_deployment_evidence(directory, asset, contract):
+def validate_deployment_evidence(directory, asset, contract, implicit_arms=False):
     from g1_wbc import load_deployment_reference, finite
     import numpy as np
     data = load_deployment_reference()
+    lower_body = asset["joint_groups"]["lower_body"]
     fixed = json.loads((directory / "deployment-joints.json").read_text())
     if (fixed["status"] != "authored_fixed_hands_before_reset" or fixed["edit_layer"] != "session" or
             set(fixed["joints"]) != set(data["fixed_hand_joints"]) or
@@ -76,17 +82,23 @@ def validate_deployment_evidence(directory, asset, contract):
     covered = []
     for group in measured["actuators"].values():
         covered.extend(group["joint_names"])
-        if group["implicit"]:
-            raise ValueError("Deployment requires explicit body PD")
+        arms = not set(group["joint_names"]) & set(lower_body)
+        if group["implicit"] != (implicit_arms and arms):
+            raise ValueError("Deployment actuator model differs from the reviewed profile")
         for i, name in enumerate(group["joint_names"]):
-            lower = name in asset["joint_groups"]["lower_body"]
-            index = asset["joint_groups"]["lower_body"].index(name) if lower else 0
+            lower = name in lower_body
+            index = lower_body.index(name) if lower else 0
             kp = contract["kp"][index] if lower else 100.0
             kd = contract["kd"][index] if lower else 0.5
             if not np.allclose([group["kp"][i], group["kd"][i]], [kp, kd], atol=1e-6, rtol=0):
                 raise ValueError("Deployment native PD gains were not applied")
     if len(covered) != 29 or set(covered) != set(expected):
         raise ValueError("Incomplete deployment native actuator coverage")
+    # Implicit arm gains live in the PhysX drive; explicit joints must leave it at zero.
+    solver = np.stack([finite(measured["solver_joint_stiffness"], (29,)), finite(measured["solver_joint_damping"], (29,))], axis=1)
+    drive = [[100.0, 0.5] if implicit_arms and n not in lower_body else [0.0, 0.0] for n in measured["joint_names"]]
+    if not np.allclose(solver, drive, atol=1e-6, rtol=0):
+        raise ValueError("Deployment PhysX drive gains differ from the reviewed arm hold")
     armature = finite(measured["joint_armature"], (29,))
     limits = finite(measured["joint_effort_limits"], (29,))
     if not np.allclose(armature, 0.01, atol=1e-7, rtol=0) or not np.allclose(
@@ -97,6 +109,7 @@ def validate_deployment_evidence(directory, asset, contract):
         if not np.allclose(finite(measured[key], (29,)), wanted, atol=1e-7, rtol=0):
             raise ValueError("Deployment passive joint terms were not applied")
     return {"status": "verified_deployment_runtime", "active_joints": 29, "fixed_finger_joints": 14,
+            "arm_hold": "implicit" if implicit_arms else "explicit",
             "policy_role": contract["policy_role"], "policy_phase": data["policy_phase"],
             "residual_differences": data["residual_differences"]}
 
@@ -376,7 +389,7 @@ def analyze_dynamics(directory):
     if profile.get("inertial_override"):
         report["inertial_override"] = analyze_palm_override(directory, profile, contract, measured)
     if profile.get("deployment"):
-        report["deployment"] = validate_deployment_evidence(directory, asset, contract)
+        report["deployment"] = validate_deployment_evidence(directory, asset, contract, profile.get("arm_hold") == "implicit")
     return report
 
 
@@ -577,7 +590,7 @@ def analyze_run(directory):
         effective, _ = trial_contract(profile)
         if effective != contract:
             raise ValueError("Saved deployment controller differs from the pinned effective contract")
-        report["deployment"] = validate_deployment_evidence(directory, asset, contract)
+        report["deployment"] = validate_deployment_evidence(directory, asset, contract, profile.get("arm_hold") == "implicit")
         report["functional"] = functional_summary(profile["functional_case"], initial, records)
         report["stationary_success_assessed"] = profile["functional_case"] == "stand" and report["status"] == "diagnostics_complete"
     return report
@@ -654,7 +667,7 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "deployment", "command", "functional_case", "scope"}:
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "arm_hold", "deployment", "command", "functional_case", "scope"}:
             raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm/contact overrides")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
@@ -697,6 +710,8 @@ def load_plan(path):
     if "contact_override" in profile and (
             not deployment or profile["contact_override"] != {"source": "assets/references/g1_wbc_contact.json"}):
         raise ValueError("Only the pinned source foot contact within the deployment protocol is reviewed")
+    if "arm_hold" in profile and (not profile.get("contact_override") or profile["arm_hold"] != "implicit"):
+        raise ValueError("Only an implicit arm hold on the source-contact deployment is reviewed")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if deployment:
         asset["fixed_hand_joints"] = asset["joint_groups"]["hands"]
@@ -777,6 +792,8 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         candidate.spawn = replace(candidate.spawn, activate_contact_sensors=True)
     motor_limits = actuator_limits(contract, reference)
     upper = groups["arms"] + groups["hands"]
+    implicit_arms = profile.get("arm_hold") == "implicit"
+    explicit_upper = deployment and not implicit_arms
     candidate.actuators = {"reference_pd": IdealPDActuatorCfg(
         joint_names_expr=lower, stiffness={n: kp[n] for n in lower}, damping={n: kd[n] for n in lower},
         actuator_effort_limit={n: motor_limits[n]["effort"] for n in lower},
@@ -784,9 +801,9 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         joint_velocity_limit={n: motor_limits[n]["velocity"] for n in lower},
         armature=contract["lower_body_armature"], friction=0.1 if deployment else 0.0,
         dynamic_friction=0.1 if deployment else 0.0, viscous_friction=0.001 if deployment else 0.0,
-    ), "upper_hold": (IdealPDActuatorCfg if deployment else ImplicitActuatorCfg)(
+    ), "upper_hold": (IdealPDActuatorCfg if explicit_upper else ImplicitActuatorCfg)(
         joint_names_expr=upper, stiffness={n: kp[n] for n in upper}, damping={n: kd[n] for n in upper},
-        **({"actuator_effort_limit": {n: motor_limits[n]["effort"] for n in upper}} if deployment else {}),
+        **({"actuator_effort_limit": {n: motor_limits[n]["effort"] for n in upper}} if explicit_upper else {}),
         joint_effort_limit={n: motor_limits[n]["effort"] for n in upper},
         joint_velocity_limit={n: motor_limits[n]["velocity"] for n in upper},
         armature=contract["upper_body_armature"], friction=0.1 if deployment else 0.0,
@@ -892,7 +909,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             snapshot = read_runtime_dynamics(robot, np.eye(3), candidate.spawn.usd_path,
                                              directory=directory, filename="deployment-runtime.json")
             write_json(directory / "deployment-runtime.json", snapshot)
-            write_json(directory / "deployment-audit.json", validate_deployment_evidence(directory, asset, contract))
+            write_json(directory / "deployment-audit.json", validate_deployment_evidence(directory, asset, contract, implicit_arms))
         applied_armature = finite(array(robot.data.joint_armature), (dofs,))
         wanted_armature = np.array([contract["lower_body_armature"] if n in lower
                                    else contract["upper_body_armature"] for n in names])
@@ -1326,6 +1343,7 @@ def main(argv=None):
                           "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
                           "inertial_override": profile.get("inertial_override"),
                           "contact_override": profile.get("contact_override"),
+                          "arm_hold": profile.get("arm_hold", "explicit" if profile.get("deployment") else None),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0
@@ -1337,8 +1355,8 @@ def main(argv=None):
         stand_dir = args.stand_run.expanduser().resolve()
         stand_profile = json.loads((stand_dir / "profile.json").read_text())
         if (stand_profile.get("deployment") != profile["deployment"] or stand_profile.get("functional_case") != "stand" or
-                stand_profile.get("contact_override") != profile.get("contact_override")):
-            parser.error("--stand-run must use the same reviewed deployment and contact with a standing case")
+                any(stand_profile.get(k) != profile.get(k) for k in ("contact_override", "arm_hold"))):
+            parser.error("--stand-run must use the same reviewed deployment, contact and arm hold with a standing case")
         if json.loads((stand_dir / "runtime-config.json").read_text()) != runtime:
             parser.error("--stand-run must use the same runtime configuration")
         validate_stage("balance", stand_dir, stand_profile)
