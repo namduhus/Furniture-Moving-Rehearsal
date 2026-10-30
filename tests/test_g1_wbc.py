@@ -1,6 +1,6 @@
 """Numerical convention and controller-transfer failure checks, without a GPU."""
 
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import copy
 import hashlib
 import json
@@ -94,6 +94,47 @@ def palm_fixture(contract):
                              "inertia_b_kg_m2": reference["inertia_b_kg_m2"]},
                     "right": {"mass_kg": right["mass_kg"], "com_b_m": right["com_b_m"],
                               "inertia_b_kg_m2": right_tensor.tolist()}}}
+
+
+ACTUAL_FOOT_SPHERES = (("05", 0.12, 0.026), ("04", 0.12, -0.026), ("07", -0.02, -0.026), ("06", -0.02, 0.026))
+SPHERE_SCALE = 0.009999999776482582
+
+
+def contact_geometry(poses):
+    """Initialized geometry with four scaled unit spheres at the source centers."""
+    geometry = collision_fixture(poses)
+    for name, foot in geometry["feet"].items():
+        foot["colliders"] = []
+        for index, center in zip(("06", "07", "05", "04"), wbc.load_contact_reference()["foot_sphere_centers_m"]):
+            transform = np.eye(4)*SPHERE_SCALE; transform[:3, 3] = center; transform[3, 3] = 1
+            foot["colliders"].append({"type": "Sphere", "radius_m": 0.5, "body_from_shape": transform.tolist(),
+                "collision_path": f"/World/envs/env_0/Robot/{name}/collisions/spheres/Sphere_{index}"})
+    return geometry
+
+
+def contact_fixture():
+    reference, source = wbc.load_contact_reference(), wbc.load_dynamics_reference()
+    linear = (np.eye(3)*SPHERE_SCALE).tolist()
+    evidence = {"status": "passed_source_contact", "reference_sha256": wbc.CONTACT_REFERENCE_SHA256,
+                "edit_layer": "session", "applied_before_reset": True, "feet": {},
+                "materials": {scope: {"path": path, "static_friction": 1.0, "dynamic_friction": 1.0, "friction_combine_mode": "max"}
+                              for scope, path in (("default", "/physicsScene/defaultMaterial"), ("ground", "/World/Ground/physicsMaterial"))}}
+    runtime = {"body_names": [], "body_mass_kg": [], "body_com_pose_b_xyzw": [], "body_inertia_backend_kg_m2": []}
+    rotation = wbc.axis_rotation([0, 1, 0], 0.5)
+    for name in reference["foot_bodies"]:
+        body = source["bodies"][name]
+        evidence["feet"][name] = {"authored_mass_kg": body["mass_kg"], "authored_com_b_m": body["com_position_b_m"],
+            "authored_principal_inertia_kg_m2": body["principal_inertia_kg_m2"], "spheres": [
+                {"path": f"/World/envs/env_0/Robot/{name}/collisions/spheres/Sphere_{index}", "radius": 0.5,
+                 "center_body_m": [x, y, -0.031], "linear_body": linear, "after_linear_body": linear,
+                 "after_center_body_m": wbc.source_sphere_center([x, y, -0.031], reference).tolist()}
+                for index, x, y in ACTUAL_FOOT_SPHERES]}
+        runtime["body_names"].append(name)
+        runtime["body_mass_kg"].append(body["mass_kg"])
+        runtime["body_com_pose_b_xyzw"].append([*body["com_position_b_m"], 0, 0, 0, 1])
+        runtime["body_inertia_backend_kg_m2"].append((rotation @ np.diag(body["principal_inertia_kg_m2"]) @ rotation.T).reshape(9).tolist())
+    placement = {"before_geometry": contact_geometry({n: [0, 0, 0, 0, 0, 0, 1] for n in reference["foot_bodies"]})}
+    return evidence, placement, runtime
 
 
 class ControllerAdapterTests(unittest.TestCase):
@@ -235,6 +276,141 @@ class ControllerAdapterTests(unittest.TestCase):
             self.assertTrue(all(p.kind=="Fixed" and p.frame==[0,0,0,0,0,0,1] for p in prims))
             with self.assertRaisesRegex(RuntimeError,"before reset"):
                 runner.apply_fixed_hands(stage,SimpleNamespace(is_initialized=True),Path(tmp))
+
+    def test_contact_reference_maps_quadrants_and_rejects_unapplied_contact(self):
+        reference = wbc.load_contact_reference()
+        self.assertEqual(reference["source"]["sha256"], wbc.load_deployment_reference()["sources"][2]["sha256"])
+        targets = {tuple(wbc.source_sphere_center([x, y, -0.031], reference)) for _, x, y in ACTUAL_FOOT_SPHERES}
+        self.assertEqual(targets, set(map(tuple, reference["foot_sphere_centers_m"])))
+        with self.assertRaisesRegex(ValueError, "quadrant"):
+            wbc.source_sphere_center([0.12, 0.0, -0.031], reference)
+        evidence, placement, runtime = contact_fixture()
+        result = wbc.contact_override_summary(evidence, placement, runtime)
+        self.assertEqual(result["status"], "verified_source_contact")
+        self.assertEqual(result["effective_foot_ground_friction"], 1.0)
+        variants = []
+        invalid = copy.deepcopy(evidence); invalid["feet"]["left_ankle_roll_link"]["spheres"][2]["after_center_body_m"] = [-0.02, -0.026, -0.031]; variants.append((invalid, placement, runtime))
+        invalid = copy.deepcopy(evidence); invalid["feet"]["right_ankle_roll_link"]["spheres"][0]["radius"] = 1.0; variants.append((invalid, placement, runtime))
+        invalid = copy.deepcopy(evidence); invalid["feet"]["right_ankle_roll_link"]["spheres"].pop(); variants.append((invalid, placement, runtime))
+        invalid = copy.deepcopy(evidence); invalid["materials"]["ground"]["static_friction"] = 0.5; variants.append((invalid, placement, runtime))
+        invalid = copy.deepcopy(evidence); invalid["materials"]["default"]["friction_combine_mode"] = None; variants.append((invalid, placement, runtime))
+        invalid = copy.deepcopy(evidence); invalid["applied_before_reset"] = False; variants.append((invalid, placement, runtime))
+        stale = copy.deepcopy(placement); stale["before_geometry"]["feet"]["left_ankle_roll_link"]["colliders"][0]["body_from_shape"][0][3] = -0.02; variants.append((evidence, stale, runtime))
+        heavier = copy.deepcopy(runtime); heavier["body_mass_kg"][1] = 0.7; variants.append((evidence, placement, heavier))
+        for args in variants:
+            with self.subTest(args=args), self.assertRaises(ValueError): wbc.contact_override_summary(*args)
+        with mock.patch.object(wbc.hashlib, "sha256", return_value=SimpleNamespace(hexdigest=lambda: "wrong")):
+            with self.assertRaisesRegex(ValueError, "hash mismatch"): wbc.load_contact_reference()
+
+    def test_contact_profiles_preserve_deployment_and_reject_unreviewed_contact(self):
+        for base, file in (("isaac_g1_deployment.json", "isaac_g1_contact.json"),
+                           ("isaac_g1_deployment_forward.json", "isaac_g1_contact_forward.json"),
+                           ("isaac_g1_deployment_turn.json", "isaac_g1_contact_turn.json")):
+            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
+            after, contact_asset, contact_runtime = runner.load_plan(ROOT / "configs" / file)
+            self.assertEqual((asset, runtime), (contact_asset, contact_runtime))
+            self.assertEqual({k: v for k, v in before.items() if k != "scope"},
+                             {k: v for k, v in after.items() if k not in ("scope", "contact_override")})
+            self.assertEqual(runner.trial_contract(before)[0], runner.trial_contract(after)[0])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profile.json"
+            raw = json.loads((ROOT / "configs/isaac_g1_contact.json").read_text())
+            palm = json.loads((ROOT / "configs/isaac_g1_palm.json").read_text())
+            for data in ({**raw, "contact_override": {"source": "guessed.json"}},
+                         {**raw, "contact_override": {**raw["contact_override"], "friction": 2.0}},
+                         {**palm, "contact_override": raw["contact_override"]}):
+                path.write_text(json.dumps(data))
+                with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
+            stand = Path(tmp) / "stand"; stand.mkdir()
+            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_deployment.json").read_text())
+            with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
+                runner.main(["--profile", str(ROOT / "configs/isaac_g1_contact_forward.json"), "--stage", "balance",
+                             "--stand-run", str(stand)])
+            self.assertEqual(exit_error.exception.code, 2)
+
+    def test_contact_authoring_deinstances_and_moves_only_sphere_centers(self):
+        stage = SimpleNamespace(target="root", writes=[], GetSessionLayer=lambda: "session")
+        self_test = self
+
+        class Matrix:
+            def __init__(self, value): self.value = np.asarray(value, dtype=float)
+            def __mul__(self, other): return Matrix(self.value @ other.value)
+            def __getitem__(self, index): return self.value[index]
+            def GetInverse(self): return Matrix(np.linalg.inv(self.value))
+            def ExtractTranslation(self): return self.value[3, :3]
+
+        class Attribute:
+            def __init__(self, prim): self.prim = prim
+            def Set(self, value):
+                self_test.assertEqual(stage.target, "session")
+                self_test.assertFalse(self.prim.IsInstanceProxy())
+                self.prim.translate = list(value); stage.writes.append(self.prim.path)
+                return True
+
+        class Prim:
+            def __init__(self, path, parent=None, translate=None):
+                self.path, self.parent, self.translate, self.instanceable = path, parent, translate, path.endswith("/collisions")
+            def __bool__(self): return True
+            def GetPath(self): return self.path
+            def GetParent(self): return self.parent
+            def GetTypeName(self): return "Sphere" if self.translate else "Xform"
+            def HasAPI(self, api): return api == "Collision" if self.translate else api != "Collision" and self.parent.parent is None
+            def IsInstance(self): return self.instanceable
+            def IsInstanceProxy(self): return any(p.instanceable for p in self.ancestors())
+            def ancestors(self):
+                prim = self.parent
+                while prim is not None: yield prim; prim = prim.parent
+            def SetInstanceable(self, value):
+                self_test.assertEqual(stage.target, "session"); self.instanceable = value; stage.writes.append(self.path)
+            def GetAttribute(self, name): return Attribute(self) if name == "xformOp:translate" and self.translate else None
+            def world(self):
+                local = np.eye(4)
+                if self.translate: local[:3, :3] *= SPHERE_SCALE; local[3, :3] = self.translate
+                elif self.parent.parent is None: local[3, :3] = [0.0, 0.12, 0.036]
+                return local @ (self.parent.world() if self.parent.parent is not None else np.eye(4))
+
+        robot = Prim("/World/envs/env_0/Robot")
+        prims = {}
+        for name in ("left_ankle_roll_link", "right_ankle_roll_link"):
+            body = Prim(f"{robot.path}/{name}", robot)
+            collisions = Prim(body.path + "/collisions", body)
+            group = Prim(collisions.path + "/spheres", collisions)
+            prims.update({p.path: p for p in (body, collisions, group)})
+            for index, x, y in ACTUAL_FOOT_SPHERES:
+                sphere = Prim(f"{group.path}/Sphere_{index}", group, [x, y, -0.031])
+                prims[sphere.path] = sphere
+        stage.GetPrimAtPath = lambda path: prims[path]
+
+        @contextmanager
+        def edit(target, layer):
+            target.target = layer
+            try: yield
+            finally: target.target = "root"
+
+        foot = wbc.load_dynamics_reference()["bodies"]["left_ankle_roll_link"]
+        mass = SimpleNamespace(GetMassAttr=lambda: SimpleNamespace(Get=lambda: foot["mass_kg"]),
+                               GetCenterOfMassAttr=lambda: SimpleNamespace(Get=lambda: tuple(foot["com_position_b_m"])),
+                               GetDiagonalInertiaAttr=lambda: SimpleNamespace(Get=lambda: tuple(foot["principal_inertia_kg_m2"])))
+        pxr = SimpleNamespace(Gf=SimpleNamespace(Vec3d=lambda *v: tuple(v)),
+            Usd=SimpleNamespace(EditContext=edit, TraverseInstanceProxies=lambda: None,
+                                PrimRange=lambda body, predicate: [p for p in prims.values() if p.path.startswith(body.path)]),
+            UsdGeom=SimpleNamespace(XformCache=lambda: SimpleNamespace(GetLocalToWorldTransform=lambda p: Matrix(p.world())),
+                                    Sphere=lambda p: SimpleNamespace(GetRadiusAttr=lambda: SimpleNamespace(Get=lambda: 0.5))),
+            UsdPhysics=SimpleNamespace(RigidBodyAPI="Rigid", MassAPI=lambda prim: mass, CollisionAPI="Collision"))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"pxr": pxr}):
+            report = runner.apply_source_contact(stage, SimpleNamespace(is_initialized=False), Path(tmp))
+            self.assertEqual(stage.target, "root")
+            self.assertEqual(json.loads((Path(tmp) / "contact-override.json").read_text())["status"], "authored_before_physics_reset")
+            self.assertEqual(len(stage.writes), 10)  # Two de-instanced collider scopes and eight sphere centers.
+            self.assertFalse(any(p.instanceable for p in prims.values()))
+            evidence, placement, runtime = contact_fixture()
+            report["materials"] = evidence["materials"]
+            self.assertEqual(wbc.contact_override_summary(report, placement, runtime)["status"], "verified_source_contact")
+            for sphere in report["feet"]["left_ankle_roll_link"]["spheres"]:
+                np.testing.assert_allclose(sphere["linear_body"], np.eye(3)*SPHERE_SCALE, atol=1e-15, rtol=0)
+            with self.assertRaisesRegex(RuntimeError, "precede physics"):
+                runner.apply_source_contact(stage, SimpleNamespace(is_initialized=True), Path(tmp))
+            self.assertEqual(len(stage.writes), 10)
 
     def test_xyzw_quarter_turns_and_half_turns(self):
         q = [0, 0, np.sqrt(0.5), np.sqrt(0.5)]
@@ -1080,7 +1256,8 @@ class ControllerLaunchTests(unittest.TestCase):
                              "SimulationCfg": Config, "SimulationContext": Simulation},
             "isaaclab.utils": {"configclass": lambda c: c, "instantiate": instantiate, "replace": replace},
             "isaaclab_assets": {"G1_29DOF_CFG": candidate}, "isaaclab_physx": {},
-            "isaaclab_physx.physics": {"PhysxCfg": Config},
+            "isaaclab_physx.physics": {"PhysxCfg": Config}, "isaaclab_physx.sim": {}, "isaaclab_physx.sim.spawners": {},
+            "isaaclab_physx.sim.spawners.materials": {"PhysxRigidBodyMaterialCfg": Config},
             "isaaclab_physx.renderers": {"IsaacRtxRendererCfg": Config}, "PIL": {"Image": Image},
         }.items():
             module = ModuleType(key)
@@ -1358,6 +1535,58 @@ class ControllerLaunchTests(unittest.TestCase):
             rejected_analysis["functional"]["checks"]["displacement_within_0_10m"] = False
             with mock.patch.object(runner,"analyze_run",return_value=rejected_analysis), self.assertRaisesRegex(RuntimeError,"Functional gate failed"):
                 runner.validate_stage("balance",deployment_dir,deployment_profile)
+
+            # Source contact reuses the same doubles; verification must finish before control.
+            contact_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_contact.json")
+            contact_profile = {**contact_profile, "camera": deployment_profile["camera"]}
+            authored, _, _ = contact_fixture()
+            del authored["materials"]
+            materials = {"/physicsScene/defaultMaterial": 1.0, "/World/Ground/physicsMaterial": 1.0}
+            def author_contact(stage, target, directory):
+                self.assertFalse(target.is_initialized)
+                return {**copy.deepcopy(authored), "status": "authored_before_physics_reset"}
+            def read_material(stage, path):
+                return {"path": path, "static_friction": materials[path], "dynamic_friction": 1.0, "friction_combine_mode": "max"}
+            created = []
+            initialize = Simulation.__init__
+            def record_simulation(self, config):
+                created.append(config); initialize(self, config)
+            for label in ("contact", "contact-friction-mismatch"):
+                contact_dir = directory / label; contact_dir.mkdir()
+                for file, value in (("profile.json",contact_profile),("asset-profile.json",asset),("controller-contract.json",contract)):
+                    (contact_dir/file).write_text(json.dumps(value))
+                Policy.observations.clear()
+                steps_before = Simulation.steps
+                with ExitStack() as patches:
+                    for target, name, kwargs in ((runner,"apply_fixed_hands",{"side_effect":fix_hands}),
+                            (runner,"apply_palm_override",{"side_effect":author_palm}),
+                            (runner,"read_palm_runtime",{"side_effect":read_palms}),
+                            (runner,"apply_source_contact",{"side_effect":author_contact}),
+                            (runner,"read_material",{"side_effect":read_material}),
+                            (runner,"read_runtime_dynamics",{"side_effect":read_dynamics}),
+                            (runner,"read_joint_frames",{"return_value":joint_frame_fixture(reference)}),
+                            (runner,"read_collision_geometry",{"side_effect":lambda stage,poses:contact_geometry(poses)}),
+                            (Simulation,"__init__",{"new":record_simulation})):
+                        patches.enter_context(mock.patch.object(target,name,**kwargs))
+                    if label == "contact":
+                        runner.balance_check(contact_profile,asset,runtime,contract,reference,Path("unused.onnx"),contact_dir)
+                    else:
+                        materials["/World/Ground/physicsMaterial"] = 0.5
+                        with self.assertRaisesRegex(ValueError,"friction material"):
+                            runner.balance_check(contact_profile,asset,runtime,contract,reference,Path("unused.onnx"),contact_dir)
+                if label == "contact":
+                    runner.validate_stage("balance",contact_dir,contact_profile)
+                    analysis = runner.analyze_run(contact_dir)
+                    self.assertEqual(analysis["contact_override"]["status"],"verified_source_contact")
+                    self.assertEqual(analysis["functional"]["status"],"passed_functional_evaluation")
+                    self.assertEqual(len(Policy.observations),250)
+                    for material in (instantiated[-1].ground.spawn.physics_material, created[-1].physics_material):
+                        self.assertEqual((material.static_friction, material.dynamic_friction, material.friction_combine_mode), (1.0, 1.0, "max"))
+                else:
+                    self.assertEqual(Simulation.steps, steps_before)
+                    self.assertFalse(Policy.observations)
+                    self.assertFalse((contact_dir/"trajectory.jsonl").exists())
+                    self.assertEqual(json.loads((contact_dir/"contact-override.json").read_text())["materials"]["ground"]["static_friction"],0.5)
 
 if __name__ == "__main__":
     unittest.main()

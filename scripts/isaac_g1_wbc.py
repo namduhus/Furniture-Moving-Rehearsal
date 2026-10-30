@@ -153,6 +153,79 @@ def apply_palm_override(stage, robot, contract, directory):
     return report
 
 
+def apply_source_contact(stage, robot, directory):
+    """Move only the existing foot sphere centers to the pinned source model before reset."""
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+    from g1_wbc import CONTACT_REFERENCE_SHA256, load_contact_reference, source_sphere_center
+
+    reference = load_contact_reference()
+    report = {"status": "preparing_source_contact", "reference_sha256": CONTACT_REFERENCE_SHA256,
+              "edit_layer": "session", "applied_before_reset": False, "feet": {}}
+    write_json(directory / "contact-override.json", report)
+    if robot.is_initialized:
+        raise RuntimeError("Source contact geometry must precede physics initialization")
+
+    def read(body, prim):
+        cache = UsdGeom.XformCache()
+        relative = cache.GetLocalToWorldTransform(prim)*cache.GetLocalToWorldTransform(body).GetInverse()
+        return {"radius": float(UsdGeom.Sphere(prim).GetRadiusAttr().Get()),
+                "center_body_m": [float(v) for v in relative.ExtractTranslation()],
+                "linear_body": [[float(relative[i][j]) for j in range(3)] for i in range(3)]}
+
+    edits = []
+    for name in reference["foot_bodies"]:
+        body = stage.GetPrimAtPath(f"/World/envs/env_0/Robot/{name}")
+        if not body or not body.HasAPI(UsdPhysics.RigidBodyAPI) or not body.HasAPI(UsdPhysics.MassAPI):
+            raise RuntimeError(f"Expected a rigid foot with authored mass: {name}")
+        spheres = [p for p in Usd.PrimRange(body, Usd.TraverseInstanceProxies()) if p.HasAPI(UsdPhysics.CollisionAPI)]
+        if len(spheres) != 4 or any(p.GetTypeName() != "Sphere" for p in spheres):
+            raise RuntimeError(f"Expected exactly four foot collision spheres: {name}")
+        mass = UsdPhysics.MassAPI(body)
+        foot = {"authored_mass_kg": float(mass.GetMassAttr().Get()),
+                "authored_com_b_m": [float(v) for v in mass.GetCenterOfMassAttr().Get()],
+                "authored_principal_inertia_kg_m2": [float(v) for v in mass.GetDiagonalInertiaAttr().Get()],
+                "spheres": [{"path": str(p.GetPath()), **read(body, p)} for p in spheres]}
+        report["feet"][name] = foot
+        edits.append((body, foot))
+    write_json(directory / "contact-override.json", report)
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        for body, foot in edits:
+            for sphere in foot["spheres"]:
+                # Instance proxies are read-only; de-instance only the collider ancestors.
+                parent = stage.GetPrimAtPath(sphere["path"]).GetParent()
+                while parent.GetPath() != body.GetPath():
+                    if parent.IsInstance():
+                        parent.SetInstanceable(False)
+                    parent = parent.GetParent()
+            for sphere in foot["spheres"]:
+                prim = stage.GetPrimAtPath(sphere["path"])
+                translate = prim.GetAttribute("xformOp:translate")
+                if not prim or prim.IsInstanceProxy() or not translate:
+                    raise RuntimeError(f"Foot sphere is not editable: {sphere['path']}")
+                if not translate.Set(Gf.Vec3d(*source_sphere_center(sphere["center_body_m"], reference).tolist())):
+                    raise RuntimeError(f"Unable to author source foot sphere: {sphere['path']}")
+    for body, foot in edits:
+        for sphere in foot["spheres"]:
+            after = read(body, stage.GetPrimAtPath(sphere["path"]))
+            sphere.update(after_center_body_m=after["center_body_m"], after_linear_body=after["linear_body"])
+    report.update(status="authored_before_physics_reset", applied_before_reset=True)
+    write_json(directory / "contact-override.json", report)
+    return report
+
+
+def read_material(stage, path):
+    prim = stage.GetPrimAtPath(path)
+    if not prim:
+        raise RuntimeError(f"Missing physics material: {path}")
+    report = {"path": path}
+    for name, attribute in (("static_friction", "physics:staticFriction"), ("dynamic_friction", "physics:dynamicFriction"),
+                            ("friction_combine_mode", "physxMaterial:frictionCombineMode")):
+        attr = prim.GetAttribute(attribute)
+        value = attr.Get() if attr else None
+        report[name] = value if value is None or isinstance(value, float) else str(value)
+    return report
+
+
 def read_palm_runtime(robot):
     """Read the pinned PhysX body's local COM and full inertia in public order."""
     import numpy as np
@@ -449,6 +522,14 @@ def analyze_run(directory):
     if profile.get("inertial_override"):
         report["inertial_override"] = analyze_palm_override(directory, profile,
             json.loads((directory / "controller-contract.json").read_text()))
+    if profile.get("contact_override"):
+        from g1_wbc import contact_override_summary
+        evidence = json.loads((directory / "contact-override.json").read_text())
+        if evidence["status"] != "passed_source_contact":
+            raise ValueError("Incomplete source contact evidence")
+        report["contact_override"] = contact_override_summary(evidence,
+            json.loads((directory / "initial-placement.json").read_text()),
+            json.loads((directory / "deployment-runtime.json").read_text()))
     if not profile.get("diagnostics"):
         report["limitation"] = "This historical run did not record contact forces or policy inputs; foot slip cannot be determined."
         return report
@@ -573,8 +654,8 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "deployment", "command", "functional_case", "scope"}:
-            raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm override")
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "inertial_override", "contact_override", "deployment", "command", "functional_case", "scope"}:
+            raise ValueError("Trial extensions may only add diagnostics, placement and the reviewed palm/contact overrides")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
         if (not isinstance(diagnostics, dict) or
@@ -613,6 +694,9 @@ def load_plan(path):
         if (not profile.get("initialization") or
                 profile["inertial_override"] != {"body": "left_hand_palm_link", "source": "pinned_urdf"}):
             raise ValueError("Only the pinned left-palm inertial override with initial placement is reviewed")
+    if "contact_override" in profile and (
+            not deployment or profile["contact_override"] != {"source": "assets/references/g1_wbc_contact.json"}):
+        raise ValueError("Only the pinned source foot contact within the deployment protocol is reviewed")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if deployment:
         asset["fixed_hand_joints"] = asset["joint_groups"]["hands"]
@@ -708,10 +792,16 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         armature=contract["upper_body_armature"], friction=0.1 if deployment else 0.0,
         dynamic_friction=0.1 if deployment else 0.0, viscous_friction=0.001 if deployment else 0.0,
     )}
+    material = {}
+    if profile.get("contact_override"):
+        from g1_wbc import load_contact_reference
+        from isaaclab_physx.sim.spawners.materials import PhysxRigidBodyMaterialCfg
+        # Bind the source coefficient to the ground and to unbound foot colliders.
+        material = {"physics_material": PhysxRigidBodyMaterialCfg(**load_contact_reference()["isaac_material"])}
 
     @configclass
     class SceneCfg(InteractiveSceneCfg):
-        ground = AssetBaseCfg(prim_path="/World/Ground", spawn=sim_utils.GroundPlaneCfg())
+        ground = AssetBaseCfg(prim_path="/World/Ground", spawn=sim_utils.GroundPlaneCfg(**material))
         light = AssetBaseCfg(prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=1500))
         robot = candidate
         if not audit_only:
@@ -729,7 +819,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
 
     @configclass
     class LaunchCfg:
-        sim = sim_utils.SimulationCfg(device=runtime["device"], dt=asset["physics_dt"], physics=PhysxCfg())
+        sim = sim_utils.SimulationCfg(device=runtime["device"], dt=asset["physics_dt"], physics=PhysxCfg(), **material)
         scene = SceneCfg(num_envs=1, env_spacing=3.0)
 
     cfg = LaunchCfg()
@@ -752,6 +842,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         if deployment:
             apply_fixed_hands(sim.stage, scene["robot"], directory)
         palm_override = apply_palm_override(sim.stage, scene["robot"], contract, directory) if profile.get("inertial_override") else None
+        contact_override = apply_source_contact(sim.stage, scene["robot"], directory) if profile.get("contact_override") else None
         sim.reset()
         robot, camera = scene["robot"], None if audit_only else scene["camera"]
         if palm_override is not None:
@@ -901,6 +992,15 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
             placement["status"] = "passed_initial_placement"
             placement_summary(placement, settings, contract["height_command"], placement["after_root_pose_xyzw"])
             write_json(directory / "initial-placement.json", placement)
+        if contact_override is not None:
+            from g1_wbc import contact_override_summary
+            contact_override["materials"] = {"default": read_material(sim.stage, "/physicsScene/defaultMaterial"),
+                                             "ground": read_material(sim.stage, "/World/Ground/physicsMaterial")}
+            write_json(directory / "contact-override.json", contact_override)
+            contact_override["verification"] = contact_override_summary(contact_override, placement,
+                json.loads((directory / "deployment-runtime.json").read_text()))
+            contact_override["status"] = "passed_source_contact"
+            write_json(directory / "contact-override.json", contact_override)
         pose = finite(array(robot.data.root_link_pose_w), (7,))
         q = finite(array(robot.data.joint_pos), (dofs,))
         velocity = finite(array(robot.data.root_link_vel_w), (6,))
@@ -1225,6 +1325,7 @@ def main(argv=None):
                           "contact_diagnostics": bool(profile.get("diagnostics")),
                           "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
                           "inertial_override": profile.get("inertial_override"),
+                          "contact_override": profile.get("contact_override"),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0
@@ -1235,8 +1336,9 @@ def main(argv=None):
             parser.error("Moving deployment trials require --stand-run from a successful standing evaluation")
         stand_dir = args.stand_run.expanduser().resolve()
         stand_profile = json.loads((stand_dir / "profile.json").read_text())
-        if stand_profile.get("deployment") != profile["deployment"] or stand_profile.get("functional_case") != "stand":
-            parser.error("--stand-run must use the same reviewed deployment with a standing case")
+        if (stand_profile.get("deployment") != profile["deployment"] or stand_profile.get("functional_case") != "stand" or
+                stand_profile.get("contact_override") != profile.get("contact_override")):
+            parser.error("--stand-run must use the same reviewed deployment and contact with a standing case")
         if json.loads((stand_dir / "runtime-config.json").read_text()) != runtime:
             parser.error("--stand-run must use the same runtime configuration")
         validate_stage("balance", stand_dir, stand_profile)

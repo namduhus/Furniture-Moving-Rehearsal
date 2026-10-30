@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "source": {
+    "path": "decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.xml",
+    "git_blob_sha1": "b5879a3c400eead549758283b00dbc9da46e414d",
+    "sha256": "3b0b5a1c8299fda85cf328cc2a8df53ccc765ce37f20030175295049947b1a19",
+    "url": "https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc/sim2mujoco/resources/robots/g1/g1_gear_wbc.xml"
+  },
+  "foot_bodies": [
+    "left_ankle_roll_link",
+    "right_ankle_roll_link"
+  ],
+  "foot_sphere_radius_m": 0.005,
+  "foot_sphere_centers_m": [
+    [-0.05, 0.025, -0.03],
+    [-0.05, -0.025, -0.03],
+    [0.12, 0.03, -0.03],
+    [0.12, -0.03, -0.03]
+  ],
+  "source_friction": "The source foot spheres and floor leave MuJoCo geom friction unauthored: default sliding coefficient 1.0, combined by maximum, condim 3.",
+  "isaac_material": {
+    "static_friction": 1.0,
+    "dynamic_friction": 1.0,
+    "friction_combine_mode": "max"
+  },
+  "residual_differences": [
+    "MuJoCo soft contact with default solref/solimp is not equivalent to PhysX rigid contact; the asset's authored PhysX contact offset is retained.",
+    "PhysX static and dynamic coefficients both approximate the single MuJoCo sliding coefficient.",
+    "Isaac keeps its scaled unit-sphere collider representation, sphere orientation and body decomposition; only sphere centers move."
+  ],
+  "attribution": "Derived from the pinned NVIDIA GR00T-WholeBodyControl deployment model; uses existing NVIDIA/Unitree terms in README and licenses."
+}

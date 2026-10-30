@@ -2,3 +2,4 @@
 assets/references/g1_wbc.urdf -text whitespace=cr-at-eol
 assets/references/g1_wbc_dynamics.json text eol=lf
 assets/references/g1_wbc_deployment.json text eol=lf
+assets/references/g1_wbc_contact.json text eol=lf

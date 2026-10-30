@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_COMMIT = "4141c34280abb67c82e115342a8720f4a83d750d"
 DYNAMICS_REFERENCE_SHA256 = "c61a85fc44fc74482285fb2efb09e4e0f8918a1a94a722c78bbf22887c0cad9d"
 DEPLOYMENT_REFERENCE_SHA256 = "790678175ea58d658f4d501aacf349f275c24dd4eea3a2bc9c3e7deddc602cc6"
+CONTACT_REFERENCE_SHA256 = "dc2b3eddaa2b69a4d9c742e5f8e3d72d60983c6312b9bde4866aef5a7725d53e"
 
 
 def finite(value, shape=None):
@@ -243,6 +244,68 @@ def load_deployment_reference():
     if hashlib.sha256(path.read_bytes()).hexdigest() != DEPLOYMENT_REFERENCE_SHA256:
         raise ValueError("Deployment reference hash mismatch")
     return json.loads(path.read_text())
+
+
+def load_contact_reference():
+    path = ROOT / "assets/references/g1_wbc_contact.json"
+    if hashlib.sha256(path.read_bytes()).hexdigest() != CONTACT_REFERENCE_SHA256:
+        raise ValueError("Contact reference hash mismatch")
+    return json.loads(path.read_text())
+
+
+def source_sphere_center(center, reference):
+    """Pair an existing foot sphere with the source sphere in its toe/heel and side quadrant."""
+    sources = finite(reference["foot_sphere_centers_m"], (4, 3))
+    center = finite(center, (3,))
+    split = sources[:, 0].mean()
+    matches = [i for i, source in enumerate(sources)
+               if (source[0] > split) == (center[0] > split) and np.sign(source[1]) == np.sign(center[1])]
+    if len(matches) != 1 or center[1] == 0:
+        raise ValueError(f"Foot sphere does not map to one source quadrant: {center.tolist()}")
+    return sources[matches[0]]
+
+
+def contact_override_summary(evidence, placement, runtime):
+    """Check source sphere centers, unchanged foot inertia and friction materials before control."""
+    reference = load_contact_reference()
+    if (evidence["reference_sha256"] != CONTACT_REFERENCE_SHA256 or evidence["edit_layer"] != "session" or
+            evidence["applied_before_reset"] is not True or set(evidence["feet"]) != set(reference["foot_bodies"])):
+        raise ValueError("Invalid source contact provenance")
+    sources = sorted(map(tuple, finite(reference["foot_sphere_centers_m"], (4, 3))))
+    for name, foot in evidence["feet"].items():
+        targets = set()
+        for sphere in foot["spheres"]:
+            linear = finite(sphere["linear_body"], (3, 3))
+            target = source_sphere_center(sphere["center_body_m"], reference)
+            radius = float(finite(sphere["radius"]))*float(np.sqrt(np.trace(linear @ linear.T)/3))
+            if (not np.allclose(finite(sphere["after_center_body_m"], (3,)), target, atol=1e-9, rtol=0) or
+                    not np.allclose(finite(sphere["after_linear_body"], (3, 3)), linear, atol=1e-12, rtol=0) or
+                    not np.isclose(radius, reference["foot_sphere_radius_m"], atol=1e-6, rtol=0)):
+                raise ValueError(f"Source foot sphere was not applied: {sphere['path']}")
+            targets.add(tuple(target))
+        if len(foot["spheres"]) != 4 or len(targets) != 4:
+            raise ValueError(f"Foot spheres do not cover the four source centers: {name}")
+        shapes = placement["before_geometry"]["feet"][name]["colliders"]
+        placed = sorted(tuple(finite(s["body_from_shape"], (4, 4))[:3, 3]) for s in shapes)
+        if len(shapes) != 4 or not np.allclose(placed, sources, atol=1e-7, rtol=0):
+            raise ValueError(f"Initialized foot geometry differs from the source centers: {name}")
+        i = runtime["body_names"].index(name)
+        inertia = finite(runtime["body_inertia_backend_kg_m2"][i], (9,)).reshape(3, 3)
+        if (not np.isclose(runtime["body_mass_kg"][i], foot["authored_mass_kg"], atol=1e-6, rtol=0) or
+                not np.allclose(finite(runtime["body_com_pose_b_xyzw"][i], (7,))[:3], foot["authored_com_b_m"], atol=1e-6, rtol=0) or
+                not np.allclose(np.linalg.eigvalsh(inertia), np.sort(foot["authored_principal_inertia_kg_m2"]), atol=1e-9, rtol=0)):
+            raise ValueError(f"Foot inertial values changed with collider geometry: {name}")
+    wanted = reference["isaac_material"]
+    for scope in ("default", "ground"):
+        material = evidence["materials"][scope]
+        if (material["friction_combine_mode"] != wanted["friction_combine_mode"] or
+                not np.isclose(material["static_friction"], wanted["static_friction"], atol=1e-6, rtol=0) or
+                not np.isclose(material["dynamic_friction"], wanted["dynamic_friction"], atol=1e-6, rtol=0)):
+            raise ValueError(f"Source friction material was not applied: {scope}")
+    return {"status": "verified_source_contact", "foot_sphere_centers_m": [list(s) for s in sources],
+            "effective_foot_ground_friction": wanted["static_friction"],
+            "limitations": ["Composed USD and authored materials before control; PhysX-internal shape poses are not read back.",
+                            *reference["residual_differences"]]}
 
 
 def deployment_contract(contract, reference, command):
