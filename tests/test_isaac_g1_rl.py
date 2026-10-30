@@ -1,5 +1,5 @@
 import copy
-from contextlib import nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 import json
 from pathlib import Path
 import sys
@@ -77,134 +77,182 @@ class BatchAdapterTests(unittest.TestCase):
             self.assertEqual(rl.main(["--dry-run"]), 0)
 
 
+class Tensor:
+    def __init__(self, value): self.value = np.asarray(value, dtype=float)
+    def detach(self): return self
+    def cpu(self): return self
+    def numpy(self): return self.value
+
+
+def rows(env_ids, count):
+    return list(range(count)) if env_ids is None else list(env_ids)
+
+
+@contextmanager
+def parallel_isaac(count, profile, asset):
+    """Isaac Lab, scene and USD-edit doubles for `count` parallel push environments on a 4 m grid.
+
+    Each box rests for 80 physics steps after its last pose write, then slides 0.4 mm along x per step.
+    """
+    contract, reference = rl.trial_contract(profile)
+    names = list(reversed(asset["controller_reference"]["joint_order"]))
+    lower = asset["joint_groups"]["lower_body"]
+    bodies = list(reference.forward(dict.fromkeys(reference.limits, 0.0)))
+    source = wbc.load_dynamics_reference()["bodies"]
+    palm = wbc.palm_inertial_reference(contract)["mass_kg"]
+    masses = [palm if b == "left_hand_palm_link" else source.get(b, {"mass_kg": 1.0})["mass_kg"] for b in bodies]
+    origins = np.array([[4.0*(i % 2), 4.0*(i // 2), 0.0] for i in range(count)])
+    steps = {"count": 0}
+    push = profile["push_object"]
+    box_mass, box_friction = np.full(count, float(push["mass_kg"])), np.full(count, float(push["friction"]))
+
+    class Data:
+        def __init__(self, robot): self.robot = robot
+        joint_stiffness = property(lambda self: Tensor([[0.0 if n in lower else 100.0 for n in names]]*count))
+        joint_damping = property(lambda self: Tensor([[0.0 if n in lower else 0.5 for n in names]]*count))
+        joint_armature = property(lambda self: Tensor(np.full((count, 29), 0.01)))
+        joint_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.1)))
+        joint_dynamic_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.1)))
+        joint_viscous_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.001)))
+        body_mass = property(lambda self: Tensor([masses]*count))
+        joint_pos_limits = property(lambda self: Tensor([[[reference.limits[n]["lower"], reference.limits[n]["upper"]] for n in names]]*count))
+        joint_pos = property(lambda self: Tensor(self.robot.q))
+        joint_vel = property(lambda self: Tensor(np.zeros((count, 29))))
+        root_link_pose_w = property(lambda self: Tensor(self.robot.pose))
+        root_link_vel_w = property(lambda self: Tensor(np.zeros((count, 6))))
+
+        @property
+        def body_link_pose_w(self):
+            out = []
+            for q, pose in zip(self.robot.q, self.robot.pose):
+                fk = reference.forward(dict(zip(names, q, strict=True)))
+                root = wbc.pose_matrix(pose)
+                out.append([np.r_[(root @ fk[b])[:3, 3], wbc.matrix_quat_xyzw((root @ fk[b])[:3, :3])] for b in bodies])
+            return Tensor(out)
+
+    class Robot:
+        joint_names, body_names = names, bodies
+        def __init__(self):
+            self.q = np.zeros((count, 29))
+            self.pose = np.c_[origins + [0, 0, 0.8], np.tile([0, 0, 0, 1.0], (count, 1))]
+            self.data = Data(self)
+            self.root_writes = []
+        def write_root_pose_to_sim_index(self, *, root_pose, env_ids=None):
+            self.pose[rows(env_ids, count)] = root_pose.value
+            self.root_writes.append(rows(env_ids, count))
+        def write_root_velocity_to_sim_index(self, *, root_velocity, env_ids=None): pass
+        def write_joint_position_to_sim_index(self, *, position, env_ids=None): self.q[rows(env_ids, count)] = position.value
+        def write_joint_velocity_to_sim_index(self, *, velocity, env_ids=None): pass
+        def set_joint_position_target_index(self, *, target): self.targets = target.value.copy()
+        def set_joint_velocity_target_index(self, *, target): pass
+
+    class Box:
+        is_initialized = False
+        def __init__(self):
+            self.pose = np.c_[origins + [built.hand_reach + push["gap_m"] + push["size_m"][0]/2, 0, push["size_m"][2]/2],
+                              np.tile([0, 0, 0, 1.0], (count, 1))]
+            self.written = np.zeros(count)
+            self.root_view = SimpleNamespace(get_material_properties=lambda: Tensor(
+                np.stack([box_friction.astype(np.float32)]*2 + [np.zeros(count)], axis=1)[:, None, :]))
+        def slide(self): return 0.0004*np.maximum(0, steps["count"]-self.written-80)
+        @property
+        def data(self):
+            pose = self.pose.copy()
+            pose[:, 0] += self.slide()
+            velocity = np.zeros((count, 6))
+            velocity[:, 0] = np.where(self.slide() > 0, 0.0004/0.005, 0.0)
+            return SimpleNamespace(body_mass=Tensor(box_mass[:, None]), root_link_pose_w=Tensor(pose),
+                                   root_link_vel_w=Tensor(velocity))
+        def write_root_pose_to_sim_index(self, *, root_pose, env_ids=None):
+            ids = rows(env_ids, count)
+            self.pose[ids], self.written[ids] = root_pose.value, steps["count"]
+        def write_root_velocity_to_sim_index(self, *, root_velocity, env_ids=None): pass
+
+    class Scene(dict):
+        env_origins = Tensor(origins)
+        def reset(self, env_ids=None): pass
+        def update(self, dt): pass
+        def write_data_to_sim(self): pass
+
+    class Simulation:
+        stage = object()
+        def __init__(self, config): pass
+        def reset(self): self.started = True
+        def forward(self): pass
+        def step(self, *, render): steps["count"] += 1
+
+    class Policy:
+        def __init__(self, *args): pass
+        def batch(self, observations): return np.zeros((len(observations), 15), dtype=np.float32)
+
+    def author_box(stage, box, env, mass, friction):
+        i = int(env.rsplit("_", 1)[1])
+        box_mass[i], box_friction[i] = mass, friction
+
+    def material(stage, path):
+        value = 1.0
+        if "Furniture" in path:
+            value = float(np.float32(box_friction[int(path.split("env_")[1].split("/")[0])]))
+        return {"path": path, "static_friction": value, "dynamic_friction": value, "friction_combine_mode": "multiply"}
+
+    built = SimpleNamespace(cfg=SimpleNamespace(sim=None, scene=None), hand_reach=0.415)
+    robot, box = Robot(), Box()
+    hands = {"status": "authored_fixed_hands_before_reset", "joints": dict.fromkeys(range(14), {})}
+    report, _, _ = contact_fixture()
+    modules = {"torch": ModuleType("torch"), "warp": ModuleType("warp"), "isaaclab": ModuleType("isaaclab"),
+               "isaaclab.app": ModuleType("isaaclab.app"), "isaaclab.sim": ModuleType("isaaclab.sim"),
+               "isaaclab.utils": ModuleType("isaaclab.utils")}
+    modules["torch"].__dict__.update(float32=np.float32, manual_seed=lambda seed: None,
+                                     as_tensor=lambda value, **kwargs: Tensor(value))
+    modules["warp"].config = SimpleNamespace(enable_backward=True)
+    modules["isaaclab.app"].launch_simulation = lambda *args: nullcontext()
+    modules["isaaclab.sim"].SimulationContext = Simulation
+    modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box)
+    authored = []
+    with ExitStack() as stack:
+        for patch in (mock.patch.dict(sys.modules, modules), mock.patch.object(wbc, "BalancePolicy", Policy),
+                      mock.patch.object(rl, "apply_fixed_hands", side_effect=lambda stage, r, d, env: authored.append(env) or hands),
+                      mock.patch.object(rl, "apply_palm_override", return_value={"status": "authored_before_physics_reset"}),
+                      mock.patch.object(rl, "apply_source_contact", return_value=copy.deepcopy(report)),
+                      mock.patch.object(rl, "apply_box_properties", side_effect=author_box),
+                      mock.patch.object(rl, "read_material", side_effect=material),
+                      mock.patch.object(rl, "read_joint_frames", return_value=joint_frame_fixture(reference)),
+                      mock.patch.object(rl, "read_collision_geometry", side_effect=lambda stage, poses: contact_geometry(poses))):
+            stack.enter_context(patch)
+        scene_config = stack.enter_context(mock.patch.object(rl, "scene_config", return_value=built))
+        yield SimpleNamespace(robot=robot, box=box, steps=steps, authored=authored, scene_config=scene_config,
+                              origins=origins, box_mass=box_mass, box_friction=box_friction)
+
+
 class ParallelWorkerTests(unittest.TestCase):
     def test_worker_verifies_every_environment_and_runs_the_batched_loop(self):
         config, profile, asset, runtime = rl.load_config(rl.DEFAULT_CONFIG)
-        config = {**config, "num_envs": 3, "control_steps": 30}
-        contract, reference = rl.trial_contract(profile)
-        count, names = 3, list(reversed(asset["controller_reference"]["joint_order"]))
-        lower = asset["joint_groups"]["lower_body"]
-        bodies = list(reference.forward(dict.fromkeys(reference.limits, 0.0)))
-        source = wbc.load_dynamics_reference()["bodies"]
-        palm = wbc.palm_inertial_reference(contract)["mass_kg"]
-        masses = [palm if b == "left_hand_palm_link" else source.get(b, {"mass_kg": 1.0})["mass_kg"] for b in bodies]
-        origins = np.array([[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
-        steps = {"count": 0}
-
-        class Tensor:
-            def __init__(self, value): self.value = np.asarray(value, dtype=float)
-            def detach(self): return self
-            def cpu(self): return self
-            def numpy(self): return self.value
-
-        class Data:
-            def __init__(self, robot): self.robot = robot
-            joint_stiffness = property(lambda self: Tensor([[0.0 if n in lower else 100.0 for n in names]]*count))
-            joint_damping = property(lambda self: Tensor([[0.0 if n in lower else 0.5 for n in names]]*count))
-            joint_armature = property(lambda self: Tensor(np.full((count, 29), 0.01)))
-            joint_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.1)))
-            joint_dynamic_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.1)))
-            joint_viscous_friction_coeff = property(lambda self: Tensor(np.full((count, 29), 0.001)))
-            body_mass = property(lambda self: Tensor([masses]*count))
-            joint_pos_limits = property(lambda self: Tensor([[[reference.limits[n]["lower"], reference.limits[n]["upper"]] for n in names]]*count))
-            joint_pos = property(lambda self: Tensor(self.robot.q))
-            joint_vel = property(lambda self: Tensor(np.zeros((count, 29))))
-            root_link_pose_w = property(lambda self: Tensor(self.robot.pose))
-            root_link_vel_w = property(lambda self: Tensor(np.zeros((count, 6))))
-
-            @property
-            def body_link_pose_w(self):
-                out = []
-                for q, pose in zip(self.robot.q, self.robot.pose):
-                    fk = reference.forward(dict(zip(names, q, strict=True)))
-                    root = wbc.pose_matrix(pose)
-                    out.append([np.r_[(root @ fk[b])[:3, 3], wbc.matrix_quat_xyzw((root @ fk[b])[:3, :3])] for b in bodies])
-                return Tensor(out)
-
-        class Robot:
-            joint_names, body_names = names, bodies
-            def __init__(self):
-                self.q = np.zeros((count, 29))
-                self.pose = np.c_[origins + [0, 0, 0.8], np.tile([0, 0, 0, 1.0], (count, 1))]
-                self.data = Data(self)
-            def write_root_pose_to_sim_index(self, *, root_pose): self.pose = root_pose.value.copy()
-            def write_root_velocity_to_sim_index(self, *, root_velocity): pass
-            def write_joint_position_to_sim_index(self, *, position): self.q = position.value.copy()
-            def write_joint_velocity_to_sim_index(self, *, velocity): pass
-            def set_joint_position_target_index(self, *, target): self.targets = target.value.copy()
-            def set_joint_velocity_target_index(self, *, target): pass
-
-        class Box:
-            """Rests for 80 physics steps, then slides 0.4 mm along x per step."""
-            def __init__(self, x): self.start, self.x = steps["count"], x
-            @property
-            def data(self):
-                slide = 0.0004*max(0, steps["count"]-self.start-80)
-                return SimpleNamespace(body_mass=Tensor(np.full((count, 1), 10.0)),
-                                       root_link_pose_w=Tensor(np.c_[origins + [self.x+slide, 0, 0.5], np.tile([0, 0, 0, 1.0], (count, 1))]))
-
-        robot = Robot()
-
-        class Scene(dict):
-            env_origins = Tensor(origins)
-            def reset(self): pass
-            def update(self, dt): pass
-            def write_data_to_sim(self): pass
-
-        class Simulation:
-            stage = object()
-            def __init__(self, config): pass
-            def reset(self): pass
-            def forward(self): pass
-            def step(self, *, render): steps["count"] += 1
-
-        class Policy:
-            def __init__(self, *args): pass
-            def batch(self, observations):
-                self.last = observations
-                return np.zeros((len(observations), 15), dtype=np.float32)
-
-        hand_reach = 0.415
-        box = Box(hand_reach + 0.05 + 0.35)
-        built = SimpleNamespace(cfg=SimpleNamespace(sim=None, scene=None), hand_reach=hand_reach)
-        hands = {"status": "authored_fixed_hands_before_reset", "joints": dict.fromkeys(range(14), {})}
-        report, _, _ = contact_fixture()
-        modules = {"torch": ModuleType("torch"), "warp": ModuleType("warp"), "isaaclab": ModuleType("isaaclab"),
-                   "isaaclab.app": ModuleType("isaaclab.app"), "isaaclab.sim": ModuleType("isaaclab.sim"),
-                   "isaaclab.utils": ModuleType("isaaclab.utils")}
-        modules["torch"].__dict__.update(float32=np.float32, manual_seed=lambda seed: None,
-                                         as_tensor=lambda value, **kwargs: Tensor(value))
-        modules["warp"].config = SimpleNamespace(enable_backward=True)
-        modules["isaaclab.app"].launch_simulation = lambda *args: nullcontext()
-        modules["isaaclab.sim"].SimulationContext = Simulation
-        modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box)
-        authored = []
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, modules), \
-                mock.patch.object(wbc, "BalancePolicy", Policy), \
-                mock.patch.object(rl, "scene_config", return_value=built) as scene_config, \
-                mock.patch.object(rl, "apply_fixed_hands", side_effect=lambda stage, r, d, env: authored.append(env) or hands), \
-                mock.patch.object(rl, "apply_palm_override", return_value={"status": "authored_before_physics_reset"}), \
-                mock.patch.object(rl, "apply_source_contact", return_value=copy.deepcopy(report)), \
-                mock.patch.object(rl, "read_material", side_effect=lambda stage, path: {"path": path, "static_friction": float(np.float32(0.1)) if "Furniture" in path else 1.0,
-                                                                                         "dynamic_friction": float(np.float32(0.1)) if "Furniture" in path else 1.0,
-                                                                                         "friction_combine_mode": "multiply"}), \
-                mock.patch.object(rl, "read_joint_frames", return_value=joint_frame_fixture(reference)), \
-                mock.patch.object(rl, "read_collision_geometry", side_effect=lambda stage, poses: contact_geometry(poses)):
+        count = 3
+        config = {**config, "num_envs": count, "control_steps": 30}
+        with tempfile.TemporaryDirectory() as tmp, parallel_isaac(count, profile, asset) as fake:
             directory = Path(tmp)
             rl.run_worker(config, profile, asset, runtime, Path("unused.onnx"), directory)
             result = json.loads((directory / "rl-worker.json").read_text())
         self.assertEqual(result["status"], "passed_rl_throughput")
-        self.assertEqual(authored, [f"/World/envs/env_{i}" for i in range(count)])
-        self.assertEqual(scene_config.call_args.kwargs["replicate_physics"], False)
+        self.assertEqual(fake.authored, [f"/World/envs/env_{i}" for i in range(count)])
+        self.assertEqual(fake.scene_config.call_args.kwargs["replicate_physics"], False)
         self.assertEqual(result["setup"]["environments"], count)
         self.assertAlmostEqual(result["initialization"]["clearance_after_m"], 0.001, places=6)
-        self.assertEqual(steps["count"], 30*4)
+        self.assertEqual(fake.steps["count"], 30*4)
         self.assertEqual((result["fallen_envs"], result["invalid_action_envs"]), (0, 0))
         self.assertAlmostEqual(result["box_progress_m"]["median"], 0.0004*(120-80), places=6)
         self.assertAlmostEqual(result["simulated_seconds_per_env"], 0.6)
         self.assertEqual(set(result["phase_seconds"]), {"write", "step", "update", "read_observe", "policy", "command"})
         self.assertLessEqual(sum(result["phase_seconds"].values()), result["wall_seconds"])
         self.assertAlmostEqual(result["seconds_per_physics_step"], result["wall_seconds"]/120)
+
+    def test_worker_rejects_physx_friction_that_differs_from_usd(self):
+        config, profile, asset, runtime = rl.load_config(rl.DEFAULT_CONFIG)
+        config = {**config, "num_envs": 2, "control_steps": 4}
+        with tempfile.TemporaryDirectory() as tmp, parallel_isaac(2, profile, asset) as fake:
+            fake.box.root_view.get_material_properties = lambda: Tensor(np.full((2, 1, 3), 0.3))
+            with self.assertRaisesRegex(RuntimeError, "friction materials"):
+                rl.run_worker(config, profile, asset, runtime, Path("unused.onnx"), Path(tmp))
 
 
 if __name__ == "__main__":

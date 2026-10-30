@@ -15,6 +15,7 @@ import platform
 import sys
 import time
 import traceback
+from types import SimpleNamespace
 
 from isaac_g1_wbc import (ROOT, apply_fixed_hands, apply_palm_override, apply_source_contact, load_plan,
                           read_collision_geometry, read_joint_frames, read_material, scene_config, trial_contract)
@@ -39,7 +40,7 @@ def load_config(path):
     return config, profile, asset, runtime
 
 
-def verify_parallel_setup(robot, box, contract, asset, profile, hands, palms, contacts, numpy):
+def verify_parallel_setup(robot, box, contract, asset, profile, hands, palms, contacts, numpy, box_masses):
     """All environments must carry the qualified per-copy physics before control."""
     from g1_wbc import load_contact_reference, palm_inertial_reference, source_sphere_center
     np = numpy
@@ -78,18 +79,148 @@ def verify_parallel_setup(robot, box, contract, asset, profile, hands, palms, co
                           (robot.data.joint_dynamic_friction_coeff, 0.1), (robot.data.joint_viscous_friction_coeff, 0.001)):
         if not np.allclose(batch(value), wanted, atol=1e-7, rtol=0):
             raise RuntimeError("Armature or passive joint terms differ in some environments")
-    if not np.allclose(batch(box.data.body_mass), profile["push_object"]["mass_kg"], atol=1e-4, rtol=0):
+    if not np.allclose(batch(box.data.body_mass)[:, 0], box_masses, atol=1e-4, rtol=0):
         raise RuntimeError("Box mass differs in some environments")
     return {"status": "verified_parallel_setup", "environments": len(masses), "active_joints": 29,
             "left_palm_mass_kg": float(masses[0, bodies.index("left_hand_palm_link")])}
+
+
+LAUNCH_SETTINGS = {"headless": True, "enable_cameras": False, "kit_args": "--allow-root"}
+
+
+def apply_box_properties(stage, box, env, mass, friction):
+    """Author one environment's box mass and floor friction in the session layer before physics reset."""
+    from pxr import Usd, UsdPhysics
+
+    if box.is_initialized:
+        raise RuntimeError("Box properties must precede physics initialization")
+    body = stage.GetPrimAtPath(f"{env}/Furniture")
+    material = stage.GetPrimAtPath(f"{env}/Furniture/geometry/physicsMaterial")
+    if not body or not body.HasAPI(UsdPhysics.MassAPI) or not material:
+        raise RuntimeError(f"Expected the spawned box mass and material: {env}")
+    with Usd.EditContext(stage, stage.GetSessionLayer()):
+        written = [UsdPhysics.MassAPI(body).GetMassAttr().Set(float(mass))]
+        written += [material.GetAttribute(name).Set(float(friction))
+                    for name in ("physics:staticFriction", "physics:dynamicFriction")]
+    if not all(written):
+        raise RuntimeError(f"Unable to author box properties: {env}")
+
+
+def prepare_push_scene(built, count, profile, asset, runtime, contract, reference, directory, result, evidence,
+                       box_properties=None):
+    """Instantiate the parallel push scene with every qualified edit, verify it and place the crouch start.
+
+    evidence: JSON path that receives `result` once materials are read, before they are checked.
+    box_properties: optional per-environment (masses, frictions) authored before reset; defaults to the profile box.
+    """
+    import numpy as np
+    import torch
+    from g1_wbc import check_frames, collision_clearance, finite, joint_anchor_poses, matrix_quat_xyzw, placement_shift
+    import isaaclab.sim as sim_utils
+    from isaaclab.utils import instantiate
+
+    push = profile["push_object"]
+    if box_properties is None:
+        masses, frictions = np.full(count, float(push["mass_kg"])), np.full(count, float(push["friction"]))
+    else:
+        masses, frictions = (np.asarray(v, dtype=float) for v in box_properties)
+    sim = sim_utils.SimulationContext(built.cfg.sim)
+    scene = instantiate(built.cfg.scene)
+    robot, box = scene["robot"], scene["furniture"]
+    hands, palms, contacts = [], [], []
+    setup = directory / "env0-setup"
+    setup.mkdir()
+    for i in range(count):
+        env, record = f"/World/envs/env_{i}", setup if i == 0 else None
+        hands.append(apply_fixed_hands(sim.stage, robot, record, env=env))
+        palms.append(apply_palm_override(sim.stage, robot, contract, record, env=env))
+        contacts.append(apply_source_contact(sim.stage, robot, record, env=env))
+        if box_properties is not None:
+            apply_box_properties(sim.stage, box, env, masses[i], frictions[i])
+    sim.reset()
+
+    def batch(value):
+        value = value.torch if hasattr(value, "torch") else value
+        return value.detach().cpu().numpy().copy()
+
+    def device(value):
+        return torch.as_tensor(np.asarray(value), dtype=torch.float32, device=runtime["device"])
+
+    result["setup"] = verify_parallel_setup(robot, box, contract, asset, profile, hands, palms, contacts, np, masses)
+    boxes = [read_material(sim.stage, f"/World/envs/env_{i}/Furniture/geometry/physicsMaterial") for i in range(count)]
+    surface = {"default": read_material(sim.stage, "/physicsScene/defaultMaterial"),
+               "ground": read_material(sim.stage, "/World/Ground/physicsMaterial"), "box_env0": boxes[0]}
+    result["materials"] = surface
+    write_json(evidence, result)
+    # USD stores friction as float32, so compare with the single-run object tolerance; PhysX must hold the same values.
+    authored = np.array([[b["static_friction"], b["dynamic_friction"]] for b in boxes], dtype=float)
+    physx = np.asarray(box.root_view.get_material_properties().numpy(), dtype=float)[:, 0, :2]
+    if (any(m["friction_combine_mode"] != "multiply" for m in [*surface.values(), *boxes]) or
+            not np.allclose(authored, frictions[:, None], atol=1e-6, rtol=0) or
+            not np.allclose(physx, frictions[:, None], atol=1e-6, rtol=0)):
+        raise RuntimeError("Push friction materials differ from the reviewed profile")
+
+    names, bodies = list(robot.joint_names), list(robot.body_names)
+    lower = asset["joint_groups"]["lower_body"]
+    indices = [names.index(n) for n in asset["controller_reference"]["joint_order"]]
+    lower_indices = [names.index(n) for n in lower]
+    limits = batch(robot.data.joint_pos_limits)[0][lower_indices]
+    defaults = np.zeros(29)
+    defaults[lower_indices] = contract["default_lower_angles"]
+    origins = batch(scene.env_origins)
+
+    # Kinematic frame calibration on environment 0, as in the single trial.
+    q0 = batch(robot.data.joint_pos)[0]
+    poses0 = dict(zip(bodies, finite(batch(robot.data.body_link_pose_w)[0], (len(bodies), 7)), strict=True))
+    frames = check_frames(reference, dict(zip(names, q0, strict=True)),
+                          joint_anchor_poses(reference, poses0, read_joint_frames(sim.stage, reference)),
+                          profile["frame_position_tolerance_m"], profile["frame_angle_tolerance_rad"])
+    rotation = np.asarray(frames["source_to_asset_rotation"])
+
+    # Crouch start: default joints from the policy height, lifted to the reviewed foot clearance.
+    root = np.zeros((count, 7))
+    root[:, :3] = origins + [0.0, 0.0, contract["height_command"]]
+    root[:, 3:] = matrix_quat_xyzw(rotation.T)
+
+    def place(lift):
+        pose = root.copy()
+        pose[:, 2] += lift
+        robot.write_root_pose_to_sim_index(root_pose=device(pose))
+        robot.write_root_velocity_to_sim_index(root_velocity=device(np.zeros((count, 6))))
+        robot.write_joint_position_to_sim_index(position=device(np.tile(defaults, (count, 1))))
+        robot.write_joint_velocity_to_sim_index(velocity=device(np.zeros((count, 29))))
+        sim.forward()
+        scene.update(0.0)
+        feet = profile["diagnostics"]["foot_body_names"]
+        poses = dict(zip(bodies, batch(robot.data.body_link_pose_w)[0], strict=True))
+        return collision_clearance(read_collision_geometry(sim.stage, {f: poses[f].tolist() for f in feet}))
+
+    before = place(0.0)
+    lift = placement_shift(before["minimum_clearance_m"], profile["initialization"])
+    after = place(lift)
+    root[:, 2] += lift
+    scene.reset()
+    robot.set_joint_position_target_index(target=device(np.tile(defaults, (count, 1))))
+    robot.set_joint_velocity_target_index(target=device(np.zeros((count, 29))))
+    if abs(after["minimum_clearance_m"] - profile["initialization"]["minimum_clearance_m"]) > 1e-5:
+        raise RuntimeError("Crouch-start clearance was not established")
+    box_start = batch(box.data.root_link_pose_w)
+    wanted_x = built.hand_reach + push["gap_m"] + push["size_m"][0]/2
+    if not np.allclose(box_start[:, :2] - origins[:, :2], [wanted_x, 0.0], atol=0.01, rtol=0):
+        raise RuntimeError("Box placement differs between environments")
+    result["initialization"] = {"lift_m": lift, "spawn_height_m": contract["height_command"] + lift,
+                                "clearance_after_m": after["minimum_clearance_m"],
+                                "source_to_asset_rotation": rotation.tolist()}
+    return SimpleNamespace(sim=sim, scene=scene, robot=robot, box=box, batch=batch, device=device, indices=indices,
+                           lower_indices=lower_indices, limits=limits, defaults=defaults, origins=origins,
+                           rotation=rotation, root=root, box_start=box_start, hand_reach=built.hand_reach)
 
 
 def run_worker(config, profile, asset, runtime, model_path, directory):
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import (BalancePolicy, BatchHistory, check_frames, collision_clearance, finite, joint_anchor_poses,
-                        matrix_quat_xyzw, placement_shift, quat_xyzw_matrices)
+    from g1_wbc import BalancePolicy, BatchHistory, finite, quat_xyzw_matrices
 
     contract, reference = trial_contract(profile)
     policy = BalancePolicy(model_path, contract)
@@ -97,104 +228,20 @@ def run_worker(config, profile, asset, runtime, model_path, directory):
     torch.manual_seed(runtime["seed"])
     wp.config.enable_backward = False
     from isaaclab.app import launch_simulation
-    import isaaclab.sim as sim_utils
-    from isaaclab.utils import instantiate
 
     built = scene_config(profile, asset, runtime, contract, reference, with_camera=False, num_envs=count,
                          env_spacing=config["env_spacing_m"], replicate_physics=False)
     result = {"status": "running", "num_envs": count, "control_steps": steps, "training": False}
     write_json(directory / "rl-worker.json", result)
-    with launch_simulation(built.cfg, {"headless": True, "device": runtime["device"], "enable_cameras": False,
-                                       "kit_args": "--allow-root"}):
+    with launch_simulation(built.cfg, {**LAUNCH_SETTINGS, "device": runtime["device"]}):
         try:
-            sim = sim_utils.SimulationContext(built.cfg.sim)
-            scene = instantiate(built.cfg.scene)
-            robot, box = scene["robot"], scene["furniture"]
-            hands, palms, contacts = [], [], []
-            setup = directory / "env0-setup"
-            setup.mkdir()
-            for i in range(count):
-                env, evidence = f"/World/envs/env_{i}", setup if i == 0 else None
-                hands.append(apply_fixed_hands(sim.stage, robot, evidence, env=env))
-                palms.append(apply_palm_override(sim.stage, robot, contract, evidence, env=env))
-                contacts.append(apply_source_contact(sim.stage, robot, evidence, env=env))
-            sim.reset()
-
-            def batch(value):
-                value = value.torch if hasattr(value, "torch") else value
-                return value.detach().cpu().numpy().copy()
-
-            def device(value):
-                return torch.as_tensor(np.asarray(value), dtype=torch.float32, device=runtime["device"])
-
-            result["setup"] = verify_parallel_setup(robot, box, contract, asset, profile, hands, palms, contacts, np)
-            surface = {"default": read_material(sim.stage, "/physicsScene/defaultMaterial"),
-                       "ground": read_material(sim.stage, "/World/Ground/physicsMaterial"),
-                       "box_env0": read_material(sim.stage, "/World/envs/env_0/Furniture/geometry/physicsMaterial")}
-            result["materials"] = surface
-            write_json(directory / "rl-worker.json", result)
-            # USD stores friction as float32, so compare with the single-run object tolerance.
-            if (any(m["friction_combine_mode"] != "multiply" for m in surface.values()) or
-                    not np.allclose([surface["box_env0"]["static_friction"], surface["box_env0"]["dynamic_friction"]],
-                                    profile["push_object"]["friction"], atol=1e-6, rtol=0)):
-                raise RuntimeError("Push friction materials differ from the reviewed profile")
-
-            names, bodies = list(robot.joint_names), list(robot.body_names)
-            lower = asset["joint_groups"]["lower_body"]
-            indices = [names.index(n) for n in asset["controller_reference"]["joint_order"]]
-            lower_indices = [names.index(n) for n in lower]
-            limits = batch(robot.data.joint_pos_limits)[0][lower_indices]
-            defaults = np.zeros(29)
-            defaults[lower_indices] = contract["default_lower_angles"]
-            origins = batch(scene.env_origins)
-
-            # Kinematic frame calibration on environment 0, as in the single trial.
-            q0 = batch(robot.data.joint_pos)[0]
-            poses0 = dict(zip(bodies, finite(batch(robot.data.body_link_pose_w)[0], (len(bodies), 7)), strict=True))
-            frames = check_frames(reference, dict(zip(names, q0, strict=True)),
-                                  joint_anchor_poses(reference, poses0, read_joint_frames(sim.stage, reference)),
-                                  profile["frame_position_tolerance_m"], profile["frame_angle_tolerance_rad"])
-            rotation = np.asarray(frames["source_to_asset_rotation"])
-
-            # Crouch start: default joints from the policy height, lifted to the reviewed foot clearance.
-            root = np.zeros((count, 7))
-            root[:, :3] = origins + [0.0, 0.0, contract["height_command"]]
-            root[:, 3:] = matrix_quat_xyzw(rotation.T)
-
-            def place(lift):
-                pose = root.copy()
-                pose[:, 2] += lift
-                robot.write_root_pose_to_sim_index(root_pose=device(pose))
-                robot.write_root_velocity_to_sim_index(root_velocity=device(np.zeros((count, 6))))
-                robot.write_joint_position_to_sim_index(position=device(np.tile(defaults, (count, 1))))
-                robot.write_joint_velocity_to_sim_index(velocity=device(np.zeros((count, 29))))
-                sim.forward()
-                scene.update(0.0)
-                feet = profile["diagnostics"]["foot_body_names"]
-                poses = dict(zip(bodies, batch(robot.data.body_link_pose_w)[0], strict=True))
-                return collision_clearance(read_collision_geometry(sim.stage, {f: poses[f].tolist() for f in feet}))
-
-            before = place(0.0)
-            lift = placement_shift(before["minimum_clearance_m"], profile["initialization"])
-            after = place(lift)
-            scene.reset()
-            robot.set_joint_position_target_index(target=device(np.tile(defaults, (count, 1))))
-            robot.set_joint_velocity_target_index(target=device(np.zeros((count, 29))))
-            if abs(after["minimum_clearance_m"] - profile["initialization"]["minimum_clearance_m"]) > 1e-5:
-                raise RuntimeError("Crouch-start clearance was not established")
-            box_start = batch(box.data.root_link_pose_w)
-            push = profile["push_object"]
-            wanted_x = built.hand_reach + push["gap_m"] + push["size_m"][0]/2
-            if not np.allclose(box_start[:, :2] - origins[:, :2], [wanted_x, 0.0], atol=0.01, rtol=0):
-                raise RuntimeError("Box placement differs between environments")
-            result["initialization"] = {"lift_m": lift, "spawn_height_m": contract["height_command"] + lift,
-                                        "clearance_after_m": after["minimum_clearance_m"],
-                                        "source_to_asset_rotation": rotation.tolist()}
-
+            s = prepare_push_scene(built, count, profile, asset, runtime, contract, reference, directory, result,
+                                   directory / "rl-worker.json")
+            scene, robot, box, batch, device = s.scene, s.robot, s.box, s.batch, s.device
             history = BatchHistory(contract, count)
             commands = np.tile(profile["command"], (count, 1))
             rpys = np.tile(profile.get("rpy_command", [0, 0, 0]), (count, 1))
-            targets = np.tile(defaults, (count, 1))
+            targets = np.tile(s.defaults, (count, 1))
             fallen = np.zeros(count, dtype=bool)
             invalid = np.zeros(count, dtype=bool)
             clipped = np.zeros(count, dtype=int)
@@ -213,27 +260,27 @@ def run_worker(config, profile, asset, runtime, model_path, directory):
                 # Source schedule: default targets for the first interval, inference after each physics interval.
                 for _ in range(asset["control_decimation"]):
                     timed("write", scene.write_data_to_sim)
-                    timed("step", sim.step, render=False)
+                    timed("step", s.sim.step, render=False)
                     timed("update", scene.update, physics_dt)
                 tic = time.perf_counter()
                 pose = finite(batch(robot.data.root_link_pose_w), (count, 7))
-                observation = history.observe(batch(robot.data.joint_pos)[:, indices], batch(robot.data.joint_vel)[:, indices],
-                                              pose[:, 3:], batch(robot.data.root_link_vel_w)[:, 3:], rotation, commands, rpys)
+                observation = history.observe(batch(robot.data.joint_pos)[:, s.indices], batch(robot.data.joint_vel)[:, s.indices],
+                                              pose[:, 3:], batch(robot.data.root_link_vel_w)[:, 3:], s.rotation, commands, rpys)
                 phases["read_observe"] += time.perf_counter() - tic
                 actions = timed("policy", policy.batch, observation)
                 tic = time.perf_counter()
-                lower_targets, clip_count, bad = history.targets(actions, limits)
-                targets[:, lower_indices] = lower_targets
+                lower_targets, clip_count, bad = history.targets(actions, s.limits)
+                targets[:, s.lower_indices] = lower_targets
                 robot.set_joint_position_target_index(target=device(targets))
                 phases["command"] += time.perf_counter() - tic
                 clipped += clip_count
                 invalid |= bad
-                gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ rotation)[:, 2, :]
+                gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ s.rotation)[:, 2, :]
                 tilt = np.arccos(np.clip(-gravity[:, 2], -1, 1))
                 fallen |= (pose[:, 2] < profile["minimum_base_height_m"]) | (tilt > profile["maximum_tilt_rad"])
             wall = time.perf_counter() - start
             box_end = finite(batch(box.data.root_link_pose_w), (count, 7))
-            progress = box_end[:, 0] - box_start[:, 0]
+            progress = box_end[:, 0] - s.box_start[:, 0]
             result.update(status="passed_rl_throughput", wall_seconds=wall, policy_seconds=phases["policy"],
                           phase_seconds=phases, seconds_per_physics_step=wall/(steps*asset["control_decimation"]),
                           env_steps_per_second=count*steps/wall,
