@@ -1,6 +1,5 @@
 """Offline checks for SSH credentials, configuration and duplicate billing guards."""
 
-import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -11,9 +10,8 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("fmr_modal_dev", ROOT / "scripts/modal_dev.py")
-launcher = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(launcher)
+sys.path.insert(0, str(ROOT / "scripts"))
+import modal_dev as launcher
 
 
 class ModalDevelopmentTests(unittest.TestCase):

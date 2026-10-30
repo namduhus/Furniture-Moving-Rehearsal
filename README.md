@@ -8,32 +8,20 @@ The intended pipeline combines Meta models for scene interpretation and failure 
 
 See [AGENTS.md](AGENTS.md) for AI collaboration and development guidelines.
 
-## Local MuJoCo smoke check
+## Local checks
 
-Python is pinned to 3.12. MuJoCo is pinned to 3.17.0 in `pyproject.toml`, and `uv.lock` records the resolved dependencies and wheel hashes.
-
-To reproduce the smoke check, run the following from a terminal with PyPI access:
+Python is pinned to 3.12. The root environment contains NumPy 2.5.4 for controller math and offline tests; `uv.lock` retains the existing package version and distribution hashes. The Modal orchestrator and remote Isaac runtime have separate environments.
 
 ```sh
-uv sync --locked --no-build --default-index https://pypi.org/simple
-uv run --locked python scripts/smoke_mujoco.py
+uv sync --locked --no-build
+uv run --locked python -m unittest discover -s tests -v
 ```
 
-Keep `uv.lock` with the dependency change. The script loads a newly authored box-and-floor scene, advances 1,000 CPU physics steps at 0.002 seconds per step, and checks finite states, simulation warnings, elapsed simulated time, floor contact, and the box's resting height and velocity. The fixed scene has no random sampling; the seed is recorded for future experiments.
-
-Each run creates a separate directory under `outputs/smoke/` containing the scene, configuration, `trajectory.jsonl`, and `summary.json`. A full successful run also writes `initial.png` and `final.png` and checks that the RGB frames are non-uniform and changed. The process exits nonzero on failure and writes `error.log`. Only `"status": "passed"` indicates a complete smoke-check pass.
-
-For physics-only diagnosis, run `uv run --locked python scripts/smoke_mujoco.py --physics-only`. A physics-only result does not verify rendering. Offscreen rendering is the default; no interactive viewer is opened. A remote Linux machine may need a suitable `MUJOCO_GL` backend.
-
-To open the scene in the interactive viewer, run:
-
-```sh
-uv run --locked python -m mujoco.viewer --mjcf=assets/scenes/smoke.xml
-```
+These checks cover numerical conventions, runtime guards, control flow, recording and observation. Hardware-dependent Isaac execution is validated separately on the selected Modal runtime. SDK and codec checks require their respective existing environments/tools.
 
 ## Isaac deployment target
 
-The selected stack is Isaac Sim / Isaac Lab with RSL-RL PPO and PyTorch, running on **Modal L40S**. Glimmer inference also targets Modal. Select compatible releases against the actual Modal worker and validate headless graphics and Isaac startup before training. A working CUDA probe alone does not validate Isaac graphics. The local MuJoCo smoke check and archived JAX/Brax source remain reference tools; use the Isaac smoke check before training.
+The selected stack is Isaac Sim / Isaac Lab with RSL-RL PPO and PyTorch, running on **Modal L40S**. Glimmer inference also targets Modal. Select compatible releases against the actual Modal worker and validate headless graphics and Isaac startup before training. A working CUDA probe alone does not validate Isaac graphics. Use the Isaac smoke check before training.
 
 ## Isaac runtime profile and G1 smoke check
 
@@ -96,6 +84,35 @@ fmr-save
 This uses the existing runtime image and starts no additional Modal session. Isaac may fetch its referenced USD assets on first use. The command checks the existing pinned runtime, CUDA and Vulkan, initializes one candidate robot in PhysX, and records its actual joint names/order, limits, default positions, actuator settings, root-pose configuration and floating-base status. It requests no control rollout, policy inference or training. Each subprocess has a ten-minute limit; the existing Modal session deadline and compute charges still apply.
 
 Artifacts appear under `outputs/isaac/<run-id>-asset/`. Inspect `asset-inventory.json`, `asset-worker.json`, stage logs and `summary.json`. A fixed base, disabled gravity, different joint set, invalid limits or non-CUDA state fails the check; no alternative asset is silently substituted. `passed_asset_inventory` means structural inspection only. Balance, walking, contact behavior and pretrained-controller execution require separate validation. Use `fmr-stop` when finished; command completion does not release the GPU.
+
+### Pretrained G1 standing trial
+
+The separate [standing profile](configs/isaac_g1_balance.json) transfers NVIDIA's pretrained **GR00T-WBC balance** policy to the inspected G1 asset. This is an experimental, stand-only controller check: navigation commands are zero, and the script performs no training. It uses the existing runtime's locked `onnxruntime==1.26.0` CPU dependency; no additional package or image change is required. A missing or different dependency fails explicitly.
+
+The [controller contract](configs/g1_wbc_reference.json) pins the source revision, model size and SHA-256. The first `--prepare-model` run downloads one 1,886,682-byte checkpoint into ignored `models/g1_wbc/` and retains its license. Subsequent runs verify the cache. Model weights use the [NVIDIA Open Model License](licenses/GR00T-WBC.txt): **Licensed by NVIDIA Corporation under the NVIDIA Open Model License.** The [reference URDF](assets/references/g1_wbc.urdf) is used for numerical kinematic checks; the simulation continues to load Isaac's existing G1 USD. Source and Unitree-derived asset notices are retained in [licenses/](licenses/).
+
+Inspect the plan on the Mac without downloads or a worker:
+
+```sh
+uv run --locked python scripts/isaac_g1_wbc.py --stage balance --prepare-model --dry-run
+```
+
+After updating the remote project checkout, run in the existing Isaac session:
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_wbc.py --stage balance --prepare-model
+fmr-save
+```
+
+The command first checks checkpoint integrity and its actual 516-input / 15-output ONNX interface, then CUDA/Vulkan, then initializes one G1 for the bounded standing trial. Use `--stage policy --prepare-model` for checkpoint inference only. This does not start Isaac or a new Modal session, but an existing GPU session remains billable.
+
+Before applying actions, the standing worker compares measured link poses against URDF forward kinematics, including two static joint-position probes. It rejects incompatible geometry/axes rather than guessing a root rotation. Isaac 3 pose buffers and root-pose writers use **xyzw**; configuration rotations use **wxyz**. The worker establishes and verifies an explicit upright root pose, joint positions and zero velocities. Lower-body PD gains come from the reviewed controller configuration, with explicit PD actuators and URDF effort/velocity bounds. Upper-body and finger holding gains are project experiment parameters, identified separately in the contract; matched names and gains do not prove equal dynamics.
+
+The trial requests **250 control steps at 50 Hz**, or five simulated seconds, with physics at 200 Hz. It stops on non-finite state, out-of-bound policy actions, root height below 0.50 m or tilt above 0.6 rad. It performs no automatic episode reset or retry. The policy and GPU subprocesses have 60/120-second limits, and the standing subprocess has a ten-minute limit covering startup and shutdown. These limits do not extend the Modal session. The existing resource/cost plan applies; stop the session with `fmr-stop` when finished.
+
+Outputs go to `outputs/isaac/<run-id>-wbc/`: source/runtime contracts, stage/error logs, actuator settings, frame-calibration/probe inputs, explicit initialization evidence, a per-step trajectory, initial/final PNGs and an MP4. Successful full recording contains 125 frames at 25 FPS. Static frames are allowed for this standing video because a steady stance can be visually static; physical advancement is checked through the complete timed trajectory. Existing motion-smoke video checks still require changing frames by default. Failed trials preserve partial evidence and videos when enough frames exist.
+
+Only `passed_balance_rollout` with reviewed trajectory/video establishes this standing trial's success. `passed_policy_contract` verifies checkpoint execution only. Neither status establishes walking, furniture manipulation or VLA capability. Inspect errors and frame/initialization evidence before changing transfer settings.
 
 ### Record a G1 motion check
 
@@ -203,21 +220,13 @@ Run the offline checks with:
 uv run --project environments/modal --locked python -m unittest discover -s tests -v
 ```
 
-## Archived G1 baseline
-
-The earlier [G1 launcher](scripts/g1_baseline.py), [pilot configuration](configs/g1_baseline.json) and [continuation configuration](configs/g1_continue_10m.json) remain as reference source for the MuJoCo Playground/JAX/Brax experiments. Their dedicated GPU environment has been retired and is no longer supplied by this checkout. Use the Modal Isaac profile above for the current GPU workflow. The root project continues to support the local CPU MuJoCo smoke check.
-
 ## Dependencies and licenses
 
-Google DeepMind maintains the canonical [`mujoco` PyPI package](https://pypi.org/project/mujoco/). Its engine and Python bindings use [Apache-2.0](https://github.com/google-deepmind/mujoco/blob/main/LICENSE); prebuilt wheels also include third-party notices documented on the package page. Dependency versions and wheel SHA-256 hashes are recorded in `uv.lock`, using the official PyPI registry.
-
-Transitive package licenses: absl-py and etils (Apache-2.0), fsspec and websockets (BSD-3-Clause), glfw and zipp (MIT), PyOpenGL (BSD), typing-extensions (PSF-2.0), and NumPy (BSD-3-Clause, 0BSD, MIT, Zlib, and CC0-1.0). Retain the installed distributions' bundled license notices when redistributing their binaries.
-
-The archived baseline used JAX 0.9.2, Brax 0.14.2, MuJoCo/MJX 3.17.0 and MuJoCo Playground 0.2.0. Its retired GPU environment is not part of the current setup; the following upstream attributions remain relevant to the retained reference source and earlier experiments. [JAX](https://github.com/jax-ml/jax), [Brax](https://github.com/google/brax), [MJX](https://github.com/google-deepmind/mujoco/tree/main/mjx), and [Playground](https://github.com/google-deepmind/mujoco_playground) use Apache-2.0. The [Menagerie G1 model](https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1) has a separate BSD-3-Clause license. CUDA/cuDNN wheels and the system `ffmpeg` distribution retain their own license notices and terms.
+The local numerical checks use [NumPy](https://numpy.org/) with its BSD-3-Clause, 0BSD, MIT, Zlib and CC0-1.0 bundled notices. Retain the installed distribution's license files when redistributing its binaries. The existing package version and wheel hashes are recorded in the root `uv.lock`.
 
 The SSH development workflow uses the official [Modal SDK](https://github.com/modal-labs/modal-client) (Apache-2.0), [uv](https://github.com/astral-sh/uv) (MIT or Apache-2.0), and [Ubuntu's official image](https://hub.docker.com/_/ubuntu). [OpenSSH](https://github.com/openssh/openssh-portable/blob/master/LICENCE) has permissive component licenses; [Git](https://github.com/git/git/blob/master/COPYING) uses GPL-2.0. Retain package-specific copyright/license notices under `/usr/share/doc` and the Python distributions' bundled notices. The SDK's transitive Python dependencies and distribution hashes are recorded in `environments/modal/uv.lock`; this attribution makes no claim of original infrastructure or SSH implementation.
 
-The optional Isaac profile uses the official [Isaac Lab v3.0.0 source and BSD-3-Clause core license](https://github.com/isaac-sim/IsaacLab/tree/v3.0.0), [RSL-RL 5.5.1](https://pypi.org/project/rsl-rl-lib/5.5.1/) (BSD-3-Clause), [PyTorch](https://github.com/pytorch/pytorch/blob/main/LICENSE) / Torchvision (BSD-style notices), and NVIDIA Warp (Apache-2.0 and bundled notices). Isaac Sim/Kit and their dependencies remain subject to their [applicable NVIDIA licenses](https://docs.isaacsim.omniverse.nvidia.com/latest/common/legal.html), including the Omniverse EULA. The upstream G1 USD assets are fetched from NVIDIA's asset service at runtime; retain the [additional software/materials terms](https://docs.isaacsim.omniverse.nvidia.com/latest/common/license-isaac-sim-additional.html) and asset-specific notices. The earlier Menagerie asset license does not establish the license of these separate USD assets. No G1 USD asset is authored or bundled by this repository.
+The optional Isaac profile uses the official [Isaac Lab v3.0.0 source and BSD-3-Clause core license](https://github.com/isaac-sim/IsaacLab/tree/v3.0.0), [RSL-RL 5.5.1](https://pypi.org/project/rsl-rl-lib/5.5.1/) (BSD-3-Clause), [PyTorch](https://github.com/pytorch/pytorch/blob/main/LICENSE) / Torchvision (BSD-style notices), and NVIDIA Warp (Apache-2.0 and bundled notices). Isaac Sim/Kit and their dependencies remain subject to their [applicable NVIDIA licenses](https://docs.isaacsim.omniverse.nvidia.com/latest/common/legal.html), including the Omniverse EULA. The upstream G1 USD assets are fetched from NVIDIA's asset service at runtime; retain the [additional software/materials terms](https://docs.isaacsim.omniverse.nvidia.com/latest/common/license-isaac-sim-additional.html) and asset-specific notices. No G1 USD asset is authored or bundled by this repository.
 
 The Isaac image's [Ubuntu libxt6t64 package](https://packages.ubuntu.com/noble/libxt6t64) comes from the distribution's official repositories and the X.Org libXt source. Its [upstream release](https://www.x.org/releases/individual/lib/libXt-1.2.1.tar.gz) includes MIT/X11-style permission notices in `COPYING`; retain the installed package's `/usr/share/doc/libxt6t64/copyright` and dependency notices. OS package versions resolve at image build time, separately from the pinned Python lock.
 
@@ -231,23 +240,20 @@ Keep this table current in the same commit as each new module or third-party add
 | --- | --- | --- | --- |
 | Collaboration instructions | Project planning | Agent guidance | [AGENTS.md](AGENTS.md) |
 | README and ignore rules | Created during the hackathon | Usage documentation and local artifact exclusions | [README](README.md), [.gitignore](.gitignore) |
-| CPU smoke script, box-drop scene, and configuration | Created during the hackathon | Check scene loading, CPU physics, contact, and rendering | [Script](scripts/smoke_mujoco.py), [scene](assets/scenes/smoke.xml), [configuration](configs/smoke.json) |
-| MuJoCo 3.17.0 and its Python dependencies | Third-party software | Physics engine, Python bindings, and rendering support | [Official package](https://pypi.org/project/mujoco/), [Apache-2.0 and bundled notices](https://pypi.org/project/mujoco/#license-and-disclaimer), [lock file](uv.lock) |
-| Archived G1 preflight and PPO launcher | Created during the hackathon | Reference source/configurations for the earlier GPU baseline; dedicated runtime retired | [Launcher](scripts/g1_baseline.py), [pilot](configs/g1_baseline.json), [continuation](configs/g1_continue_10m.json) |
+| NumPy | Third-party software | Local controller mathematics and offline numerical checks | [Official source](https://github.com/numpy/numpy), bundled licenses linked above; version and hashes in [uv.lock](uv.lock) |
 | Modal SSH launcher and offline checks | Created during the hackathon | Bounded development sessions, public-key validation, pinned host-key configuration, persistent workspace, save/stop helpers and local duplicate-session guard | [Launcher](scripts/modal_dev.py), [configuration](configs/modal_dev.json), [environment](environments/modal/pyproject.toml), [checks](tests/test_modal_dev.py) |
-| Isaac runtime profile, G1 preflight and recording | Created during the hackathon | Pinned source/lock verification, OS shared-library/build-cache guards, CUDA/graphics guards, bounded PhysX execution, frame/state timing, MP4 verification and shutdown checks | [Profile](configs/modal_isaac.json), [smoke configuration](configs/isaac_smoke.json), [recording configuration](configs/isaac_record.json), [preflight](scripts/isaac_preflight.py), [video verification](scripts/isaac_video.py), [preflight checks](tests/test_isaac_preflight.py), [control-flow checks](tests/test_isaac_g1_loop.py), [video checks](tests/test_isaac_video.py) |
+| Isaac runtime profile, G1 preflight and recording | Created during the hackathon | Pinned source/lock verification, OS shared-library/build-cache guards, CUDA/graphics guards, bounded PhysX execution, frame/state timing, MP4 verification and shutdown checks | [Profile](configs/modal_isaac.json), [smoke configuration](configs/isaac_smoke.json), [recording configuration](configs/isaac_record.json), [preflight](scripts/isaac_preflight.py), [video verification](scripts/isaac_video.py), [preflight checks](tests/test_isaac_preflight.py), [video checks](tests/test_isaac_video.py) |
 | Browser motion observer | Created during the hackathon | Latest-frame/state publication, read-only loopback MJPEG viewer, lifecycle/freshness labels, reconnect handling and observation-only pacing | [Observation profile](configs/isaac_observe.json), [viewer](scripts/isaac_observe.py), [HTTP/state checks](tests/test_isaac_observe.py) |
 | G1 manipulation-asset inventory | Created during the hackathon | Separate floating-base candidate profile, explicit joint-order mapping, finite state/limit guards, bounded inventory subprocess and evidence validation | [Profile](configs/isaac_g1_asset.json), [script](scripts/isaac_g1_asset.py), [checks](tests/test_isaac_g1_asset.py) |
-| GR00T-WBC reference joint and observation schema | Third-party reference metadata | Identify the reviewed G1 body/hand layout and future controller interface; no controller code or weights are bundled | [Pinned NVIDIA source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), upstream source/asset notices apply; separately obtained weights require their NVIDIA Open Model License |
+| Pretrained G1 controller adapter and bounded standing trial | Created during the hackathon | Explicit quaternion/frame conversion, URDF kinematic probes, initialization, observation history, joint/actuator mapping, transfer guards and recorded evaluation | [Adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [profile](configs/isaac_g1_balance.json), [contract](configs/g1_wbc_reference.json), [numerical and flow checks](tests/test_g1_wbc.py) |
+| GR00T-WBC balance checkpoint and G1 reference kinematics | Third-party model and robot data | Downloaded pretrained balance inference and reference-only frame checks; no original robot or pretrained-policy claim | [Pinned NVIDIA source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc), [reference URDF](assets/references/g1_wbc.urdf), [NVIDIA code/model terms](licenses/GR00T-WBC.txt), [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt); weights remain Git-ignored |
 | FFmpeg and libx264 | Third-party software | MP4 encoding and decoded-frame verification for self-rendered rollouts | Official upstream sources and component license notices linked above |
 | Isaac Sim, Isaac Lab, RSL-RL, PyTorch and G1 USD assets | Third-party software and assets | Simulation, robot task/assets, PPO learner and tensor operations; no original algorithm or robot-asset claim | Official releases, asset and license references linked above; resolved runtime graph comes from the pinned upstream lock |
 | Modal SDK, Ubuntu, X.Org libXt, OpenSSH, Git and uv | Third-party software and services | Cloud execution, base OS/shared libraries, SSH access, version control and Python environment management | Official sources and license notices linked above |
-| JAX, Brax, MJX, and MuJoCo Playground | Third-party software | Dependencies used by the archived GPU baseline | Official sources and Apache-2.0 licenses linked above |
-| Menagerie G1 robot assets | Third-party assets | Robot geometry, dynamics, and collision model fetched by Playground | [Source and BSD-3-Clause license](https://github.com/google-deepmind/mujoco_menagerie/tree/main/unitree_g1) |
 
 ## Assets and credentials
 
-The box-drop scene and its procedural checker texture were authored during the hackathon; they use no downloaded image or robot assets. Use self-rendered or explicitly licensed assets and record each source and license here when added. Do not use real home photos or personal information.
+The G1 reference URDF is imported robot data used for kinematic checks; its original bytes and license notices are retained. Simulation uses the separately licensed Isaac USD asset. Use self-rendered or explicitly licensed images and record each source and license here when added. Do not use real home photos or personal information.
 
 Keep API keys and tokens in environment variables. Do not include them in source files, prompts, logs, or commits. Local environment files, caches, model weights, and run artifacts are ignored by default.
 

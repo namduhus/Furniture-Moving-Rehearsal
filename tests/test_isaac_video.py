@@ -35,6 +35,12 @@ def write_test_frame(path: Path, index: int, width: int = 64, height: int = 48):
 
 
 class VideoTests(unittest.TestCase):
+    def test_static_standing_video_is_explicitly_allowed_without_weakening_smoke(self):
+        text = "#tb 0: 1/25\n#dimensions 0: 64x64\n0,0,0,1,100,same\n0,1,1,1,100,same\n"
+        with self.assertRaises(RuntimeError):
+            video.inspect_frame_checksums(text, 2, Fraction(25), 64, 64)
+        self.assertEqual(video.inspect_frame_checksums(text, 2, Fraction(25), 64, 64, require_motion=False)["unique_decoded_frames"], 1)
+
     def test_missing_encoder_fails_explicitly(self):
         with mock.patch.object(video.shutil, "which", return_value=None):
             with self.assertRaisesRegex(RuntimeError, "updated Modal Isaac image"):
