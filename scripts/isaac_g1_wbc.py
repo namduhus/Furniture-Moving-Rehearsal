@@ -32,22 +32,26 @@ def trial_contract(profile):
     return contract, reference
 
 
-def apply_fixed_hands(stage, robot, directory):
+def apply_fixed_hands(stage, robot, directory, env="/World/envs/env_0"):
     """Replace joint types in the session layer; preserve all joint frames."""
     from pxr import Usd, UsdPhysics
     from g1_wbc import load_deployment_reference
     expected = set(load_deployment_reference()["fixed_hand_joints"])
     evidence = {"status": "preparing_fixed_hands", "joints": {}, "edit_layer": "session"}
-    write_json(directory / "deployment-joints.json", evidence)
+
+    def save():
+        if directory is not None:
+            write_json(directory / "deployment-joints.json", evidence)
+
+    save()
     if robot.is_initialized:
         raise RuntimeError("Fixed hands must be authored before reset")
-    prims = [p for p in stage.Traverse() if p.GetName() in expected]
+    prims = [p for p in stage.Traverse() if p.GetName() in expected and str(p.GetPath()).startswith(f"{env}/Robot/")]
     if len(prims) != 14 or {p.GetName() for p in prims} != expected:
         raise RuntimeError("Expected exactly the 14 source hand joints")
     with Usd.EditContext(stage, stage.GetSessionLayer()):
         for prim in prims:
-            if (not prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsInstanceProxy() or
-                    not str(prim.GetPath()).startswith("/World/envs/env_0/Robot/")):
+            if not prim.IsA(UsdPhysics.RevoluteJoint) or prim.IsInstanceProxy():
                 raise RuntimeError("Unexpected source hand joint type/proxy")
             joint = UsdPhysics.Joint(prim)
             before = {"body0": [str(p) for p in joint.GetBody0Rel().GetTargets()],
@@ -59,9 +63,10 @@ def apply_fixed_hands(stage, robot, directory):
                 raise RuntimeError("Unable to author fixed hand joint")
             evidence["joints"][prim.GetName()] = {"path": str(prim.GetPath()), **before,
                 "authored_type": fixed.GetPrim().GetTypeName()}
-            write_json(directory / "deployment-joints.json", evidence)
+            save()
     evidence["status"] = "authored_fixed_hands_before_reset"
-    write_json(directory / "deployment-joints.json", evidence)
+    save()
+    return evidence
 
 
 def validate_deployment_evidence(directory, asset, contract, implicit_arms=False):
@@ -115,23 +120,28 @@ def validate_deployment_evidence(directory, asset, contract, implicit_arms=False
             "residual_differences": data["residual_differences"]}
 
 
-def apply_palm_override(stage, robot, contract, directory):
+def apply_palm_override(stage, robot, contract, directory, env="/World/envs/env_0"):
     """Author only the left palm in the session layer before physics reset."""
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
     from g1_wbc import palm_inertial_reference
 
     wanted = palm_inertial_reference(contract)
-    path = "/World/envs/env_0/Robot/left_hand/left_hand_palm_link"
+    path = f"{env}/Robot/left_hand/left_hand_palm_link"
     report = {"status": "preparing_palm_inertial_override", "reference": wanted,
               "prim_path": path, "edit_layer": "session", "applied_before_reset": False}
-    write_json(directory / "palm-inertial-override.json", report)
+
+    def save():
+        if directory is not None:
+            write_json(directory / "palm-inertial-override.json", report)
+
+    save()
     if robot.is_initialized:
         raise RuntimeError("Palm inertial override must precede physics initialization")
     if UsdGeom.GetStageMetersPerUnit(stage) != 1.0 or UsdPhysics.GetStageKilogramsPerUnit(stage) != 1.0:
         raise RuntimeError("Palm inertial override requires meter/kilogram stage units")
 
     def read(side):
-        body_path = f"/World/envs/env_0/Robot/{side}_hand/{side}_hand_palm_link"
+        body_path = f"{env}/Robot/{side}_hand/{side}_hand_palm_link"
         prim = stage.GetPrimAtPath(body_path)
         if not prim or not prim.HasAPI(UsdPhysics.RigidBodyAPI) or prim.IsInstanceProxy():
             raise RuntimeError(f"Expected a non-proxy palm rigid body: {body_path}")
@@ -151,7 +161,7 @@ def apply_palm_override(stage, robot, contract, directory):
         return result
 
     report["before_usd"] = {side: read(side) for side in ("left", "right")}
-    write_json(directory / "palm-inertial-override.json", report)
+    save()
     with Usd.EditContext(stage, stage.GetSessionLayer()):
         api = UsdPhysics.MassAPI.Apply(stage.GetPrimAtPath(path))
         quat = wanted["principal_axes_xyzw"]
@@ -163,11 +173,11 @@ def apply_palm_override(stage, robot, contract, directory):
                 raise RuntimeError("Unable to author left-palm inertial property")
     report["after_usd"] = {side: read(side) for side in ("left", "right")}
     report.update(status="authored_before_physics_reset", applied_before_reset=True)
-    write_json(directory / "palm-inertial-override.json", report)
+    save()
     return report
 
 
-def apply_source_contact(stage, robot, directory):
+def apply_source_contact(stage, robot, directory, env="/World/envs/env_0"):
     """Move only the existing foot sphere centers to the pinned source model before reset."""
     from pxr import Gf, Usd, UsdGeom, UsdPhysics
     from g1_wbc import CONTACT_REFERENCE_SHA256, load_contact_reference, source_sphere_center
@@ -175,7 +185,12 @@ def apply_source_contact(stage, robot, directory):
     reference = load_contact_reference()
     report = {"status": "preparing_source_contact", "reference_sha256": CONTACT_REFERENCE_SHA256,
               "edit_layer": "session", "applied_before_reset": False, "feet": {}}
-    write_json(directory / "contact-override.json", report)
+
+    def save():
+        if directory is not None:
+            write_json(directory / "contact-override.json", report)
+
+    save()
     if robot.is_initialized:
         raise RuntimeError("Source contact geometry must precede physics initialization")
 
@@ -188,7 +203,7 @@ def apply_source_contact(stage, robot, directory):
 
     edits = []
     for name in reference["foot_bodies"]:
-        body = stage.GetPrimAtPath(f"/World/envs/env_0/Robot/{name}")
+        body = stage.GetPrimAtPath(f"{env}/Robot/{name}")
         if not body or not body.HasAPI(UsdPhysics.RigidBodyAPI) or not body.HasAPI(UsdPhysics.MassAPI):
             raise RuntimeError(f"Expected a rigid foot with authored mass: {name}")
         spheres = [p for p in Usd.PrimRange(body, Usd.TraverseInstanceProxies()) if p.HasAPI(UsdPhysics.CollisionAPI)]
@@ -201,7 +216,7 @@ def apply_source_contact(stage, robot, directory):
                 "spheres": [{"path": str(p.GetPath()), **read(body, p)} for p in spheres]}
         report["feet"][name] = foot
         edits.append((body, foot))
-    write_json(directory / "contact-override.json", report)
+    save()
     with Usd.EditContext(stage, stage.GetSessionLayer()):
         for body, foot in edits:
             for sphere in foot["spheres"]:
@@ -223,7 +238,7 @@ def apply_source_contact(stage, robot, directory):
             after = read(body, stage.GetPrimAtPath(sphere["path"]))
             sphere.update(after_center_body_m=after["center_body_m"], after_linear_body=after["linear_body"])
     report.update(status="authored_before_physics_reset", applied_before_reset=True)
-    write_json(directory / "contact-override.json", report)
+    save()
     return report
 
 
@@ -784,34 +799,24 @@ def policy_check(contract, model_path):
             "balance_or_walking_verified": False}
 
 
-def balance_check(profile, asset, runtime, contract, reference, model_path, directory, *, audit_only=False):
-    import numpy as np
-    import torch
-    import warp as wp
-    from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, actuator_limits, check_frames,
-                        finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
-
-    deployment = bool(profile.get("deployment"))
-    dofs = len(reference.limits)
-    encoder = None if audit_only else require_ffmpeg(directory)
-    torch.manual_seed(runtime["seed"])
-    policy = None if audit_only else BalancePolicy(model_path, contract)
-    history = ObservationHistory(contract)
-    wp.config.enable_backward = False
-    from isaaclab.app import launch_simulation
+def scene_config(profile, asset, runtime, contract, reference, *, with_camera=True, num_envs=1, env_spacing=3.0,
+                 replicate_physics=True):
+    """Build the qualified actuator, material, object and sensor configuration shared by trials and training."""
+    from types import SimpleNamespace
+    from g1_wbc import actuator_limits
     from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
     from isaaclab.assets import AssetBaseCfg
     from isaaclab.scene import InteractiveSceneCfg
     from isaaclab.sensors import CameraCfg
+    deployment = bool(profile.get("deployment"))
     diagnostics = profile.get("diagnostics")
     if diagnostics:
         from isaaclab.sensors import ContactSensorCfg
     import isaaclab.sim as sim_utils
-    from isaaclab.utils import configclass, instantiate, replace
+    from isaaclab.utils import configclass, replace
     from isaaclab_assets import G1_29DOF_CFG
     from isaaclab_physx.physics import PhysxCfg
     from isaaclab_physx.renderers import IsaacRtxRendererCfg
-    from PIL import Image
 
     groups = asset["joint_groups"]
     lower = groups["lower_body"]
@@ -873,7 +878,7 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         robot = candidate
         if push:
             furniture = furniture_cfg
-        if not audit_only:
+        if with_camera:
             camera = CameraCfg(
                 prim_path="{ENV_REGEX_NS}/Camera", update_period=0,
                 width=profile["camera"]["width"], height=profile["camera"]["height"],
@@ -893,9 +898,39 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
     @configclass
     class LaunchCfg:
         sim = sim_utils.SimulationCfg(device=runtime["device"], dt=asset["physics_dt"], physics=PhysxCfg(), **material)
-        scene = SceneCfg(num_envs=1, env_spacing=3.0)
+        scene = SceneCfg(num_envs=num_envs, env_spacing=env_spacing, replicate_physics=replicate_physics)
 
     cfg = LaunchCfg()
+    return SimpleNamespace(cfg=cfg, candidate=candidate, kp=kp, kd=kd, combine_mode=combine_mode,
+                           hand_reach=hand_reach if push else None)
+
+
+def balance_check(profile, asset, runtime, contract, reference, model_path, directory, *, audit_only=False):
+    import numpy as np
+    import torch
+    import warp as wp
+    from g1_wbc import (BalancePolicy, ObservationHistory, FrameMismatchError, check_frames,
+                        finite, joint_anchor_poses, matrix_quat_xyzw, quat_xyzw_matrix)
+
+    deployment = bool(profile.get("deployment"))
+    dofs = len(reference.limits)
+    encoder = None if audit_only else require_ffmpeg(directory)
+    torch.manual_seed(runtime["seed"])
+    policy = None if audit_only else BalancePolicy(model_path, contract)
+    history = ObservationHistory(contract)
+    wp.config.enable_backward = False
+    from isaaclab.app import launch_simulation
+    diagnostics = profile.get("diagnostics")
+    import isaaclab.sim as sim_utils
+    from isaaclab.utils import instantiate
+    from PIL import Image
+
+    built = scene_config(profile, asset, runtime, contract, reference, with_camera=not audit_only)
+    cfg, candidate, kp, kd, combine_mode, hand_reach = (built.cfg, built.candidate, built.kp, built.kd,
+                                                        built.combine_mode, built.hand_reach)
+    lower = asset["joint_groups"]["lower_body"]
+    push = profile.get("push_object")
+    implicit_arms = profile.get("arm_hold") == "implicit"
     stage = "dynamics" if audit_only else "balance"
     result = {"status": "running", "steps_completed": 0, "resets": 0,
               "controller": policy.metadata if policy else {},

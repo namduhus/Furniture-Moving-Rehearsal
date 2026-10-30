@@ -1,0 +1,8 @@
+{
+  "push_profile": "configs/isaac_g1_push_sliders.json",
+  "num_envs": 64,
+  "control_steps": 250,
+  "env_spacing_m": 4.0,
+  "stage_timeout_seconds": 600,
+  "scope": "RL stage 2: 64 parallel copies of the qualified slider push with the frozen GR00T walk policy and scripted commands; measures throughput and checks per-environment setup and agreement with the single-environment baseline. No training."
+}

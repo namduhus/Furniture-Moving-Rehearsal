@@ -47,6 +47,20 @@ def quat_xyzw_matrix(quat):
                      [2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)]])
 
 
+def quat_xyzw_matrices(quats):
+    """Vectorized quat_xyzw_matrix for (N, 4) quaternions."""
+    q = finite(quats)
+    if q.ndim != 2 or q.shape[1] != 4:
+        raise ValueError("Expected (N, 4) quaternions")
+    norm = np.linalg.norm(q, axis=1)
+    if np.any(norm < 1e-8) or np.any(np.abs(norm - 1.0) > 0.01):
+        raise ValueError("Pose quaternion is not normalized")
+    x, y, z, w = (q / norm[:, None]).T
+    return np.stack([np.stack([1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w)], axis=1),
+                     np.stack([2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w)], axis=1),
+                     np.stack([2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y)], axis=1)], axis=1)
+
+
 def matrix_quat_xyzw(rotation):
     r = finite(rotation, (3, 3))
     if not np.allclose(r.T @ r, np.eye(3), atol=1e-6) or not np.isclose(np.linalg.det(r), 1):
@@ -593,6 +607,12 @@ class BalancePolicy:
         output = self.session.run(None, {self.input_name: obs[None]})[0]
         return finite(output, (1, 15))[0].astype(np.float32)
 
+    def batch(self, observations):
+        obs = finite(observations).astype(np.float32)
+        if obs.ndim != 2 or obs.shape[1] != 516:
+            raise ValueError("Expected (N, 516) observations")
+        return finite(self.session.run(None, {self.input_name: obs})[0], (len(obs), 15)).astype(np.float32)
+
 
 class ObservationHistory:
     def __init__(self, contract):
@@ -635,6 +655,53 @@ class ObservationHistory:
         self.last_action = action.astype(np.float32)
         raw = finite(c["default_lower_angles"], (15,)) + c["action_scale"]*action
         return np.clip(raw, limits[:, 0], limits[:, 1]), int(np.count_nonzero((raw < limits[:, 0]) | (raw > limits[:, 1])))
+
+
+class BatchHistory:
+    """ObservationHistory for N parallel environments: same frame layout, zero padding and target law.
+
+    An action beyond the transfer bound does not raise here; the environment is flagged invalid so the
+    caller can terminate it, and its stored action is clipped to the bound.
+    """
+
+    def __init__(self, contract, count):
+        self.contract, self.count = contract, int(count)
+        self.reset()
+
+    def reset(self, ids=None):
+        if ids is None:
+            self.frames = np.zeros((self.count, 6, 86), dtype=np.float32)
+            self.last_action = np.zeros((self.count, 15), dtype=np.float32)
+        else:
+            self.frames[ids] = 0
+            self.last_action[ids] = 0
+
+    def observe(self, body_positions, body_velocities, root_quats_xyzw, angular_velocities_w,
+                source_to_asset, commands, rpys):
+        c, n = self.contract, self.count
+        rotation = quat_xyzw_matrices(root_quats_xyzw) @ finite(source_to_asset, (3, 3))
+        gyro = np.einsum("nji,nj->ni", rotation, finite(angular_velocities_w, (n, 3)))
+        gravity = -rotation[:, 2, :]
+        defaults = np.r_[finite(c["default_lower_angles"], (15,)), np.zeros(14)]
+        frame = np.concatenate([finite(commands, (n, 3))*np.asarray(c["command_scale"]), np.full((n, 1), c["height_command"]),
+                                finite(rpys, (n, 3)), gyro*c["angular_velocity_scale"], gravity,
+                                (finite(body_positions, (n, 29))-defaults)*c["joint_position_scale"],
+                                finite(body_velocities, (n, 29))*c["joint_velocity_scale"], self.last_action], axis=1)
+        self.frames = np.concatenate([self.frames[:, 1:], finite(frame, (n, 86)).astype(np.float32)[:, None]], axis=1)
+        return self.frames.reshape(n, 516)
+
+    def targets(self, actions, lower_limits):
+        c = self.contract
+        actions = finite(actions, (self.count, 15))
+        invalid = np.max(np.abs(actions), axis=1) > c["action_limit"]
+        limits = finite(lower_limits, (15, 2))
+        if np.any(limits[:, 0] >= limits[:, 1]):
+            raise ValueError("Invalid lower-body limits")
+        bounded = np.clip(actions, -c["action_limit"], c["action_limit"])
+        self.last_action = bounded.astype(np.float32)
+        raw = finite(c["default_lower_angles"], (15,)) + c["action_scale"]*bounded
+        clipped = np.count_nonzero((raw < limits[:, 0]) | (raw > limits[:, 1]), axis=1)
+        return np.clip(raw, limits[:, 0], limits[:, 1]), clipped, invalid
 
 
 def load_dynamics_reference():
