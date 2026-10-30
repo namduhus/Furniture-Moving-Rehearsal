@@ -1,0 +1,18 @@
+{
+  "asset_profile": "configs/isaac_g1_asset.json",
+  "controller_contract": "configs/g1_wbc_reference.json",
+  "control_steps": 250,
+  "stage_timeout_seconds": 600,
+  "frame_position_tolerance_m": 0.005,
+  "frame_angle_tolerance_rad": 0.02,
+  "initial_joint_tolerance_rad": 0.0001,
+  "initial_pose_tolerance": 0.0001,
+  "minimum_base_height_m": 0.5,
+  "maximum_tilt_rad": 0.6,
+  "camera": {
+    "width": 640,
+    "height": 360,
+    "capture_every_control_steps": 2
+  },
+  "scope": "Experimental stand-only pretrained controller transfer; no locomotion command, training or furniture contact."
+}

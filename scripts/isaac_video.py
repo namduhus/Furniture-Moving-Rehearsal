@@ -33,7 +33,7 @@ def require_ffmpeg(directory: Path) -> str:
 
 
 def inspect_frame_checksums(text: str, count: int, fps: Fraction,
-                            width: int, height: int) -> dict:
+                            width: int, height: int, *, require_motion: bool = True) -> dict:
     """Require every decoded frame, its dimensions, timestamp and visible changes."""
     timebase = None
     dimensions = None
@@ -54,7 +54,7 @@ def inspect_frame_checksums(text: str, count: int, fps: Fraction,
         if pts * timebase != Fraction(index, 1) / fps or duration * timebase != 1 / fps:
             raise RuntimeError("Decoded video timestamps do not match simulated-time playback")
     unique = len({checksum for _, _, checksum in frames})
-    if unique < 2:
+    if require_motion and unique < 2:
         raise RuntimeError("Decoded video has no changing frames; inspect camera rendering")
     return {"decoded_frames": count, "unique_decoded_frames": unique,
             "duration_seconds": float(Fraction(count, 1) / fps),
@@ -62,7 +62,8 @@ def inspect_frame_checksums(text: str, count: int, fps: Fraction,
 
 
 def encode_recording(directory: Path, *, binary: str, count: int, fps: Fraction,
-                     width: int, height: int, timeout: int = 120) -> dict:
+                     width: int, height: int, timeout: int = 120,
+                     require_motion: bool = True) -> dict:
     """Keep partial output on failure; publish rollout.mp4 only after decoding it."""
     frames = directory / "frames"
     if count < 2 or fps <= 0 or width % 2 or height % 2:
@@ -92,10 +93,11 @@ def encode_recording(directory: Path, *, binary: str, count: int, fps: Fraction,
             stdout=subprocess.PIPE, stderr=log, text=True, check=True, timeout=timeout,
         )
     (directory / "video-frames.md5").write_text(decoded.stdout)
-    evidence = inspect_frame_checksums(decoded.stdout, count, fps, width, height)
+    evidence = inspect_frame_checksums(decoded.stdout, count, fps, width, height, require_motion=require_motion)
     partial.rename(final)
     evidence.update({"status": "passed_video_decode", "file": "rollout.mp4",
-                     "sha256": file_sha256(final), "codec": "libx264", "pixel_format": "yuv420p"})
+                     "sha256": file_sha256(final), "codec": "libx264", "pixel_format": "yuv420p",
+                     "motion_required": require_motion})
     (directory / "video.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return evidence
 
