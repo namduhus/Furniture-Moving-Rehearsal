@@ -20,6 +20,64 @@ from isaac_video import encode_recording, file_sha256, require_ffmpeg
 DEFAULT_PROFILE = ROOT / "configs/isaac_g1_balance.json"
 
 
+def read_collision_geometry(stage, body_poses):
+    """Use measured body poses plus authored relative collision transforms.
+
+    Fabric can leave USD world body transforms stale. Only shape-to-body
+    transforms come from USD; current body world poses come from Isaac buffers.
+    """
+    import numpy as np
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics
+
+    cache = UsdGeom.XformCache()
+
+    def matrix(transform):
+        # Gf uses row vectors; store explicit column-vector matrices for NumPy.
+        result = np.eye(4)
+        result[:3, 3] = transform.Transform(Gf.Vec3d(0, 0, 0))
+        for i in range(3):
+            result[:3, i] = transform.TransformDir(Gf.Vec3d(*(float(v) for v in np.eye(3)[i])))
+        return result.tolist()
+
+    def shapes(path):
+        root = stage.GetPrimAtPath(path)
+        if not root or not root.IsValid():
+            raise RuntimeError(f"Missing initial collision scope: {path}")
+        result = []
+        for prim in Usd.PrimRange(root, Usd.TraverseInstanceProxies()):
+            if prim.HasAPI(UsdPhysics.CollisionAPI):
+                enabled = UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get()
+                if enabled is True:
+                    result.append(prim)
+                elif enabled is not False:
+                    raise RuntimeError(f"Unresolved collision-enabled state: {prim.GetPath()}")
+        if not result:
+            raise RuntimeError(f"No enabled initial collision shapes: {path}")
+        return root, result
+
+    _, ground = shapes("/World/Ground")
+    if len(ground) != 1 or ground[0].GetTypeName() != "Plane":
+        raise RuntimeError("Initial placement requires exactly one ground collision Plane")
+    plane = ground[0]
+    report = {"up_axis": str(UsdGeom.GetStageUpAxis(stage)),
+              "meters_per_unit": UsdGeom.GetStageMetersPerUnit(stage),
+              "ground": {"collision_path": str(plane.GetPath()), "type": "Plane",
+                         "axis": str(plane.GetAttribute("axis").Get()),
+                         "world_from_plane": matrix(cache.GetLocalToWorldTransform(plane))}, "feet": {}}
+    for name, pose in body_poses.items():
+        root, spheres = shapes(f"/World/envs/env_0/Robot/{name}")
+        body_inverse = cache.GetLocalToWorldTransform(root).GetInverse()
+        foot = {"body_pose_xyzw": list(pose), "colliders": []}
+        report["feet"][name] = foot
+        for prim in spheres:
+            if prim.GetTypeName() != "Sphere":
+                raise RuntimeError(f"Unsupported initial foot collider: {prim.GetPath()} ({prim.GetTypeName()})")
+            foot["colliders"].append({"collision_path": str(prim.GetPath()), "type": "Sphere",
+                "radius_m": UsdGeom.Sphere(prim).GetRadiusAttr().Get(),
+                "body_from_shape": matrix(cache.GetLocalToWorldTransform(prim)*body_inverse)})
+    return report
+
+
 def read_contact_materials(stage, feet):
     """Read bound collision materials without changing their coefficients."""
     from pxr import Usd, UsdPhysics, UsdShade
@@ -69,6 +127,11 @@ def analyze_run(directory):
               "stationary_success_assessed": False, "contacts": None, "policy_inputs_verified": False}
     worker_path = directory / "balance-worker.json"
     report["run_status"] = json.loads(worker_path.read_text()).get("status") if worker_path.exists() else "unknown"
+    if profile.get("initialization"):
+        from g1_wbc import placement_summary
+        report["initial_placement"] = placement_summary(
+            json.loads((directory / "initial-placement.json").read_text()), profile["initialization"],
+            json.loads((directory / "controller-contract.json").read_text())["height_command"], initial["root_pose_xyzw"])
     if not profile.get("diagnostics"):
         report["limitation"] = "This historical run did not record contact forces or policy inputs; foot slip cannot be determined."
         return report
@@ -177,8 +240,8 @@ def load_plan(path):
     profile = json.loads(path.read_text())
     if "base_profile" in profile:
         base = (ROOT / profile["base_profile"]).resolve()
-        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "scope"}:
-            raise ValueError("Diagnostic profiles may only extend the reviewed standing profile with instrumentation")
+        if base != DEFAULT_PROFILE or set(profile) - {"base_profile", "diagnostics", "initialization", "scope"}:
+            raise ValueError("Trial extensions may only add diagnostics and reviewed initial placement")
         profile = {**json.loads(base.read_text()), **profile}
     if (diagnostics := profile.get("diagnostics")) is not None:
         if (not isinstance(diagnostics, dict) or
@@ -186,6 +249,15 @@ def load_plan(path):
                 type(diagnostics.get("minimum_normal_force_n")) not in (float, int) or
                 not 0.1 <= diagnostics["minimum_normal_force_n"] <= 20):
             raise ValueError("Invalid foot contact diagnostic configuration")
+    if (initialization := profile.get("initialization")) is not None:
+        if (not profile.get("diagnostics") or not isinstance(initialization, dict) or
+                set(initialization) != {"mode", "minimum_clearance_m", "maximum_vertical_shift_m"} or
+                initialization["mode"] != "collision_clearance" or
+                type(initialization["minimum_clearance_m"]) not in (int, float) or
+                not 0.0005 <= initialization["minimum_clearance_m"] <= 0.005 or
+                type(initialization["maximum_vertical_shift_m"]) not in (int, float) or
+                not 0 < initialization["maximum_vertical_shift_m"] <= 0.1):
+            raise ValueError("Invalid initial placement experiment configuration")
     asset, runtime = load_asset_profile(ROOT / profile["asset_profile"])
     if type(profile["control_steps"]) is not int or not 4 <= profile["control_steps"] <= 500:
         raise ValueError("Standing trial needs 4-500 control steps")
@@ -414,6 +486,35 @@ def balance_check(profile, asset, runtime, contract, reference, model_path, dire
         robot.set_joint_velocity_target_index(target=device(np.zeros(43)))
         sim.forward()
         scene.update(0.0)
+        if profile.get("initialization"):
+            from g1_wbc import collision_clearance, placement_shift, placement_summary
+            settings = profile["initialization"]
+            placement = {"status": "measuring_initial_placement", "mode": settings["mode"],
+                         "policy_height_command_m": contract["height_command"],
+                         "before_root_pose_xyzw": array(robot.data.root_link_pose_w).tolist()}
+            write_json(directory / "initial-placement.json", placement)
+
+            def geometry():
+                poses = frames()
+                return read_collision_geometry(sim.stage, {n: poses[n].tolist() for n in diagnostics["foot_body_names"]})
+
+            placement["before_geometry"] = geometry()
+            placement["before_clearance"] = collision_clearance(placement["before_geometry"])
+            write_json(directory / "initial-placement.json", placement)
+            lift = placement_shift(placement["before_clearance"]["minimum_clearance_m"], settings)
+            root_pose[2] += lift
+            placement["vertical_shift_m"] = lift
+            robot.write_root_pose_to_sim_index(root_pose=device(root_pose))
+            sim.forward()
+            scene.update(0.0)
+            placement["after_root_pose_xyzw"] = array(robot.data.root_link_pose_w).tolist()
+            placement["after_geometry"] = geometry()
+            placement["after_clearance"] = collision_clearance(placement["after_geometry"])
+            placement["status"] = "measured_initial_placement"
+            write_json(directory / "initial-placement.json", placement)
+            placement["status"] = "passed_initial_placement"
+            placement_summary(placement, settings, contract["height_command"], placement["after_root_pose_xyzw"])
+            write_json(directory / "initial-placement.json", placement)
         pose = finite(array(robot.data.root_link_pose_w), (7,))
         q = finite(array(robot.data.joint_pos), (43,))
         velocity = finite(array(robot.data.root_link_vel_w), (6,))
@@ -598,6 +699,10 @@ def validate_stage(stage, directory, profile):
                     not 0 <= frame["maximum_angle_error_rad"] <= profile["frame_angle_tolerance_rad"]):
                 raise RuntimeError("Invalid kinematic evidence")
         initial = json.loads((directory / "initial-state.json").read_text())
+        if profile.get("initialization"):
+            from g1_wbc import placement_summary
+            placement_summary(json.loads((directory / "initial-placement.json").read_text()),
+                              profile["initialization"], contract["height_command"], initial["root_pose_xyzw"])
         pose = finite(initial["root_pose_xyzw"], (7,))
         wanted_pose = finite(initial["wanted_root_pose_xyzw"], (7,))
         if (np.max(np.abs(pose[:3]-wanted_pose[:3])) > profile["initial_pose_tolerance"] or
@@ -683,6 +788,7 @@ def main(argv=None):
                           "control_steps": profile["control_steps"], "simulated_seconds": profile["control_steps"]*0.02,
                           "model_download_bytes": 1886682 if args.prepare_model else 0,
                           "contact_diagnostics": bool(profile.get("diagnostics")),
+                          "initial_placement": profile.get("initialization", {"mode": "legacy_policy_height"}),
                           "physics_samples": profile["control_steps"]*asset["control_decimation"] if args.stage == "balance" and profile.get("diagnostics") else 0,
                           "runtime_image_change": False, "training": False}, indent=2))
         return 0

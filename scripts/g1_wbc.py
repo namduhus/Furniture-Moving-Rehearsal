@@ -360,6 +360,115 @@ class ObservationHistory:
         return np.clip(raw, limits[:, 0], limits[:, 1]), int(np.count_nonzero((raw < limits[:, 0]) | (raw > limits[:, 1])))
 
 
+def collision_clearance(geometry):
+    """Measure sphere surfaces against one horizontal plane in meter units."""
+    if geometry["up_axis"] != "Z" or geometry["meters_per_unit"] != 1.0:
+        raise ValueError("Initial clearance requires a Z-up meter stage")
+    plane = geometry["ground"]
+    transform = finite(plane["world_from_plane"], (4, 4))
+    if (plane["type"] != "Plane" or plane["axis"] not in ("X", "Y", "Z") or
+            not np.allclose(transform[3], [0, 0, 0, 1], atol=1e-9, rtol=0)):
+        raise ValueError("Invalid ground plane geometry")
+    normal = np.linalg.solve(transform[:3, :3].T, np.eye(3)["XYZ".index(plane["axis"])])
+    normal /= np.linalg.norm(normal)
+    if not np.allclose(np.abs(normal), [0, 0, 1], atol=1e-6, rtol=0):
+        raise ValueError("Initial clearance requires a horizontal ground plane")
+    height = float(transform[2, 3])
+    report = {"ground_height_m": height, "feet": {}}
+    if set(geometry["feet"]) != {"left_ankle_roll_link", "right_ankle_roll_link"}:
+        raise ValueError("Initial clearance requires exactly the two G1 feet")
+    paths = set()
+    for name, foot in geometry["feet"].items():
+        body = pose_matrix(foot["body_pose_xyzw"])
+        colliders = []
+        if not foot["colliders"]:
+            raise ValueError(f"No enabled foot spheres: {name}")
+        for shape in foot["colliders"]:
+            path = shape["collision_path"]
+            if path in paths or shape["type"] != "Sphere" or not path.startswith(f"/World/envs/env_0/Robot/{name}/"):
+                raise ValueError("Invalid or duplicate foot collision sphere")
+            paths.add(path)
+            local = finite(shape["body_from_shape"], (4, 4))
+            radius = float(finite(shape["radius_m"]))
+            if not np.allclose(local[3], [0, 0, 0, 1], atol=1e-9, rtol=0) or not 0 < radius <= 0.1:
+                raise ValueError("Invalid foot sphere dimensions")
+            world = body @ local
+            gram = world[:3, :3].T @ world[:3, :3]
+            scale = float(np.sqrt(np.trace(gram)/3))
+            if scale <= 0 or not np.allclose(gram, np.eye(3)*scale**2, atol=1e-9, rtol=1e-6):
+                raise ValueError("Nonuniform sphere scaling is not supported by the clearance experiment")
+            radius_world = radius*scale
+            bottom = float(world[2, 3]-radius_world)
+            colliders.append({"collision_path": path, "center_world_m": world[:3, 3].tolist(),
+                              "radius_world_m": radius_world, "bottom_world_z_m": bottom,
+                              "clearance_m": bottom-height})
+        report["feet"][name] = {"colliders": colliders,
+                                "minimum_clearance_m": min(s["clearance_m"] for s in colliders)}
+    report["minimum_clearance_m"] = min(f["minimum_clearance_m"] for f in report["feet"].values())
+    return report
+
+
+def placement_shift(clearance, settings):
+    shift = max(0.0, settings["minimum_clearance_m"]-float(finite(clearance)))
+    if shift > settings["maximum_vertical_shift_m"]:
+        raise RuntimeError(f"Initial placement needs {shift:.6g} m lift, above the configured bound")
+    return shift
+
+
+def placement_summary(evidence, settings, policy_height, initial_pose):
+    """Revalidate saved geometry and placement without USD or a simulator."""
+    def agrees(first, last):
+        if isinstance(first, dict):
+            return isinstance(last, dict) and first.keys() == last.keys() and all(agrees(v, last[k]) for k,v in first.items())
+        if isinstance(first, list):
+            return isinstance(last, list) and len(first) == len(last) and all(agrees(a,b) for a,b in zip(first,last,strict=True))
+        if isinstance(first, (int, float)):
+            return type(last) in (int, float) and bool(np.isclose(first, last, atol=1e-8, rtol=0))
+        return first == last
+
+    if evidence["status"] != "passed_initial_placement" or evidence["mode"] != settings["mode"]:
+        raise ValueError("Incomplete initial placement evidence")
+    before = collision_clearance(evidence["before_geometry"])
+    after = collision_clearance(evidence["after_geometry"])
+    if not agrees(before, evidence["before_clearance"]) or not agrees(after, evidence["after_clearance"]):
+        raise ValueError("Saved clearance disagrees with collision geometry")
+    lift = placement_shift(before["minimum_clearance_m"], settings)
+    wanted = np.array([0.0, 0.0, lift, 0, 0, 0, 0])
+    root_before = finite(evidence["before_root_pose_xyzw"], (7,))
+    root_after = finite(evidence["after_root_pose_xyzw"], (7,))
+    if (not np.isclose(evidence["policy_height_command_m"], policy_height, atol=1e-8, rtol=0) or
+            not np.isclose(evidence["vertical_shift_m"], lift, atol=1e-8, rtol=0) or
+            not np.allclose(root_before[:3], [0, 0, policy_height], atol=1e-6, rtol=0) or
+            not np.allclose(root_after-root_before, wanted, atol=1e-6, rtol=0) or
+            not np.allclose(root_after, finite(initial_pose, (7,)), atol=1e-6, rtol=0)):
+        raise ValueError("Initial placement changed more than the declared vertical translation")
+    if evidence["before_geometry"]["ground"] != evidence["after_geometry"]["ground"]:
+        raise ValueError("Ground geometry changed during initial placement")
+    for name in before["feet"]:
+        first = evidence["before_geometry"]["feet"][name]
+        last = evidence["after_geometry"]["feet"][name]
+        shapes_before = {s["collision_path"]: s for s in first["colliders"]}
+        shapes_after = {s["collision_path"]: s for s in last["colliders"]}
+        if (shapes_before.keys() != shapes_after.keys() or
+                not np.allclose(finite(last["body_pose_xyzw"], (7,))-finite(first["body_pose_xyzw"], (7,)),
+                                wanted, atol=1e-5, rtol=0)):
+            raise ValueError("Foot geometry changed beyond the declared lift")
+        for path, shape in shapes_before.items():
+            other = shapes_after[path]
+            if (shape["type"] != other["type"] or
+                    not np.isclose(shape["radius_m"], other["radius_m"], atol=1e-10, rtol=0) or
+                    not np.allclose(shape["body_from_shape"], other["body_from_shape"], atol=1e-7, rtol=0)):
+                raise ValueError("Foot collider geometry changed during placement")
+    if (after["minimum_clearance_m"] < settings["minimum_clearance_m"]-1e-5 or
+            not np.isclose(after["minimum_clearance_m"]-before["minimum_clearance_m"], lift, atol=1e-5, rtol=0)):
+        raise ValueError("Initial foot clearance was not established")
+    return {"status": "passed_initial_placement", "vertical_shift_m": lift,
+            "minimum_clearance_before_m": before["minimum_clearance_m"],
+            "minimum_clearance_after_m": after["minimum_clearance_m"],
+            "spawn_height_m": float(root_after[2]), "policy_height_command_m": policy_height,
+            "interpretation": "Geometric sphere-to-plane clearance before any physics step; contact offsets and dynamic settling are not measured here."}
+
+
 def motion_summary(initial_pose, records):
     """Report motion without treating a non-fall pass as stationary standing."""
     if not records:

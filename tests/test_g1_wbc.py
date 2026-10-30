@@ -25,6 +25,16 @@ def joint_frame_fixture(reference):
             for name, parent, child, kind, _, axis in reference.joints if kind == "revolute"}
 
 
+def collision_fixture(poses):
+    return {"up_axis": "Z", "meters_per_unit": 1.0,
+            "ground": {"collision_path": "/World/Ground/CollisionPlane", "type": "Plane", "axis": "Z",
+                       "world_from_plane": np.eye(4).tolist()},
+            "feet": {name: {"body_pose_xyzw": list(pose), "colliders": [{"type": "Sphere",
+                "collision_path": f"/World/envs/env_0/Robot/{name}/collisions/Sphere",
+                "radius_m": 0.005, "body_from_shape": [[1,0,0,0.1],[0,1,0,0],[0,0,1,-0.03],[0,0,0,1]]}]}
+                for name,pose in poses.items()}}
+
+
 class ControllerAdapterTests(unittest.TestCase):
     def setUp(self):
         self.contract, self.robot = wbc.load_contract(ROOT / "configs/g1_wbc_reference.json")
@@ -314,6 +324,114 @@ class ControllerAdapterTests(unittest.TestCase):
                 wbc.contact_summary(invalid, feet, 1.0, 0.005, 4)
         self.assertFalse(wbc.contact_summary([], feet, 1.0, 0.005, 4)["force_evidence_present"])
 
+    def test_initial_placement_profile_preserves_control_and_rejects_unsafe_configuration(self):
+        diagnostic, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
+        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
+        self.assertEqual(asset, trial_asset)
+        self.assertEqual(runtime, trial_runtime)
+        self.assertEqual({k:v for k,v in diagnostic.items() if k != "scope"},
+                         {k:v for k,v in trial.items() if k not in ("scope", "initialization")})
+        with tempfile.TemporaryDirectory() as name:
+            path = Path(name) / "profile.json"
+            raw = json.loads((ROOT / "configs/isaac_g1_placement.json").read_text())
+            for key,value in (("mode", "fixed_height"), ("minimum_clearance_m", 0),
+                              ("minimum_clearance_m", float("nan")), ("maximum_vertical_shift_m", 0.11),
+                              ("maximum_vertical_shift_m", True), ("unknown", 1)):
+                data = copy.deepcopy(raw)
+                data["initialization"][key] = value
+                path.write_text(json.dumps(data))
+                with self.subTest(key=key,value=value), self.assertRaises(ValueError):
+                    runner.load_plan(path)
+            del raw["diagnostics"]
+            path.write_text(json.dumps(raw))
+            with self.assertRaises(ValueError):
+                runner.load_plan(path)
+
+    def test_clearance_uses_full_sphere_surface_and_rejects_invalid_or_changed_geometry(self):
+        feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        geometry = collision_fixture({n: [0,0,0.02,0,0,0,1] for n in feet})
+        before = wbc.collision_clearance(geometry)
+        self.assertAlmostEqual(before["minimum_clearance_m"], -0.015)
+        settings = {"mode": "collision_clearance", "minimum_clearance_m": 0.001, "maximum_vertical_shift_m": 0.1}
+        self.assertAlmostEqual(wbc.placement_shift(before["minimum_clearance_m"], settings), 0.016)
+        self.assertEqual(wbc.placement_shift(0.01, settings), 0.0)
+        with self.assertRaisesRegex(RuntimeError, "bound"):
+            wbc.placement_shift(-0.2, settings)
+        # A tilted foot changes a sphere's world center even though its radius is unchanged.
+        tilted = copy.deepcopy(geometry)
+        tilted["feet"][feet[0]]["body_pose_xyzw"][3:] = wbc.matrix_quat_xyzw(wbc.axis_rotation([0,1,0], np.pi/2)).tolist()
+        self.assertAlmostEqual(wbc.collision_clearance(tilted)["minimum_clearance_m"], -0.085)
+        for corrupt in (lambda g: g.update(meters_per_unit=0.01),
+                        lambda g: g["ground"].update(axis="X"),
+                        lambda g: g["feet"][feet[0]].update(colliders=[]),
+                        lambda g: g["feet"][feet[0]]["colliders"][0].update(radius_m=float("nan")),
+                        lambda g: g["feet"][feet[0]]["colliders"][0]["body_from_shape"][0].__setitem__(0, 2)):
+            bad = copy.deepcopy(geometry)
+            corrupt(bad)
+            with self.assertRaises(ValueError):
+                wbc.collision_clearance(bad)
+        # Revalidation catches a falsely reported clearance and an undeclared horizontal move.
+        before_root = [0,0,0.74,0,0,0,1]
+        after_root = [0,0,0.756,0,0,0,1]
+        after_geometry = copy.deepcopy(geometry)
+        for foot in after_geometry["feet"].values(): foot["body_pose_xyzw"][2] += 0.016
+        evidence = {"status": "passed_initial_placement", "mode": "collision_clearance", "policy_height_command_m": 0.74,
+            "vertical_shift_m": 0.016, "before_root_pose_xyzw": before_root, "after_root_pose_xyzw": after_root,
+            "before_geometry": geometry, "after_geometry": after_geometry, "before_clearance": before,
+            "after_clearance": wbc.collision_clearance(after_geometry)}
+        self.assertAlmostEqual(wbc.placement_summary(evidence, settings, 0.74, after_root)["minimum_clearance_after_m"], 0.001)
+        rounded = copy.deepcopy(evidence)
+        rounded["after_clearance"]["minimum_clearance_m"] += 1e-12
+        wbc.placement_summary(rounded, settings, 0.74, after_root)
+        for corrupt in (lambda e: e["after_clearance"].update(minimum_clearance_m=0.1),
+                        lambda e: e["after_root_pose_xyzw"].__setitem__(0, 0.1),
+                        lambda e: e["after_geometry"]["feet"][feet[0]]["colliders"][0].update(radius_m=0.006)):
+            bad = copy.deepcopy(evidence)
+            corrupt(bad)
+            with self.assertRaises(ValueError): wbc.placement_summary(bad, settings, 0.74, after_root)
+
+    def test_usd_clearance_reader_uses_body_relative_geometry_with_stale_world_transforms(self):
+        feet = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        class Matrix:
+            def __init__(self, a): self.a = np.array(a)
+            def Transform(self, p): return (self.a @ np.r_[p,1])[:3]
+            def TransformDir(self, p): return self.a[:3,:3] @ p
+            def GetInverse(self): return Matrix(np.linalg.inv(self.a))
+            def __mul__(self, other): return Matrix(other.a @ self.a)  # Gf row-vector composition.
+        class Prim:
+            def __init__(self, path, kind="Xform", enabled=True): self.path,self.kind,self.enabled=path,kind,enabled
+            def IsValid(self): return True
+            def HasAPI(self, api): return self.kind != "Xform"
+            def GetTypeName(self): return self.kind
+            def GetPath(self): return self.path
+            def GetAttribute(self, name): return SimpleNamespace(Get=lambda: "Z")
+        roots = {"/World/Ground": Prim("/World/Ground")}
+        shapes = {"/World/Ground": [Prim("/World/Ground/Plane", "Plane")]}
+        matrices = {"/World/Ground/Plane": np.eye(4)}
+        actual = {n: [0,0,0.05,0,0,0,1] for n in feet}
+        for n in feet:
+            path = f"/World/envs/env_0/Robot/{n}"
+            roots[path] = Prim(path)
+            shapes[path] = [Prim(path+"/collisions/Sphere", "Sphere"), Prim(path+"/disabled", "Cube", False)]
+            stale = wbc.pose_matrix([100,50,-10,*wbc.matrix_quat_xyzw(wbc.axis_rotation([1,0,0], 0.6))])
+            local = np.eye(4); local[2,3] = -0.03
+            matrices[path] = stale
+            matrices[path+"/collisions/Sphere"] = stale @ local
+        module = ModuleType("pxr")
+        module.Gf = SimpleNamespace(Vec3d=lambda *v: np.array(v))
+        module.Usd = SimpleNamespace(PrimRange=lambda root, flags: [root,*shapes[root.path]], TraverseInstanceProxies=lambda: None)
+        module.UsdPhysics = SimpleNamespace(CollisionAPI=lambda p: SimpleNamespace(GetCollisionEnabledAttr=lambda: SimpleNamespace(Get=lambda:p.enabled)))
+        module.UsdGeom = SimpleNamespace(GetStageUpAxis=lambda stage: "Z", GetStageMetersPerUnit=lambda stage: 1.0,
+            XformCache=lambda: SimpleNamespace(GetLocalToWorldTransform=lambda p:Matrix(matrices[p.path])),
+            Sphere=lambda p:SimpleNamespace(GetRadiusAttr=lambda:SimpleNamespace(Get=lambda:0.005)))
+        with mock.patch.dict(sys.modules, {"pxr":module}):
+            geometry = runner.read_collision_geometry(SimpleNamespace(GetPrimAtPath=lambda p:roots[p]), actual)
+            self.assertAlmostEqual(wbc.collision_clearance(geometry)["minimum_clearance_m"], 0.015)
+            self.assertEqual(len(geometry["feet"][feet[0]]["colliders"]), 1)
+            shapes[f"/World/envs/env_0/Robot/{feet[0]}"][0].kind = "Mesh"
+            with self.assertRaisesRegex(RuntimeError, "Unsupported initial foot collider"):
+                runner.read_collision_geometry(SimpleNamespace(GetPrimAtPath=lambda p:roots[p]), actual)
+
     def test_material_reader_records_unresolved_bindings_without_inventing_friction(self):
         class Prim:
             def __init__(self, path): self.path = path
@@ -437,10 +555,12 @@ class ControllerLaunchTests(unittest.TestCase):
         class Policy:
             metadata = {"input": ["batch",516], "output": ["batch",15]}
             output = np.zeros(15)
+            observations = []
             def __init__(self, *args): pass
             def __call__(self, observation):
                 self.assert_shape = observation.shape == (516,)
                 if not self.assert_shape: raise AssertionError("Bad observation passed to policy")
+                self.observations.append(observation.copy())
                 return self.output
 
         class Image:
@@ -500,6 +620,7 @@ class ControllerLaunchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as name, mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(wbc, "BalancePolicy", Policy), \
                 mock.patch.object(runner, "read_joint_frames", return_value=joint_frame_fixture(reference)), \
+                mock.patch.object(runner, "read_collision_geometry", side_effect=AssertionError("baseline geometry accessed")), \
                 mock.patch.object(runner, "read_contact_materials", return_value={"scopes": {n:[{"material_path":None}]
                     for n in ("ground", "left_ankle_roll_link", "right_ankle_roll_link")}}) as materials, \
                 mock.patch.object(runner, "require_ffmpeg", return_value="unused-interface-double"), \
@@ -583,6 +704,37 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertTrue(instantiated[-1].robot.spawn.activate_contact_sensors)
             self.assertTrue(instantiated[-1].feet_contact.track_friction_forces)
             self.assertEqual(instantiated[-1].feet_contact.history_length, 1)
+            placement_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
+            placement_profile.update(control_steps=4, camera=profile["camera"])
+            placed = directory / "placed"
+            placed.mkdir()
+            for file,value in (("profile.json", placement_profile), ("asset-profile.json", asset), ("controller-contract.json", contract)):
+                (placed / file).write_text(json.dumps(value))
+            Policy.observations.clear()
+            steps_before = Simulation.steps
+            with mock.patch.object(runner, "read_collision_geometry", side_effect=lambda stage,poses:collision_fixture(poses)):
+                runner.balance_check(placement_profile, asset, runtime, contract, reference, Path("unused.onnx"), placed)
+                runner.validate_stage("balance", placed, placement_profile)
+            placed_analysis = runner.analyze_run(placed)
+            self.assertGreater(placed_analysis["initial_placement"]["spawn_height_m"], 0.74)
+            self.assertAlmostEqual(placed_analysis["initial_placement"]["minimum_clearance_after_m"], 0.001, places=6)
+            self.assertEqual(Simulation.steps-steps_before, 16)  # No pre-roll physics steps.
+            self.assertEqual(len(Policy.observations), 4)
+            self.assertAlmostEqual(float(Policy.observations[0][-86+3]), 0.74, places=6)
+            self.assertEqual(placed_analysis["status"], "diagnostics_complete")
+            geometry_failure = directory / "geometry-failure"
+            geometry_failure.mkdir()
+            Policy.observations.clear()
+            steps_before = Simulation.steps
+            def too_low(stage, poses):
+                result = collision_fixture(poses)
+                for foot in result["feet"].values(): foot["body_pose_xyzw"][2] -= 1.0
+                return result
+            with mock.patch.object(runner, "read_collision_geometry", side_effect=too_low):
+                with self.assertRaisesRegex(RuntimeError, "above the configured bound"):
+                    runner.balance_check(placement_profile, asset, runtime, contract, reference, Path("unused.onnx"), geometry_failure)
+            self.assertEqual(Simulation.steps, steps_before)
+            self.assertEqual(Policy.observations, [])
             with mock.patch.object(wbc, "prepare_model", side_effect=AssertionError("model accessed")), \
                     mock.patch.object(runner, "run_stage", side_effect=AssertionError("worker launched")), \
                     mock.patch("builtins.print"):
