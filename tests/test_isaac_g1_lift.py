@@ -106,10 +106,16 @@ class LiftWorkerTests(unittest.TestCase):
         modules = {"PIL": ModuleType("PIL")}
         modules["PIL"].Image = Image
         attached, released = [], []
+
+        def attach(stage, robot, box, env, frames):
+            # The enabled joints pull the object toward the palms in the PhysX warmup step of sim.reset().
+            box.pose[0, :3] += [-0.1, 0.0, 0.3]
+            attached.append(env)
+            return {"joints": {"left": {}, "right": {}}}
+
         with tempfile.TemporaryDirectory() as tmp, parallel_isaac(1, scene_profile, asset) as fake, \
                 mock.patch.dict(sys.modules, modules), \
-                mock.patch.object(lift, "apply_hand_attachment", side_effect=lambda stage, robot, box, env, frames:
-                                  attached.append(env) or {"joints": {"left": {}, "right": {}}}), \
+                mock.patch.object(lift, "apply_hand_attachment", side_effect=attach), \
                 mock.patch.object(lift, "release_attachment", side_effect=lambda stage, env: released.append(env) or True), \
                 mock.patch.object(lift, "require_ffmpeg", return_value="ffmpeg"), \
                 mock.patch.object(lift, "encode_recording", return_value={"status": "passed_video_decode"}) as encode:
@@ -120,6 +126,7 @@ class LiftWorkerTests(unittest.TestCase):
             lines = (directory / "lift-trajectory.jsonl").read_text().splitlines()
         self.assertEqual((attached, released), (["/World/envs/env_0"], ["/World/envs/env_0"]))
         self.assertLess(result["start"]["palm_frame_mismatch_m"], 1e-6)
+        self.assertAlmostEqual(result["start"]["after_reset_offset_m"][2], o["size_m"][2]/2 + 0.3)
         self.assertTrue(0.002 <= result["start"]["object_bottom_m"] <= 0.06)
         self.assertEqual(len(lines), 600)
         self.assertEqual(encode.call_args.kwargs["count"], 301)

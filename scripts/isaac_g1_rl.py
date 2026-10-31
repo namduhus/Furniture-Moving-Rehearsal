@@ -107,12 +107,13 @@ def apply_box_properties(stage, box, env, mass, friction):
 
 
 def prepare_push_scene(built, count, profile, asset, runtime, contract, reference, directory, result, evidence,
-                       box_properties=None, extra_edits=None):
+                       box_properties=None, extra_edits=None, check_box_start=True):
     """Instantiate the parallel push scene with every qualified edit, verify it and place the crouch start.
 
     evidence: JSON path that receives `result` once materials are read, before they are checked.
     box_properties: optional per-environment (masses, frictions) authored before reset; defaults to the profile box.
     extra_edits: optional callable(stage, robot, box, env) for further session-layer edits before reset.
+    check_box_start: require the box at its push spawn after reset; callers that place the box themselves skip it.
     """
     import numpy as np
     import torch
@@ -209,7 +210,7 @@ def prepare_push_scene(built, count, profile, asset, runtime, contract, referenc
         raise RuntimeError("Crouch-start clearance was not established")
     box_start = batch(box.data.root_link_pose_w)
     wanted_x = built.hand_reach + push["gap_m"] + push["size_m"][0]/2
-    if not np.allclose(box_start[:, :2] - origins[:, :2], [wanted_x, 0.0], atol=0.01, rtol=0):
+    if check_box_start and not np.allclose(box_start[:, :2] - origins[:, :2], [wanted_x, 0.0], atol=0.01, rtol=0):
         raise RuntimeError("Box placement differs between environments")
     result["initialization"] = {"lift_m": lift, "spawn_height_m": contract["height_command"] + lift,
                                 "clearance_after_m": after["minimum_clearance_m"],

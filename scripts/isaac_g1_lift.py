@@ -274,9 +274,11 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     with launch_simulation(built.cfg, {**rl.LAUNCH_SETTINGS, "enable_cameras": True, "device": runtime["device"]}):
         try:
             attachment = {}
+            # The enabled joints pull the object off its push spawn in the reset warmup step; it is placed below.
             s = rl.prepare_push_scene(
                 built, 1, scene_profile, asset, runtime, contract, reference, directory, result, evidence,
-                extra_edits=lambda stage, robot, box, env: attachment.update(apply_hand_attachment(stage, robot, box, env, frames)))
+                extra_edits=lambda stage, robot, box, env: attachment.update(apply_hand_attachment(stage, robot, box, env, frames)),
+                check_box_start=False)
             result["attachment"] = attachment
             robot, box, batch, device = s.robot, s.box, s.batch, s.device
             palm_ids = {side: s.bodies.index(f"{side}_hand_palm_link") for side in ("left", "right")}
@@ -295,7 +297,8 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             box.write_root_velocity_to_sim_index(root_velocity=device(np.zeros((1, 6))))
             start_bottom = lowest_point_z(object_pose, o["size_m"])
             result["start"] = {"object_pose_xyzw": object_pose.tolist(), "object_bottom_m": start_bottom,
-                               "palm_frame_mismatch_m": mismatch}
+                               "palm_frame_mismatch_m": mismatch,
+                               "after_reset_offset_m": (s.box_start[0, :3] - s.origins[0]).tolist()}
             write_json(evidence, result)
             if mismatch > 0.002 or not 0.002 <= start_bottom <= 0.06:
                 raise RuntimeError("Attached object start pose is inconsistent with the palms or the floor")
