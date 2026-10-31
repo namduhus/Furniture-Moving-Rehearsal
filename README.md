@@ -294,7 +294,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Lift and carry light furniture
 
-[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime.
+[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime. One environment per case sweeps the cabinet mass with and without static load feedforward on the arm targets to measure where lifting fails.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_lift.py --config configs/isaac_g1_lift.json

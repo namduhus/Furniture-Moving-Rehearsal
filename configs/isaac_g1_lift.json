@@ -2,11 +2,16 @@
   "push_profile": "configs/isaac_g1_push_sliders.json",
   "object": {
     "size_m": [0.30, 0.28, 0.90],
-    "mass_kg": 2.0,
     "friction": 0.5,
     "start_clearance_m": 0.005,
     "near_face_ahead_of_palm_m": 0.02
   },
+  "cases": [
+    {"mass_kg": 2.0, "feedforward": false}, {"mass_kg": 2.0, "feedforward": true},
+    {"mass_kg": 3.0, "feedforward": false}, {"mass_kg": 3.0, "feedforward": true},
+    {"mass_kg": 4.0, "feedforward": false}, {"mass_kg": 4.0, "feedforward": true},
+    {"mass_kg": 5.0, "feedforward": false}, {"mass_kg": 5.0, "feedforward": true}
+  ],
   "arm_offsets_m": {
     "lift": 0.10,
     "place": -0.02
@@ -29,10 +34,11 @@
     "object_tilt_deg": 5.0
   },
   "camera": {
-    "eye_m": [0.6, -3.0, 1.3],
-    "target_m": [0.6, 0.0, 0.55],
-    "capture_every_control_steps": 2
+    "eye_offset_m": [0.6, -3.0, 1.3],
+    "target_offset_m": [0.6, 0.0, 0.55],
+    "capture_every_control_steps": 2,
+    "env_spacing_m": 10.0
   },
-  "stage_timeout_seconds": 900,
-  "scope": "Lift tier probe: a 2 kg, 0.30 x 0.28 x 0.90 m light cabinet held by its side faces with palm-object fixed joints (grasp abstraction; hand/wrist collisions with it filtered) stands 5 mm above the floor at the policy height (higher by the crouch-start raise at spawn). IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries it for 5 s at the reviewed 0.2 m/s, Balance holds while the palms lower to 2 cm below the start pose to set it down, then the joints are disabled at runtime and the palms return to the start pose to test release."
+  "stage_timeout_seconds": 1800,
+  "scope": "Lift tier sweep: a 0.30 x 0.28 x 0.90 m light cabinet of 2, 3, 4 or 5 kg, each with and without static load feedforward on the arm targets (one environment per case), held by its side faces with palm-object fixed joints (grasp abstraction; hand/wrist collisions with it filtered) stands 5 mm above the floor at the policy height (higher by the crouch-start raise at spawn). IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries it for 5 s at the reviewed 0.2 m/s, Balance holds while the palms lower to 2 cm below the start pose to set it down, then the joints are disabled at runtime and the palms return to the start pose to test release. Estimated wrist pitch load at the lift pose is 1.28 Nm/kg against a 5 Nm limit, so the 4 and 5 kg cases measure the failure side."
 }
