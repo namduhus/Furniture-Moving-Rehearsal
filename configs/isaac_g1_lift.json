@@ -1,13 +1,14 @@
 {
   "push_profile": "configs/isaac_g1_push_sliders.json",
   "object": {
-    "size_m": [0.35, 0.45, 0.88],
+    "size_m": [0.30, 0.28, 0.90],
     "mass_kg": 2.0,
     "friction": 0.5,
-    "grasp_below_top_m": 0.02
+    "start_clearance_m": 0.005,
+    "near_face_ahead_of_palm_m": 0.02
   },
   "arm_offsets_m": {
-    "lift": 0.06,
+    "lift": 0.10,
     "place": -0.02
   },
   "timeline": [
@@ -33,5 +34,5 @@
     "capture_every_control_steps": 2
   },
   "stage_timeout_seconds": 900,
-  "scope": "Lift tier probe: a 2 kg, 0.35 x 0.45 x 0.88 m light cabinet held at its top front edge by palm-object fixed joints (grasp abstraction; hand/wrist collisions with it filtered) starts ~2 cm above the floor at the crouch start. IK raises both palms 6 cm under GR00T Balance, GR00T Walk carries it for 5 s at the reviewed 0.2 m/s, Balance holds while the palms lower to 2 cm below the start pose to set it down, then the joints are disabled at runtime and the palms return to the start pose to test release. 3 kg would exceed the 5 Nm wrist pitch limit at this grasp."
+  "scope": "Lift tier probe: a 2 kg, 0.30 x 0.28 x 0.90 m light cabinet held by its side faces with palm-object fixed joints (grasp abstraction; hand/wrist collisions with it filtered) stands 5 mm above the floor at the policy height (higher by the crouch-start raise at spawn). IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries it for 5 s at the reviewed 0.2 m/s, Balance holds while the palms lower to 2 cm below the start pose to set it down, then the joints are disabled at runtime and the palms return to the start pose to test release."
 }

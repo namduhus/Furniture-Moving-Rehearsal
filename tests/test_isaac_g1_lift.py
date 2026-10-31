@@ -45,15 +45,22 @@ class LiftGeometryTests(unittest.TestCase):
             self.assertEqual({n for n in q if q[n] != self.base[n]} - set(lift.arm_joints(self.reference, "left")) -
                              set(lift.arm_joints(self.reference, "right")), set())
 
-    def test_both_palm_joints_imply_the_same_object_pose_at_the_grasp(self):
-        frames = lift.attachment_frames(self.reference, self.base, self.config["object"], 0.415)
+    def test_both_palm_joints_imply_the_same_side_grasp_pose(self):
+        o, height = self.config["object"], self.contract["height_command"]
+        frames = lift.attachment_frames(self.reference, self.base, o, height)
         fk = self.reference.forward(self.base)
         for side in ("left", "right"):
             np.testing.assert_allclose(fk[f"{side}_hand_palm_link"] @ frames["palm_object"][side], frames["pelvis_object"], atol=1e-12)
-        obj, size = frames["pelvis_object"], self.config["object"]["size_m"]
-        self.assertAlmostEqual(obj[0, 3] - size[0]/2, 0.415)
-        palm_z = fk["left_hand_palm_link"][2, 3]
-        self.assertAlmostEqual(obj[2, 3] + size[2]/2, palm_z + self.config["object"]["grasp_below_top_m"])
+        obj, size = frames["pelvis_object"], o["size_m"]
+        palm = fk["left_hand_palm_link"][:3, 3]
+        self.assertAlmostEqual(obj[0, 3] - size[0]/2, palm[0] + o["near_face_ahead_of_palm_m"])
+        # Standing clearance is set at the policy height, not at the raised crouch start (run 013531).
+        self.assertAlmostEqual(height + obj[2, 3] - size[2]/2, o["start_clearance_m"])
+        self.assertAlmostEqual(frames["palm_inset_m"], abs(palm[1] - obj[1, 3]) - size[1]/2)
+        self.assertTrue(0 <= frames["palm_inset_m"] <= 0.03 and frames["grasp_below_top_m"] >= 0.04)
+        for size in ([0.3, 0.4, 0.9], [0.3, 0.28, 0.75]):
+            with self.subTest(size=size), self.assertRaises(ValueError):
+                lift.attachment_frames(self.reference, self.base, {**o, "size_m": size}, height)
         pose = np.r_[[0.0, 0.0, 0.5], wbc.matrix_quat_xyzw(wbc.axis_rotation([1, 0, 0], np.radians(10)))]
         self.assertAlmostEqual(lift.tilt_deg(pose), 10.0)
         self.assertLess(lift.lowest_point_z(pose, [0.4, 0.4, 0.4]), 0.5 - 0.2)
@@ -86,6 +93,7 @@ class LiftGeometryTests(unittest.TestCase):
         raw = json.loads(lift.DEFAULT_CONFIG.read_text())
         timeline = raw["timeline"]
         cases = [{**raw, "object": {**raw["object"], "mass_kg": 3.5}},
+                 {**raw, "object": {**raw["object"], "start_clearance_m": 0.05}},
                  {**raw, "timeline": [{**p, "command": [0.4, 0, 0]} if p["name"] == "carry" else p for p in timeline]},
                  {**raw, "timeline": [p for p in timeline if p["name"] != "withdraw"]},
                  {**raw, "arm_offsets_m": {"lift": 0.2, "place": -0.02}}, {**raw, "extra": 1}]
@@ -127,9 +135,12 @@ class LiftWorkerTests(unittest.TestCase):
         self.assertEqual((attached, released), (["/World/envs/env_0"], ["/World/envs/env_0"]))
         self.assertLess(result["start"]["palm_frame_mismatch_m"], 1e-6)
         self.assertAlmostEqual(result["start"]["after_reset_offset_m"][2], o["size_m"][2]/2 + 0.3)
-        self.assertTrue(0.002 <= result["start"]["object_bottom_m"] <= 0.06)
+        start = result["start"]
+        self.assertAlmostEqual(start["object_bottom_m"], o["start_clearance_m"] + result["initialization"]["lift_m"])
+        self.assertEqual(start["expected_bottom_m"], o["start_clearance_m"] + result["initialization"]["lift_m"])
         self.assertEqual(len(lines), 600)
-        self.assertEqual(encode.call_args.kwargs["count"], 301)
+        # One frame every two control steps, none before the first step.
+        self.assertEqual(encode.call_args.kwargs["count"], 300)
         # The doubles neither move the palms nor the object, so the attachment holds but nothing is carried.
         checks = result["summary"]["checks"]
         self.assertEqual((checks["attachment_held"], checks["carried_forward"]), (True, False))

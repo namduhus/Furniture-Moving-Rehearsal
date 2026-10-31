@@ -1,7 +1,7 @@
 """G1 lifts, carries and sets down light furniture held by hand-object attachment (single-environment probe).
 
-Grasp abstraction: two fixed joints, authored before reset, attach the palms to the object at the default arm pose,
-and hand/wrist collisions with the object are filtered. The object's weight and contacts reach the robot through the
+Grasp abstraction: two fixed joints, authored before reset, attach the palms to the object's side faces at the
+default arm pose (the palms face each other), and hand/wrist collisions with the object are filtered. The object's weight and contacts reach the robot through the
 joints. Arm targets for lifting and lowering come from position-and-orientation IK on the pinned reference model;
 GR00T Balance/Walk drive the lower body on the source schedule (Balance whenever the command norm is at most 0.05).
 Disabling the joints at runtime (release) is attempted and measured, not assumed.
@@ -42,11 +42,11 @@ def load_config(path):
         return type(value) in (int, float) and low <= value <= high
 
     o = config["object"]
-    if (set(o) != {"size_m", "mass_kg", "friction", "grasp_below_top_m"} or not isinstance(o["size_m"], list) or
-            len(o["size_m"]) != 3 or not all(number(v, 0.1, 1.5) for v in o["size_m"]) or
+    if (set(o) != {"size_m", "mass_kg", "friction", "start_clearance_m", "near_face_ahead_of_palm_m"} or
+            not isinstance(o["size_m"], list) or len(o["size_m"]) != 3 or not all(number(v, 0.1, 1.5) for v in o["size_m"]) or
             not number(o["mass_kg"], 0.1, 3.0) or not number(o["friction"], 0.05, 1.5) or
-            not number(o["grasp_below_top_m"], 0.0, 0.1)):
-        raise ValueError("Invalid lift object; mass above 3 kg exceeds the 5 Nm wrist pitch limit at this grasp")
+            not number(o["start_clearance_m"], 0.0, 0.02) or not number(o["near_face_ahead_of_palm_m"], 0.0, 0.1)):
+        raise ValueError("Invalid lift object; masses above 3 kg are not reviewed against the 5 Nm wrist pitch limit")
     a = config["arm_offsets_m"]
     if set(a) != {"lift", "place"} or not number(a["lift"], 0.0, 0.12) or not number(a["place"], -0.05, 0.0):
         raise ValueError("Invalid vertical palm offsets")
@@ -118,20 +118,29 @@ def arm_pose(reference, base, side, dz, iterations=50):
     return {name: float(q[name]) for name in joints}
 
 
-def attachment_frames(reference, base, settings, hand_reach):
+def attachment_frames(reference, base, settings, height):
     """Object pose in the pelvis frame at the default arm pose and each palm joint's frame in object coordinates.
 
-    The near face sits at the fingertip reach, centred between the palms, with its top grasp_below_top_m above them.
+    Side grasp: the object is centred between the palms with its near face near_face_ahead_of_palm_m ahead of them and
+    its bottom start_clearance_m above the floor when the pelvis stands at `height` (the policy height command, not the
+    raised crouch start). Its side faces must lie at most 3 cm inside the palm origins and the palms at least 4 cm
+    inside the face height.
     """
     import numpy as np
     fk = reference.forward(base)
     palms = {side: fk[f"{side}_hand_palm_link"] for side in ("left", "right")}
     size = np.asarray(settings["size_m"], dtype=float)
-    top = np.mean([palms[side][2, 3] for side in palms]) + settings["grasp_below_top_m"]
+    centre = np.mean([palms[side][:3, 3] for side in palms], axis=0)
     obj = np.eye(4)
-    obj[:3, 3] = [hand_reach + size[0]/2, 0.0, top - size[2]/2]
+    obj[:3, 3] = [centre[0] + settings["near_face_ahead_of_palm_m"] + size[0]/2, centre[1],
+                  settings["start_clearance_m"] - height + size[2]/2]
     joints = {side: np.linalg.inv(obj) @ palm for side, palm in palms.items()}
-    return {"pelvis_object": obj, "object_palm": joints, "palm_object": {s: np.linalg.inv(t) for s, t in joints.items()}}
+    inset = min(abs(t[1, 3]) for t in joints.values()) - size[1]/2
+    below_top = size[2]/2 - max(t[2, 3] for t in joints.values())
+    if not 0.0 <= inset <= 0.03 or not 0.04 <= below_top <= size[2] - 0.04:
+        raise ValueError("The object's side faces must meet the palms and the palms must lie within the face height")
+    return {"pelvis_object": obj, "object_palm": joints, "palm_object": {s: np.linalg.inv(t) for s, t in joints.items()},
+            "palm_inset_m": float(inset), "grasp_below_top_m": float(below_top)}
 
 
 def lowest_point_z(pose_xyzw, size):
@@ -212,7 +221,7 @@ def lift_summary(records, checks):
         return [r for r in records if r["phase"] in names]
 
     attached = [r for r in records if not r["released"]]
-    carry, hold = phase("carry"), phase("hold")
+    settle, carry, hold = phase("settle"), phase("carry"), phase("hold")
     placed = phase("release")[-1] if phase("release") else None
     withdraw = phase("withdraw")
     start_x = carry[0]["object_xyz"][0] if carry else None
@@ -223,6 +232,7 @@ def lift_summary(records, checks):
         "robot_fallen": any(r["fallen"] for r in records),
         "placed_clearance_m": placed["object_bottom_m"] if placed else None,
         "placed_tilt_deg": placed["object_tilt_deg"] if placed else None,
+        "settled_clearance_m": settle[-1]["object_bottom_m"] if settle else None,
         "hold_clearance_m": hold[-1]["object_bottom_m"] if hold else None}
     result["checks"] = {
         "attachment_held": result["attachment_error_max_m"] <= checks["attachment_error_m"],
@@ -261,7 +271,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     built = rl.scene_config(scene_profile, asset, runtime, contract, reference, with_camera=True, num_envs=1,
                             env_spacing=4.0, replicate_physics=False)
     base = base_pose(reference, asset, contract)
-    frames = attachment_frames(reference, base, o, built.hand_reach)
+    frames = attachment_frames(reference, base, o, contract["height_command"])
     # The start pose is the default arm hold (all arm targets zero).
     arm_angles = {"start": {n: 0.0 for side in ("left", "right") for n in arm_joints(reference, side)}}
     for pose in ("lift", "place"):
@@ -269,7 +279,8 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                             for n, v in arm_pose(reference, base, side, config["arm_offsets_m"][pose]).items()}
     evidence = directory / "lift-worker.json"
     result = {"status": "running", "object": o, "arm_angles_rad": arm_angles,
-              "pelvis_object": frames["pelvis_object"].tolist()}
+              "pelvis_object": frames["pelvis_object"].tolist(),
+              "grasp": {k: frames[k] for k in ("palm_inset_m", "grasp_below_top_m")}}
     write_json(evidence, result)
     with launch_simulation(built.cfg, {**rl.LAUNCH_SETTINGS, "enable_cameras": True, "device": runtime["device"]}):
         try:
@@ -288,7 +299,8 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                 poses = finite(batch(robot.data.body_link_pose_w)[0], (len(s.bodies), 7))
                 return {side: pose_matrix(poses[i]) for side, i in palm_ids.items()}
 
-            # Place the object where both joints expect it at the crouch start, then start stepping.
+            # Place the object where both joints expect it at the crouch start, then start stepping. The crouch start
+            # raises the robot above the policy height, so the object starts that much above its standing clearance.
             palms = palm_poses()
             world_object = palms["left"] @ frames["palm_object"]["left"]
             mismatch = float(np.linalg.norm((palms["right"] @ frames["palm_object"]["right"])[:3, 3] - world_object[:3, 3]))
@@ -296,12 +308,14 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             box.write_root_pose_to_sim_index(root_pose=device(object_pose[None]))
             box.write_root_velocity_to_sim_index(root_velocity=device(np.zeros((1, 6))))
             start_bottom = lowest_point_z(object_pose, o["size_m"])
+            expected_bottom = o["start_clearance_m"] + result["initialization"]["lift_m"]
             result["start"] = {"object_pose_xyzw": object_pose.tolist(), "object_bottom_m": start_bottom,
+                               "expected_bottom_m": expected_bottom,
                                "palm_frame_mismatch_m": mismatch,
                                "after_reset_offset_m": (s.box_start[0, :3] - s.origins[0]).tolist()}
             write_json(evidence, result)
-            if mismatch > 0.002 or not 0.002 <= start_bottom <= 0.06:
-                raise RuntimeError("Attached object start pose is inconsistent with the palms or the floor")
+            if mismatch > 0.002 or abs(start_bottom - expected_bottom) > 0.01:
+                raise RuntimeError("Attached object start pose is inconsistent with the palms or the standing height")
 
             control_dt = asset["physics_dt"]*asset["control_decimation"]
             steps = schedule(config["timeline"], control_dt)
@@ -325,7 +339,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                 Image.fromarray(rgb.astype(np.uint8)).save(directory / "frames" / f"{frame_count:06d}.png")
                 frame_count += 1
 
-            capture()
+            # No frame before the first step: the render still shows the warmup-step robot pose then (run 013531).
             with (directory / "lift-trajectory.jsonl").open("w") as log:
                 for k, step in enumerate(steps):
                     if step["release"]:
@@ -392,7 +406,9 @@ def main(argv=None):
     if args.dry_run:
         base = base_pose(reference, asset, contract)
         poses = {pose: arm_pose(reference, base, "left", config["arm_offsets_m"][pose]) for pose in ("lift", "place")}
+        frames = attachment_frames(reference, base, config["object"], contract["height_command"])
         print(json.dumps({"status": "local_plan_only", "object": config["object"], "left_arm_rad": poses,
+                          "grasp": {k: frames[k] for k in ("palm_inset_m", "grasp_below_top_m")},
                           "seconds": sum(p["seconds"] for p in config["timeline"]), "training": False}, indent=2))
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
