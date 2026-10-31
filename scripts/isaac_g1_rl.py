@@ -107,11 +107,12 @@ def apply_box_properties(stage, box, env, mass, friction):
 
 
 def prepare_push_scene(built, count, profile, asset, runtime, contract, reference, directory, result, evidence,
-                       box_properties=None):
+                       box_properties=None, extra_edits=None):
     """Instantiate the parallel push scene with every qualified edit, verify it and place the crouch start.
 
     evidence: JSON path that receives `result` once materials are read, before they are checked.
     box_properties: optional per-environment (masses, frictions) authored before reset; defaults to the profile box.
+    extra_edits: optional callable(stage, robot, box, env) for further session-layer edits before reset.
     """
     import numpy as np
     import torch
@@ -137,6 +138,8 @@ def prepare_push_scene(built, count, profile, asset, runtime, contract, referenc
         contacts.append(apply_source_contact(sim.stage, robot, record, env=env))
         if box_properties is not None:
             apply_box_properties(sim.stage, box, env, masses[i], frictions[i])
+        if extra_edits is not None:
+            extra_edits(sim.stage, robot, box, env)
     sim.reset()
 
     def batch(value):
@@ -213,7 +216,8 @@ def prepare_push_scene(built, count, profile, asset, runtime, contract, referenc
                                 "source_to_asset_rotation": rotation.tolist()}
     return SimpleNamespace(sim=sim, scene=scene, robot=robot, box=box, batch=batch, device=device, indices=indices,
                            lower_indices=lower_indices, limits=limits, defaults=defaults, origins=origins,
-                           rotation=rotation, root=root, box_start=box_start, hand_reach=built.hand_reach)
+                           rotation=rotation, root=root, box_start=box_start, hand_reach=built.hand_reach,
+                           names=names, bodies=bodies)
 
 
 def run_worker(config, profile, asset, runtime, model_path, directory):
