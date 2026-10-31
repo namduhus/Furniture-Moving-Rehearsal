@@ -80,15 +80,22 @@ def load_config(path):
     if set(w) != {"progress", "lateral", "yaw", "action_rate", "failure", "success"} or not all(
             number(v, 0.0, 100.0) for v in w.values()):
         raise ValueError("Invalid reward weights")
-    p = config["ppo"]
-    if (set(p) != PPO_KEYS or not all(type(p[k]) is int and p[k] >= 1 for k in
-                                      ("num_steps_per_env", "max_iterations", "save_interval", "num_learning_epochs",
-                                       "num_mini_batches")) or
-            not (isinstance(p["hidden_dims"], list) and p["hidden_dims"] and all(type(v) is int and v > 0 for v in p["hidden_dims"])) or
-            not all(number(p[k], 0.0, 1.0) for k in ("init_std", "learning_rate", "entropy_coef", "gamma", "lam",
-                                                    "desired_kl", "clip_param"))):
+    if not valid_ppo_settings(config["ppo"]):
         raise ValueError("Invalid PPO settings")
     return config, profile, asset, runtime
+
+
+def valid_ppo_settings(p):
+    def number(value, low, high):
+        return type(value) in (int, float) and low <= value <= high
+
+    return (set(p) == PPO_KEYS and all(type(p[k]) is int and p[k] >= 1 for k in
+                                       ("num_steps_per_env", "max_iterations", "save_interval", "num_learning_epochs",
+                                        "num_mini_batches")) and
+            isinstance(p["hidden_dims"], list) and bool(p["hidden_dims"]) and
+            all(type(v) is int and v > 0 for v in p["hidden_dims"]) and
+            all(number(p[k], 0.0, 1.0) for k in ("init_std", "learning_rate", "entropy_coef", "gamma", "lam",
+                                                "desired_kl", "clip_param")))
 
 
 def bound_arrays(bounds):
@@ -155,10 +162,10 @@ def task_step(box_pose, robot_pose, origins, start_x, previous_x, actions, last_
     return reward, failed | success, outcome, progress
 
 
-def episode_summary(records):
+def episode_summary(records, outcomes=OUTCOMES):
     import numpy as np
     count = len(records)
-    rates = {name: (sum(r["outcome"] == name for r in records)/count if count else None) for name in OUTCOMES}
+    rates = {name: (sum(r["outcome"] == name for r in records)/count if count else None) for name in outcomes}
     progress = np.array([r["progress_m"] for r in records])
     successes = [r["seconds"] for r in records if r["outcome"] == "success"]
     return {"episodes": count, "success_rate": rates["success"], "outcome_rates": rates,
@@ -169,8 +176,9 @@ def episode_summary(records):
 class ProgressLog:
     """Aggregate episodes that finish during each PPO rollout into one JSON line per iteration."""
 
-    def __init__(self, path, steps_per_iteration, env_steps_per_decision):
+    def __init__(self, path, steps_per_iteration, env_steps_per_decision, outcomes=OUTCOMES):
         self.path, self.steps_per_iteration, self.env_steps_per_decision = path, steps_per_iteration, env_steps_per_decision
+        self.outcomes = outcomes
         self.records, self.decisions, self.iteration, self.tic = [], 0, 0, time.perf_counter()
 
     def __call__(self, completed, num_envs):
@@ -180,7 +188,7 @@ class ProgressLog:
             wall = time.perf_counter() - self.tic
             line = {"iteration": self.iteration, "rollout_and_update_seconds": wall,
                     "env_steps_per_second": num_envs*self.steps_per_iteration*self.env_steps_per_decision/wall,
-                    **episode_summary(self.records)}
+                    **episode_summary(self.records, self.outcomes)}
             with self.path.open("a") as file:
                 file.write(json.dumps(line) + "\n")
             self.records, self.iteration, self.tic = [], self.iteration + 1, time.perf_counter()

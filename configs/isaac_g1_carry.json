@@ -1,0 +1,63 @@
+{
+  "push_profile": "configs/isaac_g1_push_sliders.json",
+  "object": {
+    "size_m": [0.30, 0.28, 0.90],
+    "friction": 0.5,
+    "start_clearance_m": 0.005,
+    "near_face_ahead_of_palm_m": 0.02
+  },
+  "mass_kg": [2.0, 4.0],
+  "arm_lift_m": 0.10,
+  "lift_prefix_seconds": {"settle": 1.0, "lift": 1.0, "hold": 0.5},
+  "corridor": {
+    "width_m": [1.1, 1.5],
+    "corner_m": [1.2, 2.0],
+    "goal_past_corner_m": 1.0,
+    "leg_two_m": 2.0,
+    "back_m": 0.6,
+    "wall_thickness_m": 0.1,
+    "wall_height_m": 1.2
+  },
+  "start": {"lateral_m": [-0.1, 0.1], "yaw_rad": [-0.1, 0.1]},
+  "num_envs": 256,
+  "env_spacing_m": 6.0,
+  "decision_control_steps": 5,
+  "episode_seconds": 40.0,
+  "action_bounds": {
+    "forward_mps": [0.0, 0.3],
+    "yaw_rate_rps": [-0.3, 0.3]
+  },
+  "termination": {
+    "robot_link_radius_m": 0.08,
+    "wall_contact_m": 0.01,
+    "object_tilt_rad": 0.3,
+    "object_floor_clearance_m": 0.01
+  },
+  "reward": {
+    "progress": 2.0,
+    "wall": 1.0,
+    "safe_clearance_m": 0.1,
+    "action_rate": 0.1,
+    "failure": 10.0,
+    "success": 20.0
+  },
+  "scripted": {"forward_mps": 0.2, "yaw_gain": 1.0},
+  "ppo": {
+    "num_steps_per_env": 24,
+    "max_iterations": 300,
+    "save_interval": 50,
+    "hidden_dims": [128, 128],
+    "init_std": 0.5,
+    "learning_rate": 0.0003,
+    "entropy_coef": 0.005,
+    "num_learning_epochs": 5,
+    "num_mini_batches": 4,
+    "gamma": 0.99,
+    "lam": 0.95,
+    "desired_kl": 0.01,
+    "clip_param": 0.2
+  },
+  "seed": 0,
+  "stage_timeout_seconds": 4800,
+  "scope": "Corridor carry, first training run: 256 environments, each with its own L-shaped corridor (width 1.1-1.5 m, corner 1.2-2.0 m ahead, alternating left/right turns, goal line 1.0 m into the second leg) and a 2-4 kg cabinet (the lift sweep's uncompensated capacity) held by the side-grasp attachment without load feedforward. After a scripted 2.5 s settle and lift under GR00T Balance, PPO chooses the GR00T walk forward speed (0-0.3 m/s; near zero hands over to Balance) and yaw rate (+-0.3 rad/s) every 0.1 s for 300 iterations (~1.8M decisions). A pure-pursuit command (0.2 m/s, yaw rate = bearing of the 1.0 m look-ahead point) is evaluated on the same seeded starts. Speeds other than 0.2 m/s and yaw rates above 0.2 rad/s are untested outside this training."
+}
