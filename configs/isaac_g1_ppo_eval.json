@@ -19,6 +19,12 @@
     "eye_offset_m": [1.0, -3.8, 1.4],
     "target_offset_m": [1.0, 0.0, 0.6]
   },
+  "stall": {
+    "window_s": 1.5,
+    "push_threshold_n": 15.0,
+    "max_progress_m": 0.02,
+    "hold_after_stop_s": 2.0
+  },
   "stage_timeout_seconds": 1800,
-  "scope": "RL stage 4 evidence for the first PPO push checkpoint (20261030T173207, iteration 99): held-out box mass/friction (new seed, same ranges) against the scripted command on the same starts, with per-environment command and hand-push statistics; plus five showcase boxes (4.9-29.4 N slide force) recorded at 10 fps with per-decision traces."
+  "scope": "RL stage 4 evidence for the first PPO push checkpoint (20261030T173207, iteration 99): held-out box mass/friction (new seed, same ranges) against the scripted command on the same starts, with per-environment command and hand-push statistics and monitor-only stall scoring; plus five showcase boxes (4.9-29.4 N slide force) recorded at 10 fps with per-decision traces, where a stall stops the push policy and GR00T Balance holds the robot for 2 s. Stall thresholds (1.5 s window, >= 15 N mean hand push, < 2 cm box progress) were calibrated on run 20261030T180114 showcase traces."
 }

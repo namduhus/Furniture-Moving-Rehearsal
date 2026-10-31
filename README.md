@@ -286,7 +286,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_ppo.py --config configs/isaac_g1_ppo_push.json
 ```
 
-[`scripts/isaac_g1_ppo_eval.py`](scripts/isaac_g1_ppo_eval.py) evaluates a checkpoint on boxes with held-out mass and friction against the scripted command, and records [showcase boxes](configs/isaac_g1_ppo_eval.json) on camera with per-decision command traces.
+[`scripts/isaac_g1_ppo_eval.py`](scripts/isaac_g1_ppo_eval.py) evaluates a checkpoint on boxes with held-out mass and friction against the scripted command, and records [showcase boxes](configs/isaac_g1_ppo_eval.json) on camera with per-decision command traces. When the hand push stays high without box progress, a stall monitor stops the push policy and GR00T Balance holds the robot, following the source rule that a command norm of at most 0.05 selects Balance.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_ppo_eval.py --config configs/isaac_g1_ppo_eval.json

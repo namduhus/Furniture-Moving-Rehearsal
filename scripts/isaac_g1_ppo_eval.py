@@ -5,6 +5,9 @@ Two isolated Isaac processes run in order:
   the checkpoint run one episode each from the same seeded starts.
 - `showcase`: chosen boxes with one camera each; every high-level command, the robot and box poses and the sensed
   hand push are logged per decision, and each environment's first episode is encoded to MP4.
+
+A stall monitor only scores detections in `held_out`; in `showcase` a detection stops the push policy (zero command,
+so GR00T Balance takes over under the source rule) and recording continues for a hold period.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ STAGES = ("held_out", "showcase")
 
 def load_config(path):
     config = json.loads(Path(path).read_text())
-    if set(config) != {"training_config", "checkpoint", "held_out", "showcase", "stage_timeout_seconds", "scope"}:
+    if set(config) != {"training_config", "checkpoint", "held_out", "showcase", "stall", "stage_timeout_seconds", "scope"}:
         raise ValueError("Unreviewed PPO evaluation configuration keys")
     training, profile, asset, runtime = ppo.load_config(ROOT / config["training_config"])
     checkpoint = config["checkpoint"]
@@ -51,6 +54,12 @@ def load_config(path):
             any(not isinstance(s[k], list) or len(s[k]) != 3 or any(type(v) not in (int, float) for v in s[k])
                 for k in ("eye_offset_m", "target_offset_m"))):
         raise ValueError("Showcase boxes must lie inside the training ranges")
+    t = config["stall"]
+    if (set(t) != {"window_s", "push_threshold_n", "max_progress_m", "hold_after_stop_s"} or
+            any(type(v) not in (int, float) for v in t.values()) or not 0.5 <= t["window_s"] <= 5.0 or
+            not 1.0 <= t["push_threshold_n"] <= 50.0 or not 0.001 <= t["max_progress_m"] <= 0.2 or
+            not 0.0 <= t["hold_after_stop_s"] <= 10.0):
+        raise ValueError("Invalid stall settings")
     if type(config["stage_timeout_seconds"]) is not int or not 60 <= config["stage_timeout_seconds"] <= 3600:
         raise ValueError("Invalid stage_timeout_seconds")
     return config, training, profile, asset, runtime
@@ -63,8 +72,11 @@ def load_policy(env, training, checkpoint, device):
     return runner.get_inference_policy(device=device), runner.current_learning_iteration
 
 
-def record_showcase(env, act, settings, profile, asset, directory):
-    """Run each environment's first episode on camera without auto-reset; one MP4 and trace per environment."""
+def record_showcase(env, act, settings, stall, profile, asset, directory):
+    """Run each environment's first episode on camera without auto-reset; one MP4 and trace per environment.
+
+    A stall stops that environment's push policy; it ends as `stalled` after the hold period unless it terminates first.
+    """
     import numpy as np
     from PIL import Image
     s, n = env.s, env.num_envs
@@ -94,6 +106,7 @@ def record_showcase(env, act, settings, profile, asset, directory):
     capture(range(n))
     traces = [(case / "trace.jsonl").open("w") for case in cases]
     commands, pushes = [[] for _ in range(n)], [[] for _ in range(n)]
+    monitor, stops = ppo.StallMonitor(n, stall, env.decision_dt), {}
     try:
         for _ in range(env.max_episode_length):
             active = [i for i in range(n) if i not in done]
@@ -102,17 +115,27 @@ def record_showcase(env, act, settings, profile, asset, directory):
             robot = s.batch(s.robot.data.root_link_pose_w)
             box = s.batch(s.box.data.root_link_pose_w)
             robot_yaw, box_yaw = ppo.yaw_of(robot[:, 3:]), ppo.yaw_of(box[:, 3:])
+            stalled, mean_push, advance = monitor.update(push, box[:, 0] - env.start_x)
             for i in active:
+                seconds, progress = float(env.length[i]*env.decision_dt), float(box[i, 0] - env.start_x[i])
                 commands[i].append(env.last_command[i])
                 pushes[i].append(push[i])
                 traces[i].write(json.dumps({
-                    "time_s": float(env.length[i]*env.decision_dt),
+                    "time_s": seconds, "stopped": bool(env.stopped[i]),
                     "command": dict(zip(ppo.ACTION_KEYS, map(float, env.last_command[i]))),
-                    "hand_push_n": float(push[i]), "box_progress_m": float(box[i, 0] - env.start_x[i]),
+                    "hand_push_n": float(push[i]), "box_progress_m": progress,
                     "robot_xy_yaw": [*map(float, robot[i, :2] - s.origins[i, :2]), float(robot_yaw[i])],
                     "box_xy_yaw": [*map(float, box[i, :2] - s.origins[i, :2]), float(box_yaw[i])]}) + "\n")
-            for i, record in env.last_completed.items():
-                done.setdefault(i, record)
+                if i in env.last_completed:
+                    done[i] = {**env.last_completed[i], "stop": stops.get(i)}
+                elif i in stops and seconds - stops[i]["detected_s"] >= stall["hold_after_stop_s"] - 1e-9:
+                    done[i] = {"outcome": "stalled", "progress_m": progress, "seconds": stops[i]["detected_s"],
+                               "stop": stops[i]}
+                elif i not in stops and stalled[i]:
+                    # Zero command from the next decision: GR00T Balance holds the robot.
+                    env.stopped[i] = True
+                    stops[i] = {"detected_s": seconds, "window_mean_push_n": float(mean_push[i]),
+                                "window_progress_m": float(advance[i])}
             capture(active)
             if len(done) == n:
                 break
@@ -124,20 +147,19 @@ def record_showcase(env, act, settings, profile, asset, directory):
         video = encode_recording(case, binary=encoder, count=int(frames[i]), fps=1/Fraction(str(env.decision_dt)),
                                  width=width, height=height, require_motion=False)
         results.append({"case": case.name, "mass_kg": float(env.masses[i]), "friction": float(env.frictions[i]),
-                        "slide_force_n": float(env.masses[i]*env.frictions[i]*9.81), **done[i],
+                        "slide_force_n": float(env.masses[i]*env.frictions[i]*9.81), "stop": None, **done[i],
                         "commands": ppo.command_summary(commands[i], pushes[i]), "frames": int(frames[i]),
                         "video": {k: video.get(k) for k in ("status", "decoded_frames", "sha256")}})
     return results
 
 
-def run_worker(stage, config, training, profile, asset, runtime, model_path, directory):
+def run_worker(stage, config, training, profile, asset, runtime, model_paths, directory):
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import BalancePolicy
 
     contract, reference = trial_contract(profile)
-    policy = BalancePolicy(model_path, contract)
+    policy = ppo.gr00t_policy(contract, model_paths)
     checkpoint, r = ROOT / config["checkpoint"], training["randomization"]
     if stage == "held_out":
         count, start_seed = config["held_out"]["num_envs"], config["held_out"]["start_seed"]
@@ -171,15 +193,17 @@ def run_worker(stage, config, training, profile, asset, runtime, model_path, dir
             actor, result["checkpoint_iteration"] = load_policy(env, training, checkpoint, runtime["device"])
             if showcase:
                 with torch.inference_mode():
-                    result["showcase"] = record_showcase(env, actor, config["showcase"], profile, asset, directory)
+                    result["showcase"] = record_showcase(env, actor, config["showcase"], config["stall"], profile,
+                                                         asset, directory)
             else:
                 scripted = ppo.normalized_action([training["scripted_action"][k] for k in ppo.ACTION_KEYS],
                                                  training["action_bounds"])
                 result["scripted_eval"] = ppo.evaluate(
-                    env, lambda obs: torch.as_tensor(np.tile(scripted, (count, 1)), dtype=torch.float32), start_seed)
+                    env, lambda obs: torch.as_tensor(np.tile(scripted, (count, 1)), dtype=torch.float32), start_seed,
+                    config["stall"])
                 write_json(evidence, result)
                 with torch.inference_mode():
-                    result["learned_eval"] = ppo.evaluate(env, actor, start_seed)
+                    result["learned_eval"] = ppo.evaluate(env, actor, start_seed, config["stall"])
             result["status"] = f"passed_{stage}"
             write_json(evidence, result)
         except BaseException as error:
@@ -192,7 +216,7 @@ def run_worker(stage, config, training, profile, asset, runtime, model_path, dir
 def brief(evidence):
     """Headline numbers for the printed summary; full per-environment records stay in eval-worker.json."""
     if evidence.get("stage") == "showcase":
-        return [{k: c.get(k) for k in ("case", "slide_force_n", "outcome", "progress_m", "seconds")} |
+        return [{k: c.get(k) for k in ("case", "slide_force_n", "outcome", "progress_m", "seconds", "stop")} |
                 {k: c["commands"][k] for k in ("forward_max_mps", "lean_mean_rad", "hand_push_mean_during_contact_n")}
                 for c in evidence.get("showcase", [])]
     out = {}
@@ -201,7 +225,7 @@ def brief(evidence):
         if e:
             out[name] = {"success_rate": e["success_rate"], "median_success_seconds": e["median_success_seconds"],
                          "by_slide_force": {k: g["success_rate"] for k, g in e["by_slide_force"].items()},
-                         "forward_command": e["forward_command"]}
+                         "forward_command": e["forward_command"], "stall": e["stall"]}
     return out
 
 
@@ -222,10 +246,9 @@ def main(argv=None):
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Execute in the existing pinned Isaac image; use --dry-run on Mac")
-    from g1_wbc import prepare_model
     if args.worker:
         write_json(args.run_dir / "versions.json", check_versions(runtime))
-        run_worker(args.worker, config, training, profile, asset, runtime, prepare_model(contract), args.run_dir)
+        run_worker(args.worker, config, training, profile, asset, runtime, ppo.gr00t_models(contract), args.run_dir)
         return 0
     if not (ROOT / config["checkpoint"]).is_file():
         parser.error(f"Missing checkpoint: {config['checkpoint']}")
@@ -234,7 +257,7 @@ def main(argv=None):
     for name, value in (("eval-config.json", config), ("ppo-config.json", training), ("profile.json", profile),
                         ("runtime-config.json", runtime), ("controller-contract.json", contract)):
         write_json(directory / name, value)
-    prepare_model(contract)
+    ppo.gr00t_models(contract)
     stages = {}
     for stage in STAGES:
         stage_dir = directory / stage

@@ -122,7 +122,7 @@ class PpoWorkerTests(unittest.TestCase):
                 mock.patch.dict(sys.modules, modules):
             sys.modules["torch"].__dict__.update(long=np.int64, inference_mode=nullcontext)
             directory = Path(tmp)
-            ppo.run_worker(config, profile, asset, runtime, Path("unused.onnx"), directory)
+            ppo.run_worker(config, profile, asset, runtime, (Path("walk.onnx"), Path("balance.onnx")), directory)
             result = json.loads((directory / "ppo-worker.json").read_text())
             progress = [json.loads(line) for line in (directory / "ppo-progress.jsonl").read_text().splitlines()]
         self.assertEqual(result["status"], "passed_ppo_training")
@@ -140,6 +140,41 @@ class PpoWorkerTests(unittest.TestCase):
         self.assertTrue(any(0 < len(ids) < count for ids in fake.robot.root_writes))
         near = fake.box.pose[:, 0] - fake.origins[:, 0] - 0.415 - 0.35
         self.assertTrue(((near >= 0.06 - 1e-9) & (near <= 0.12 + 1e-9)).all())
+        # Forward commands never fall to the switch norm, so training and evaluation only run GR00T Walk.
+        self.assertEqual({role for role, _ in fake.policy_calls}, {"walk"})
+
+
+class StallAndSwitchTests(unittest.TestCase):
+    def test_stall_needs_a_full_window_of_hard_push_without_progress(self):
+        settings = {"window_s": 0.3, "push_threshold_n": 15.0, "max_progress_m": 0.02, "hold_after_stop_s": 1.0}
+        monitor = ppo.StallMonitor(3, settings, 0.1)
+        pushes = [[20.0, 20.0, 10.0]]*3
+        progress = [[0.0, 0.01, 0.0], [0.0, 0.02, 0.0], [0.01, 0.05, 0.0]]
+        flags = [monitor.update(np.array(p), np.array(x))[0].tolist() for p, x in zip(pushes, progress)]
+        # Env 0: stalled once three samples exist (0.01 m < 0.02 m); env 1 advanced 0.05 m; env 2 pushes too softly.
+        self.assertEqual(flags, [[False, False, False], [False, False, False], [True, False, False]])
+        stalled, mean_push, advance = monitor.update(np.array([20.0, 20.0, 10.0]), np.array([0.03, 0.05, 0.0]))
+        self.assertEqual(stalled.tolist(), [False, False, False])
+        np.testing.assert_allclose(advance, [0.03, 0.04, 0.0])
+
+    def test_switching_policy_follows_the_source_command_norm_rule(self):
+        profile = ppo.load_config(ppo.DEFAULT_CONFIG)[1]
+        contract, _ = ppo.trial_contract(profile)
+        balance = wbc.role_contract(contract, "balance")
+        self.assertEqual((balance["policy_role"], contract["policy_role"]), ("balance", "walk"))
+        self.assertNotEqual(balance["model"]["sha256"], contract["model"]["sha256"])
+        with self.assertRaises(ValueError):
+            wbc.role_contract({**contract, "deployment_sha256": None}, "balance")
+
+        class Constant:
+            def __init__(self, value): self.value = value
+            def batch(self, observations): return np.full((len(observations), 15), self.value, dtype=np.float32)
+
+        policy = wbc.SwitchingPolicy(Constant(1.0), Constant(-1.0))
+        # A norm of exactly 0.05 selects Balance, as in the source (`<= 0.05`).
+        commands = np.array([[0.2, 0.0, 0.0], [0.05, 0.0, 0.0], [0.0, 0.0, 0.0], [0.03, 0.0, 0.05]])
+        actions = policy.batch(np.zeros((4, 516)), commands)
+        self.assertEqual(actions[:, 0].tolist(), [1.0, -1.0, -1.0, 1.0])
 
 
 if __name__ == "__main__":

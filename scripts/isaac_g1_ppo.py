@@ -205,6 +205,8 @@ class PushTaskEnv:
         self.rng = np.random.default_rng(config["seed"])
         self.recorder, self.last_completed, self.reset_on_done = None, {}, True
         self.last_command = np.zeros((self.num_envs, self.num_actions))
+        # Stopped environments get a zero command, which hands them to GR00T Balance under the source rule.
+        self.stopped = np.zeros(self.num_envs, dtype=bool)
         self.reset_envs(np.arange(self.num_envs))
         self.obs = self.observe()
 
@@ -241,6 +243,7 @@ class PushTaskEnv:
         self.targets[ids] = s.defaults
         s.robot.set_joint_position_target_index(target=s.device(self.targets))
         self.last_action[ids] = 0.0
+        self.stopped[ids] = False
         self.length[ids] = 0
         self.start_x[ids] = self.previous_x[ids] = pose[:, 0]
         self.goal_x[ids] = pose[:, 0] + self.config["goal_distance_m"]
@@ -273,6 +276,7 @@ class PushTaskEnv:
         s, n, profile = self.s, self.num_envs, self.profile
         action = np.clip(np.asarray(actions.detach().cpu().numpy(), dtype=float), -1.0, 1.0)
         commands, rpys = action_commands(action, self.config["action_bounds"])
+        commands[self.stopped], rpys[self.stopped] = 0.0, 0.0
         self.last_command = np.c_[commands[:, 0], commands[:, 2], rpys[:, 1]]
         low_level = {"invalid_action": np.zeros(n, dtype=bool), "fallen": np.zeros(n, dtype=bool)}
         for _ in range(self.config["decision_control_steps"]):
@@ -284,7 +288,7 @@ class PushTaskEnv:
             observation = self.history.observe(s.batch(s.robot.data.joint_pos)[:, s.indices],
                                                s.batch(s.robot.data.joint_vel)[:, s.indices], pose[:, 3:],
                                                s.batch(s.robot.data.root_link_vel_w)[:, 3:], s.rotation, commands, rpys)
-            lower_targets, _, invalid = self.history.targets(self.policy.batch(observation), s.limits)
+            lower_targets, _, invalid = self.history.targets(self.policy.batch(observation, commands), s.limits)
             self.targets[:, s.lower_indices] = lower_targets
             s.robot.set_joint_position_target_index(target=s.device(self.targets))
             gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ s.rotation)[:, 2, :]
@@ -333,15 +337,45 @@ def command_summary(commands, pushes):
             "hand_push_mean_during_contact_n": float(pushes[contact].mean()) if contact.any() else 0.0}
 
 
-def evaluate(env, act, seed):
+class StallMonitor:
+    """Flags an environment pushing hard without moving the box: over the last window, the sensed hand push averages
+    at least push_threshold_n while the box advances less than max_progress_m. The thresholds are calibrated on
+    recorded traces of the learned policy (~20 N capacity); they are not a property of the robot."""
+
+    def __init__(self, num_envs, settings, decision_dt):
+        import numpy as np
+        self.settings, self.size = settings, int(round(settings["window_s"]/decision_dt))
+        self.push, self.progress = np.zeros((num_envs, self.size)), np.zeros((num_envs, self.size + 1))
+        self.count = np.zeros(num_envs, dtype=int)
+
+    def update(self, push, progress):
+        """Add one decision sample per environment (episodes start at zero progress)."""
+        import numpy as np
+        self.push = np.roll(self.push, -1, axis=1)
+        self.progress = np.roll(self.progress, -1, axis=1)
+        self.push[:, -1], self.progress[:, -1] = push, progress
+        self.count += 1
+        mean_push, advance = self.push.mean(axis=1), self.progress[:, -1] - self.progress[:, 0]
+        stalled = ((self.count >= self.size) & (mean_push >= self.settings["push_threshold_n"]) &
+                   (advance < self.settings["max_progress_m"]))
+        return stalled, mean_push, advance
+
+
+def box_progress(env):
+    return env.s.batch(env.s.box.data.root_link_pose_w)[:, 0] - env.start_x
+
+
+def evaluate(env, act, seed, stall=None):
     """One episode per environment from seeded starts; outcomes are grouped by the force needed to slide the box.
 
-    Commands and hand push are sampled once per high-level decision until each environment's episode ends.
+    Commands and hand push are sampled once per high-level decision until each environment's episode ends. With
+    stall settings, a StallMonitor only observes (the episode continues) so detections can be scored on outcomes.
     """
     import numpy as np
     env.reset_envs(np.arange(env.num_envs), np.random.default_rng(seed))
     env.obs = env.observe()
     first, commands, pushes = {}, [[] for _ in range(env.num_envs)], [[] for _ in range(env.num_envs)]
+    monitor, detected = (StallMonitor(env.num_envs, stall, env.decision_dt) if stall else None), {}
     for _ in range(env.max_episode_length):
         active = [i for i in range(env.num_envs) if i not in first]
         env.step(act(env.obs))
@@ -349,18 +383,32 @@ def evaluate(env, act, seed):
         for i in active:
             commands[i].append(env.last_command[i])
             pushes[i].append(push[i])
+        if monitor is not None:
+            stalled = monitor.update(push, box_progress(env))[0]
+            for i in active:
+                if stalled[i] and i not in env.last_completed:
+                    detected.setdefault(i, float(env.length[i]*env.decision_dt))
         for i, record in env.last_completed.items():
             first.setdefault(i, record)
         if len(first) == env.num_envs:
             break
-    records = [{**first[i], "commands": command_summary(commands[i], pushes[i])} for i in range(env.num_envs)]
+    records = [{**first[i], "commands": command_summary(commands[i], pushes[i]), "stall_detected_s": detected.get(i)}
+               for i in range(env.num_envs)]
     force = env.frictions*env.masses*9.81
     groups = {}
     for low, high in ((0.0, 10.0), (10.0, 20.0), (20.0, float("inf"))):
         chosen = [r for r, f in zip(records, force) if low <= f < high]
         groups[f"{low:g}-{high:g}_n"] = episode_summary(chosen)
     forward = np.concatenate([np.asarray(c, dtype=float)[:, 0] for c in commands])
-    return {**episode_summary(records), "by_slide_force": groups, "seed": seed,
+    stalls = None
+    if monitor is not None:
+        failures = [r for r in records if r["outcome"] != "success"]
+        times = [r["stall_detected_s"] for r in failures if r["stall_detected_s"] is not None]
+        stalls = {"settings": stall, "flagged_successes": sum(r["stall_detected_s"] is not None for r in records
+                                                              if r["outcome"] == "success"),
+                  "failures": len(failures), "flagged_failures": len(times),
+                  "median_detection_s": float(np.median(times)) if times else None}
+    return {**episode_summary(records), "by_slide_force": groups, "seed": seed, "stall": stalls,
             "forward_command": {"max_mps": float(forward.max()), "mean_mps": float(forward.mean()),
                                 "fraction_above_reviewed_0_2_mps": float((forward > 0.2 + 1e-9).mean())},
             "per_env": [{"mass_kg": float(m), "friction": float(f), **r} for m, f, r in zip(env.masses, env.frictions, records)]}
@@ -382,14 +430,24 @@ def train_config(config):
                           "schedule": "adaptive", "desired_kl": p["desired_kl"]}}
 
 
-def run_worker(config, profile, asset, runtime, model_path, directory):
+def gr00t_policy(contract, model_paths):
+    from g1_wbc import BalancePolicy, SwitchingPolicy, role_contract
+    walk, balance = model_paths
+    return SwitchingPolicy(BalancePolicy(walk, contract), BalancePolicy(balance, role_contract(contract, "balance")))
+
+
+def gr00t_models(contract):
+    from g1_wbc import prepare_model, role_contract
+    return prepare_model(contract), prepare_model(role_contract(contract, "balance"))
+
+
+def run_worker(config, profile, asset, runtime, model_paths, directory):
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import BalancePolicy
 
     contract, reference = trial_contract(profile)
-    policy = BalancePolicy(model_path, contract)
+    policy = gr00t_policy(contract, model_paths)
     count, r = config["num_envs"], config["randomization"]
     torch.manual_seed(config["seed"])
     wp.config.enable_backward = False
@@ -459,17 +517,16 @@ def main(argv=None):
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Execute in the existing pinned Isaac image; use --dry-run on Mac")
-    from g1_wbc import prepare_model
     if args.worker:
         write_json(args.run_dir / "versions.json", check_versions(runtime))
-        run_worker(config, profile, asset, runtime, prepare_model(contract), args.run_dir)
+        run_worker(config, profile, asset, runtime, gr00t_models(contract), args.run_dir)
         return 0
     directory = args.output_root.expanduser().resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-ppo")
     directory.mkdir(parents=True)
     for name, value in (("ppo-config.json", config), ("profile.json", profile), ("runtime-config.json", runtime),
                         ("controller-contract.json", contract)):
         write_json(directory / name, value)
-    prepare_model(contract)
+    gr00t_models(contract)
     command = [sys.executable, str(Path(__file__).resolve()), "--config", str(args.config.resolve()),
                "--worker", "--run-dir", str(directory)]
     code = run_stage(command, directory / "ppo.log", config["stage_timeout_seconds"])

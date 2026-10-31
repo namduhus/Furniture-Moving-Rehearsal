@@ -194,9 +194,13 @@ def parallel_isaac(count, profile, asset):
         def step(self, *, render): steps["count"] += 1
         def render(self): pass
 
+    policy_calls = []
+
     class Policy:
-        def __init__(self, *args): pass
-        def batch(self, observations): return np.zeros((len(observations), 15), dtype=np.float32)
+        def __init__(self, path, contract): self.role = contract.get("policy_role")
+        def batch(self, observations):
+            policy_calls.append((self.role, len(observations)))
+            return np.zeros((len(observations), 15), dtype=np.float32)
 
     def author_box(stage, box, env, mass, friction):
         i = int(env.rsplit("_", 1)[1])
@@ -235,7 +239,8 @@ def parallel_isaac(count, profile, asset):
             stack.enter_context(patch)
         scene_config = stack.enter_context(mock.patch.object(rl, "scene_config", return_value=built))
         yield SimpleNamespace(robot=robot, box=box, steps=steps, authored=authored, scene_config=scene_config,
-                              origins=origins, box_mass=box_mass, box_friction=box_friction, camera=camera)
+                              origins=origins, box_mass=box_mass, box_friction=box_friction, camera=camera, hand=hand,
+                              policy_calls=policy_calls)
 
 
 class ParallelWorkerTests(unittest.TestCase):

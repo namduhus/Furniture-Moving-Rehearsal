@@ -704,6 +704,31 @@ class BatchHistory:
         return np.clip(raw, limits[:, 0], limits[:, 1]), clipped, invalid
 
 
+def role_contract(contract, role):
+    """The same deployment contract with the pinned Balance or Walk checkpoint."""
+    if role not in ("balance", "walk") or contract.get("deployment_sha256") != DEPLOYMENT_REFERENCE_SHA256:
+        raise ValueError("Policy roles exist only for the pinned deployment contract")
+    return {**contract, "model": load_deployment_reference()[f"{role}_model"], "policy_role": role}
+
+
+class SwitchingPolicy:
+    """Pinned deployment rule per environment (sim2mujoco run_mujoco_gear_wbc.py): Balance when the locomotion
+    command norm is at most the switch norm, otherwise Walk; both read the same observation history."""
+
+    def __init__(self, walk, balance):
+        self.walk, self.balance = walk, balance
+        self.switch_norm = load_deployment_reference()["policy_switch_command_norm"]
+
+    def batch(self, observations, commands):
+        observations = np.asarray(observations)
+        moving = np.linalg.norm(finite(commands, (len(observations), 3)), axis=1) > self.switch_norm
+        actions = np.zeros((len(observations), 15), dtype=np.float32)
+        for rows, policy in ((moving, self.walk), (~moving, self.balance)):
+            if rows.any():
+                actions[rows] = policy.batch(observations[rows])
+        return actions
+
+
 def load_dynamics_reference():
     path = ROOT / "assets/references/g1_wbc_dynamics.json"
     if hashlib.sha256(path.read_bytes()).hexdigest() != DYNAMICS_REFERENCE_SHA256:
