@@ -61,7 +61,8 @@ def repo_path(value, prefix, suffix):
 def load_config(path):
     config = json.loads(Path(path).read_text())
     if set(config) != {"approach_training", "carry_training", "approach_checkpoint", "carry_checkpoint", "push", "request",
-                       "start_inside_door_m", "timeline_seconds", "back_away_mps", "camera", "stage_timeout_seconds", "scope"}:
+                       "start_inside_door_m", "timeline_seconds", "back_away_mps", "set_down", "camera", "stage_timeout_seconds",
+                       "scope"}:
         raise ValueError("Unreviewed rehearsal configuration keys")
 
     def number(value, low, high):
@@ -93,6 +94,10 @@ def load_config(path):
     t = config["timeline_seconds"]
     if set(t) != set(TIMELINE) or not all(number(v, 0.1, 5.0) for v in t.values()):
         raise ValueError("Invalid rehearsal timeline")
+    down = config["set_down"]
+    if (set(down) != {"touchdown_m", "position_tolerance_m", "yaw_tolerance_deg"} or not number(down["touchdown_m"], 0.001, 0.03)
+            or not number(down["position_tolerance_m"], 0.01, 0.1) or not number(down["yaw_tolerance_deg"], 1.0, 10.0)):
+        raise ValueError("Invalid set-down settings")
     cam = config["camera"]
     if (set(cam) != {"eye_from_front_m", "target_height_m"} or not isinstance(cam["eye_from_front_m"], list) or
             len(cam["eye_from_front_m"]) != 3 or not all(number(v, -8.0, 8.0) for v in cam["eye_from_front_m"]) or
@@ -105,13 +110,26 @@ def load_config(path):
 
 
 def load_request(path):
+    """Request and its scene spec. Optional keys continue in a room an earlier move left (scripts/rehearsal_sequence.py):
+    `start` is the robot's root pose [x, y, yaw] in the simulation frame (default: inside the door) and `furniture` maps
+    item ids to center_m / yaw_deg / size_m values that replace the spec's (items already moved or corrected)."""
     request = json.loads(Path(path).read_text())
-    if (set(request) != {"scene", "target", "corrections", "destination", "strategy"} or not isinstance(request["target"], str) or
+    required = {"scene", "target", "corrections", "destination", "strategy"}
+    if (not required <= set(request) <= required | {"start", "furniture"} or not isinstance(request["target"], str) or
             set(request["corrections"]) != {"size_m", "mass_kg"} or set(request["destination"]) != {"center_m", "yaw_deg"} or
             request["strategy"] not in ("carry", "push", "auto")):
         raise ValueError("A request needs scene, target, corrections {size_m, mass_kg}, destination {center_m, yaw_deg} "
-                         "and strategy carry, push or auto")
+                         "and strategy carry, push or auto (optional: start, furniture)")
     scene = json.loads(repo_path(request["scene"], "configs/scenes/", ".json").read_text())
+    start, moved = request.get("start"), request.get("furniture", {})
+    if start is not None and (not isinstance(start, list) or len(start) != 3 or
+                              not all(type(v) in (int, float) for v in start)):
+        raise ValueError("start must be the root pose [x, y, yaw] in the simulation frame")
+    ids = {f["id"] for f in scene["scene"]["furniture"]}
+    if not isinstance(moved, dict) or not set(moved) <= ids or not all(
+            isinstance(v, dict) and set(v) <= {"center_m", "yaw_deg", "size_m"} for v in moved.values()):
+        raise ValueError(f"furniture overrides need known ids ({sorted(ids)}) and center_m, yaw_deg or size_m")
+    scene["scene"]["furniture"] = [{**f, **moved.get(f["id"], {})} for f in scene["scene"]["furniture"]]
     return request, scene
 
 
@@ -127,6 +145,45 @@ def sim_size(size_m):
     """Spec size [width along its front, depth, height] -> simulation box size [x, y, z] in the object frame, whose x
     axis points from the front into the item (depth) and y along the front (width)."""
     return [float(size_m[1]), float(size_m[0]), float(size_m[2])]
+
+
+def spec_to_sim(xy, width, depth):
+    """Scene-spec floor point (origin at the back-left corner, y toward the camera) -> centred simulation point."""
+    import numpy as np
+    return np.array([xy[0] - width/2, depth/2 - xy[1]])
+
+
+def spec_room(scene, exclude=None):
+    """The simulation room of a scene spec and the ids of its boxes: every furniture item except `exclude` as an
+    axis-aligned box [cx, cy, sx, sy, sz] bounding its rotated footprint, clipped to the room."""
+    import numpy as np
+    spec = scene["scene"]
+    width, depth = spec["room"]["width_m"], spec["room"]["depth_m"]
+    boxes, ids = [], []
+    for f in spec["furniture"]:
+        if f["id"] == exclude:
+            continue
+        theta = np.radians(f["yaw_deg"])
+        sx = abs(np.cos(theta))*f["size_m"][0] + abs(np.sin(theta))*f["size_m"][1]
+        sy = abs(np.sin(theta))*f["size_m"][0] + abs(np.cos(theta))*f["size_m"][1]
+        centre = spec_to_sim(f["center_m"], width, depth)
+        x0, y0 = np.maximum(centre - [sx/2, sy/2], [-width/2, -depth/2])
+        x1, y1 = np.minimum(centre + [sx/2, sy/2], [width/2, depth/2])
+        if x1 > x0 and y1 > y0:
+            boxes.append([(x0 + x1)/2, (y0 + y1)/2, x1 - x0, y1 - y0, f["size_m"][2]])
+            ids.append(f["id"])
+    return {"width_m": float(width), "depth_m": float(depth), "boxes": np.array(boxes, dtype=float).reshape(-1, 5)}, ids
+
+
+def door_start(scene, inside_door):
+    """Robot start pose (x, y, yaw) `inside_door` metres into the room from the spec's door, facing into the room.
+    Side-wall doors are measured from the back wall, back-wall doors from the left wall."""
+    import numpy as np
+    spec = scene["scene"]
+    width, depth, door = spec["room"]["width_m"], spec["room"]["depth_m"], spec["door"]
+    return np.array({"right": [width/2 - inside_door, depth/2 - door["center_m"], np.pi],
+                     "left": [-width/2 + inside_door, depth/2 - door["center_m"], 0.0],
+                     "back": [door["center_m"] - width/2, depth/2 - inside_door, -np.pi/2]}[door["wall"]], dtype=float)
 
 
 def push_geometry(layout_room, item, size, placed, push_settings, hand_reach, inflation, margin):
@@ -175,10 +232,28 @@ def approach_path(layout_room, start, item, size, goal, settings):
     return path if path is None or np.allclose(entry, start[:2]) else np.vstack([np.asarray(start[:2], dtype=float), path])
 
 
+def carry_side(layout_room, start, cabinet, size, reach, settings):
+    """Grip side of a carry-tier item: its front when the robot can reach it, else the reachable side with the shortest
+    approach; the tier's 0.30 x 0.28 m footprint is gripped the same from any side (the trio pedestals' spec fronts face
+    the wall). Returns the item pose turned to that side, its pre-grasp goal and the approach path, or None."""
+    import numpy as np
+    options = []
+    for turn in (0.0, np.pi/2, np.pi, -np.pi/2):
+        item = np.r_[cabinet[:2], room.wrap(cabinet[2] + turn)]
+        goal = rg.pregrasp_pose(item[:2], item[2], reach)
+        if float(rg.obstacle_distance(goal[:2], layout_room)) < settings["room"]["inflation_m"]:
+            continue
+        path = approach_path(layout_room, start, item, size, goal, settings)
+        if path is not None:
+            options.append((turn != 0.0, float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum()), item, goal, path))
+    return min(options, key=lambda option: option[:2])[2:] if options else None
+
+
 def rehearsal_layout(scene, request, trainings, inside_door, reach, push_settings, hand_reach=0.415):
     """Room, start pose, item pose, goals and paths for one request (simulation frame, centred on the room).
 
-    carry: the approach goal is the pre-grasp pose (`reach`), the carry goal the destination's pre-grasp pose. push: the
+    carry: the approach goal is the pre-grasp pose (`reach`) of the side chosen by carry_side, and the destination
+    heading is turned the same way; the carry goal is the destination's pre-grasp pose. push: the
     approach goal is the push pose (see push_geometry). auto: the item must be grippable across one dimension (the
     trained cabinet's width, from the end facing the shorter approach) and pushable to the destination; the approach goal
     is the pre-grasp pose of that grip, and the push pose is planned too. The item is described as a box whose x axis
@@ -203,36 +278,19 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
         if not masses[0] <= fix["mass_kg"] <= masses[1] or size[2] < 0.9:
             raise ValueError(f"The push tier covers {masses[0]}-{masses[1]} kg items at least 0.9 m tall (palm height)")
 
-    def centred(xy):
-        return np.array([xy[0] - width/2, depth/2 - xy[1]])
-
-    boxes = []
-    for f in spec["furniture"]:
-        if f["id"] == request["target"]:
-            continue
-        theta = np.radians(f["yaw_deg"])
-        sx = abs(np.cos(theta))*f["size_m"][0] + abs(np.sin(theta))*f["size_m"][1]
-        sy = abs(np.sin(theta))*f["size_m"][0] + abs(np.cos(theta))*f["size_m"][1]
-        x0, y0 = np.maximum(centred(f["center_m"]) - [sx/2, sy/2], [-width/2, -depth/2])
-        x1, y1 = np.minimum(centred(f["center_m"]) + [sx/2, sy/2], [width/2, depth/2])
-        if x1 > x0 and y1 > y0:
-            boxes.append([(x0 + x1)/2, (y0 + y1)/2, x1 - x0, y1 - y0, f["size_m"][2]])
-    layout_room = {"width_m": float(width), "depth_m": float(depth), "boxes": np.array(boxes, dtype=float).reshape(-1, 5)}
+    layout_room, _ = spec_room(scene, request["target"])
     target = items[request["target"]]
-    cabinet = np.r_[centred(target["center_m"]), facing_yaw(target["yaw_deg"])]
-    placed = np.r_[centred(request["destination"]["center_m"]), facing_yaw(request["destination"]["yaw_deg"])]
+    cabinet = np.r_[spec_to_sim(target["center_m"], width, depth), facing_yaw(target["yaw_deg"])]
+    placed = np.r_[spec_to_sim(request["destination"]["center_m"], width, depth), facing_yaw(request["destination"]["yaw_deg"])]
     if not room.footprint_clear(layout_room, cabinet[:2], cabinet[2], size[:2], 0.0):
         raise ValueError("The corrected cabinet overlaps a wall or other furniture; correct its position")
     if not room.footprint_clear(layout_room, placed[:2], placed[2], size[:2], c["goal"]["object_margin_m"]):
         raise ValueError("The destination overlaps a wall or other furniture")
-    door = spec["door"]
-    # Side-wall doors are measured from the back wall, back-wall doors from the left wall; the robot faces into the room.
-    start = {"right": [width/2 - inside_door, depth/2 - door["center_m"], np.pi],
-             "left": [-width/2 + inside_door, depth/2 - door["center_m"], 0.0],
-             "back": [door["center_m"] - width/2, depth/2 - inside_door, -np.pi/2]}[door["wall"]]
-    start = np.array(start, dtype=float)
-    if float(rg.obstacle_distance(start[:2], layout_room)) < a["room"]["start_clearance_m"]:
-        raise ValueError(f"The door start is within {a['room']['start_clearance_m']} m of a wall or furniture")
+    # A start carried over from an earlier move is where the robot already stands; it needs the planner's inflation.
+    start = np.asarray(request["start"], dtype=float) if "start" in request else door_start(scene, inside_door)
+    clearance = a["room"]["inflation_m"] if "start" in request else a["room"]["start_clearance_m"]
+    if float(rg.obstacle_distance(start[:2], layout_room)) < clearance:
+        raise ValueError(f"The {'start' if 'start' in request else 'door start'} is within {clearance} m of a wall or furniture")
     layout = {"strategy": strategy, "room": layout_room, "start": start, "placed": placed,
               "spec_transform": {"x": [1.0, width/2], "y": [-1.0, depth/2]}}
 
@@ -269,7 +327,13 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
                                                             a["room"]["inflation_m"], c["goal"]["object_margin_m"])
         reachable(layout["push_goal"], a["room"]["inflation_m"], "push pose")
     elif strategy == "carry":
-        approach_goal = rg.pregrasp_pose(cabinet[:2], cabinet[2], reach)
+        side = carry_side(layout_room, start, cabinet, size, reach, a)
+        if side is None:
+            raise ValueError("No side of the item can be reached for the grasp")
+        facing = cabinet[2]
+        cabinet, approach_goal, _ = side
+        placed = np.r_[placed[:2], room.wrap(placed[2] + cabinet[2] - facing)]
+        layout["placed"] = placed
         layout["carry_goal"] = rg.pregrasp_pose(placed[:2], placed[2], reach)
         reachable(layout["carry_goal"], c["room"]["inflation_m"], "carry goal")
     else:
@@ -542,22 +606,43 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
 
             # Station keeping while setting the load down: plain Balance stepped the robot back 18 cm and dragged the
             # cabinet 10 cm in run 20261101T103451 (14 cm in the lift probes), so these phases dock to the carry goal.
-            keep = {**carry_config, "goal": {**carry_config["goal"], "position_tolerance_m": 0.03, "yaw_tolerance_deg": 5.0}}
+            down = config["set_down"]
+            keep = {**carry_config, "goal": {**carry_config["goal"], "position_tolerance_m": down["position_tolerance_m"],
+                                             "yaw_tolerance_deg": down["yaw_tolerance_deg"]}}
 
-            def scripted(name, begin, end, command=(0.0, 0.0, 0.0), dock=False):
+            def aim():
+                """Root goal that puts the cabinet, as held now, at the requested pose."""
+                root = pose_matrix(finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0])
+                held = np.linalg.inv(root) @ pose_matrix(finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0])
+                return placement_goal(held, layout["placed"])
+
+            def landed():
+                item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                return bool(lift.lowest_point_z(item, o["size_m"]) - s.origins[0, 2] <= down["touchdown_m"])
+
+            def scripted(name, begin, end, command=(0.0, 0.0, 0.0), dock=False, follow=False, until=None):
                 """Scripted decisions with arm targets blended from begin to end; dock=True replaces the fixed command by
-                scripted docking to the current goal (3 cm / 5 deg) at every decision."""
+                scripted docking to the current goal (set_down tolerance) at every decision, follow=True first re-aims
+                that goal at the cabinet as held now, and `until` ends the phase early once it returns True. The arm
+                target the phase ended at is kept as arm["held"]."""
                 decisions = int(round(config["timeline_seconds"][name]/env.decision_dt))
-                flags = {"invalid_action": False, "fallen": False}
+                flags, target = {"invalid_action": False, "fallen": False}, begin
                 for d in range(decisions):
+                    if follow:
+                        env.goals[0] = aim()
                     if dock:
                         command = tuple(room.action_commands(room.docking_actions(
                             env.observe()["policy"].detach().cpu().numpy(), keep), carry_config["action_bounds"])[0])
-                    for step in env.hold(begin + d/decisions*(end - begin), begin + (d + 1)/decisions*(end - begin), 1, command):
+                    target = begin + (d + 1)/decisions*(end - begin)
+                    for step in env.hold(begin + d/decisions*(end - begin), target, 1, command):
                         flags = {k: flags[k] or step[k] for k in flags}
                     record(name, command)
+                    if until is not None and until():
+                        flags["stopped_s"] = round((d + 1)*env.decision_dt, 3)
+                        break
+                arm["held"] = target
                 result["phases"][name] = flags
-                return not any(flags.values())
+                return not (flags["invalid_action"] or flags["fallen"])
 
             def push(course):
                 """Push policy decisions in the course frame until the push succeeds, fails or reaches its time limit."""
@@ -587,13 +672,20 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                         _, _, invalid, fallen = env.control(commands, rpys)
                         low["invalid_action"] |= invalid
                         low["fallen"] |= fallen
-                    _, robot_c, _, box_c, _ = state()
+                    _, robot_c, _, box_c, box_v = state()
                     _, done, outcome, progress = ppo.task_step(box_c, robot_c, zeros, np.zeros(1), previous, action, last, low,
                                                                cfg, env.decision_dt)
                     previous, last = box_c[:, 0], action
                     record("push", commands[0])
                     if done[0]:
                         return {"outcome": ppo.OUTCOMES[int(outcome[0])], "progress_m": float(progress[0]),
+                                "seconds": (k + 1)*env.decision_dt, "lateral_m": float(abs(box_c[0, 1]))}
+                    # Stop once the item's coast would reach the goal: one more decision of pushing, then sliding friction
+                    # on the sliders. Run 20261101T145650 stopped 1.8 cm short at 0.2 m/s and the bookcase slid 4.3 cm on.
+                    speed = max(float(box_v[0, 0]), 0.0)
+                    coast = speed*env.decision_dt + speed**2/(2*friction*9.81)
+                    if previous[0] + coast >= cfg["goal_distance_m"]:
+                        return {"outcome": "success", "progress_m": float(previous[0]), "coast_m": coast,
                                 "seconds": (k + 1)*env.decision_dt, "lateral_m": float(abs(box_c[0, 1]))}
                 return {"outcome": "time_out", "progress_m": float(previous[0]), "seconds": limit*env.decision_dt,
                         "lateral_m": float(abs(box_c[0, 1]))}
@@ -620,7 +712,8 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
                     clearance = float(rg.rotated_distance(robot[:2] - s.origins[0, :2], item[:2] - s.origins[0, :2],
                                                           layout["size_m"][:2], ppo.yaw_of(item[None, 3:])[0]))
-                    if clearance >= approach["room"]["inflation_m"] + 0.05:
+                    behind = float(rg.obstacle_distance(robot[:2] - s.origins[0, :2], layout["room"]))
+                    if clearance >= approach["room"]["inflation_m"] + 0.05 or behind < 0.35:
                         break
                     for step in env.hold(arm["start"], arm["start"], 1, command):
                         flags = {k: flags[k] or step[k] for k in flags}
@@ -737,18 +830,24 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                         if near:
                             # Precision placement: the carry stops within 10 cm of its root goal and the grasp holds the
                             # cabinet a few cm off nominal (14 cm placement error in run 20261101T105656), so dock to the
-                            # root pose that puts the cabinet, as held now, at the requested pose.
-                            root = pose_matrix(finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0])
-                            held = np.linalg.inv(root) @ pose_matrix(finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0])
-                            goal = placement_goal(held, layout["placed"])
-                            env.goals[0], env.paths[0] = goal, np.array([root[:2, 3] - s.origins[0, :2], goal[:2]])
-                            result["placement_goal"] = goal.tolist()
-                            scripted("align", arm["lift"], arm["lift"], dock=True)
-                        scripted("lower", arm["lift"], arm["place"], dock=near)
+                            # root pose that puts the cabinet, as held now, at the requested pose, re-aimed every decision.
+                            root = finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0]
+                            goal = aim()
+                            env.goals[0], env.paths[0] = goal, np.array([root[:2] - s.origins[0, :2], goal[:2]])
+                            scripted("align", arm["lift"], arm["lift"], dock=True, follow=True)
+                        # Lower toward the grasp pose (the arms that held it resting on the floor) and stop at touchdown,
+                        # still re-aiming: lowering to the nominal place pose, 3 cm under the grasp, pressed the cabinet
+                        # into the floor in run 20261101T142242; the reaction walked the robot back 10 cm against the
+                        # docking and dragged the cabinet 5.6 cm off the 2.4 cm the alignment had reached.
+                        scripted("lower", arm["lift"], arm["reach"], dock=near, follow=near, until=landed)
+                        if near:
+                            result["placement_goal"] = np.asarray(env.goals[0]).tolist()
                         result["release_authored"] = lift.set_attachment(s.sim.stage, env_path, False)
-                        if (scripted("release", arm["place"], arm["place"], dock=near) and
-                                scripted("withdraw", arm["place"], arm["start"]) and
+                        if (scripted("release", arm["held"], arm["held"], dock=near) and
+                                scripted("withdraw", arm["held"], arm["start"]) and
                                 scripted("back_away", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))):
+                            # Leave room to turn: the next move of a sequence starts here.
+                            step_back()
                             measure()
                             if result["phases"]["carry"]["outcome"] == "success":
                                 status = "completed_rehearsal"

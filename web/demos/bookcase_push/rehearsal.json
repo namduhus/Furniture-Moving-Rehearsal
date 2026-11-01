@@ -151,14 +151,14 @@
  },
  "placement": {
   "position_m": 0.06092542191388387,
-  "yaw_deg": 97.9430212898131,
+  "yaw_deg": 7.9430212898131,
   "yaw_rad": -3.0029607795265485,
   "cabinet_spec_xy_m": [
    2.154056132864207,
    0.539209747314453
   ],
   "tilt_deg": 1.6752248626020106e-05,
-  "within_tolerance": false
+  "within_tolerance": true
  },
  "key_frames": [
   "000192_approach.png",
@@ -200,7 +200,7 @@
   "placed": [
    0.0,
    2.3,
-   1.5707963267948966
+   3.141592653589793
   ],
   "approach_goal": [
    0.6612246489681965,
@@ -231,7 +231,8 @@
    0.07986097422958384,
    1.1529900856739144,
    1.640309502049804
-  ]
+  ],
+  "heading_frame_corrected": true
  },
  "walls": {
   "thickness_m": 0.1,

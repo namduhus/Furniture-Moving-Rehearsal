@@ -1,0 +1,254 @@
+{
+  "image": "outputs/meta/images/living_room_trio.png",
+  "models": {
+    "segmentation": "sam-3.1",
+    "layout": "muse-spark-1.3"
+  },
+  "reference": {
+    "object": "door",
+    "height_m": 2.0,
+    "width_m": 0.8
+  },
+  "detections": [
+    {
+      "id": "door_0",
+      "phrase": "door",
+      "box_px": [
+        1089,
+        154,
+        1203,
+        841
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.9024390578269958,
+      "mask_fill": 0.8087967644084935
+    },
+    {
+      "id": "sofa_0",
+      "phrase": "sofa",
+      "box_px": [
+        328,
+        632,
+        576,
+        1039
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.6167664527893066,
+      "mask_fill": 0.6514095598078589
+    },
+    {
+      "id": "armchair_0",
+      "phrase": "armchair",
+      "box_px": [
+        329,
+        633,
+        576,
+        1039
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.6559139490127563,
+      "mask_fill": 0.6537013553142585
+    },
+    {
+      "id": "cabinet_0",
+      "phrase": "cabinet",
+      "box_px": [
+        1422,
+        821,
+        1680,
+        1253
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.5276752710342407,
+      "mask_fill": 0.9248308024289549
+    },
+    {
+      "id": "cabinet_1",
+      "phrase": "cabinet",
+      "box_px": [
+        568,
+        701,
+        888,
+        836
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.5311355590820312,
+      "mask_fill": 0.7658741066520066
+    },
+    {
+      "id": "cabinet_2",
+      "phrase": "cabinet",
+      "box_px": [
+        1129,
+        712,
+        1266,
+        956
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.5151515007019043,
+      "mask_fill": 0.762762496302869
+    },
+    {
+      "id": "cabinet_3",
+      "phrase": "cabinet",
+      "box_px": [
+        1234,
+        752,
+        1416,
+        1061
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.5114504098892212,
+      "mask_fill": 0.9249955931605852
+    },
+    {
+      "id": "chair_0",
+      "phrase": "chair",
+      "box_px": [
+        328,
+        632,
+        576,
+        1039
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.7655677795410156,
+      "mask_fill": 0.6515079927553351
+    }
+  ],
+  "scene": {
+    "door": {
+      "center_m": 1.2,
+      "detection_id": "door_0",
+      "wall": "right"
+    },
+    "furniture": [
+      {
+        "category": "armchair",
+        "center_m": [
+          0.65,
+          1.8
+        ],
+        "detection_id": "armchair_0",
+        "estimated_mass_kg": 22.0,
+        "id": "armchair_1",
+        "mass_basis": "typical upholstered armchair 18-25kg",
+        "size_m": [
+          0.85,
+          0.9,
+          0.85
+        ],
+        "yaw_deg": 90.0
+      },
+      {
+        "category": "cabinet",
+        "center_m": [
+          1.55,
+          0.25
+        ],
+        "detection_id": "cabinet_1",
+        "estimated_mass_kg": 35.0,
+        "id": "sideboard_1",
+        "mass_basis": "oak 1.6m low sideboard ~30-40kg",
+        "size_m": [
+          1.6,
+          0.42,
+          0.45
+        ],
+        "yaw_deg": 0.0
+      },
+      {
+        "category": "cabinet",
+        "center_m": [
+          3.5,
+          1.7
+        ],
+        "detection_id": "cabinet_2",
+        "estimated_mass_kg": 12.0,
+        "id": "pedestal_1",
+        "mass_basis": "solid oak plinth ~10-15kg",
+        "size_m": [
+          0.4,
+          0.4,
+          0.9
+        ],
+        "yaw_deg": 90.0
+      },
+      {
+        "category": "cabinet",
+        "center_m": [
+          3.5,
+          2.45
+        ],
+        "detection_id": "cabinet_3",
+        "estimated_mass_kg": 12.0,
+        "id": "pedestal_2",
+        "mass_basis": "solid oak plinth ~10-15kg",
+        "size_m": [
+          0.4,
+          0.4,
+          0.9
+        ],
+        "yaw_deg": 90.0
+      },
+      {
+        "category": "cabinet",
+        "center_m": [
+          3.5,
+          3.2
+        ],
+        "detection_id": "cabinet_0",
+        "estimated_mass_kg": 12.0,
+        "id": "pedestal_3",
+        "mass_basis": "solid oak plinth ~10-15kg",
+        "size_m": [
+          0.42,
+          0.42,
+          0.9
+        ],
+        "yaw_deg": 90.0
+      }
+    ],
+    "notes": "Merged sofa_0/armchair_0/chair_0 same box to single armchair_0; scale anchored to 2.0m door height, perspective depth estimated +/-15%; room width partly occluded on left, depth to camera estimated; pedestals assumed identical; yaw 0=faces camera (+y), 90=faces inward.",
+    "room": {
+      "depth_m": 4.6,
+      "height_m": 2.6,
+      "width_m": 3.8
+    }
+  },
+  "checks_failed": [],
+  "usage": {
+    "completion_tokens": 4512,
+    "prompt_tokens": 3683,
+    "total_tokens": 8195,
+    "completion_tokens_details": {
+      "reasoning_tokens": 3883
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  }
+}

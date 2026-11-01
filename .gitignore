@@ -30,6 +30,7 @@ checkpoints/
 wandb/
 data/
 web/vendor/g1/meshes/
+configs/requests/
 models/
 *.pt
 *.pth

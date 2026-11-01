@@ -10,6 +10,7 @@
       --ok: #1f8a4c; --warn: #b5651d; --wood: #b8864b;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #eef0f2; }
     #view { position: fixed; inset: 0; }
     .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
@@ -43,6 +44,16 @@
     #time, #phase { color: var(--muted); font-variant-numeric: tabular-nums; }
     #phase { min-width: 170px; color: var(--ink); }
     #status { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--muted); }
+    .tabs .try { border-style: dashed; }
+    #plan-panel label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin: 3px 0; }
+    #plan-panel input { font: inherit; width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; }
+    #plan-panel .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    #plan-panel button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+    #plan-panel button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #plan-panel button:disabled { opacity: .45; cursor: default; }
+    .hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
+    .bad-text { color: var(--warn); } .ok-text { color: var(--ok); }
+    #progress { position: fixed; left: 50%; top: 86px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; }
     @media (max-width: 900px) { figure.panel { display: none; } aside.panel { width: 260px; } }
   </style>
   <script type="importmap">
@@ -57,6 +68,25 @@
     <div class="tabs" id="tabs"></div>
   </header>
   <aside class="panel">
+    <div id="plan-panel" hidden>
+      <h2>Your move</h2>
+      <p class="hint" id="plan-hint">Click the furniture you want to move.</p>
+      <div id="plan-item" hidden>
+        <div class="kv" id="plan-meta"></div>
+        <h2>Your correction</h2>
+        <label>Width (m)<input id="fix-w" type="number" step="0.01" min="0.05"></label>
+        <label>Depth (m)<input id="fix-d" type="number" step="0.01" min="0.05"></label>
+        <label>Height (m)<input id="fix-h" type="number" step="0.01" min="0.05"></label>
+        <label>Mass (kg)<input id="fix-m" type="number" step="0.5" min="0.5"></label>
+        <h2>Destination</h2>
+        <p class="hint" id="dest-hint">Click the floor where it should go.</p>
+        <div class="row"><button id="rot-l" type="button">⟲ 15°</button><button id="rot-r" type="button">⟳ 15°</button></div>
+        <div class="row"><button id="check" type="button" disabled>Check with Meta</button>
+          <button id="rehearse" class="primary" type="button" disabled>Rehearse</button></div>
+        <div id="plan-result"></div>
+      </div>
+    </div>
+    <div id="replay-panel">
     <h2>Request</h2>
     <div class="kv" id="request"></div>
     <h2>Rehearsal</h2>
@@ -71,7 +101,9 @@
     </div>
     <h2>Result</h2>
     <div class="kv" id="result"></div>
+    </div>
   </aside>
+  <div id="progress" hidden></div>
   <figure class="panel">
     <img id="photo" alt="Room photo the scene was built from">
     <figcaption>Room photo → scene by Meta SAM 3.1 + Muse Spark, corrected by the user. The motion is replayed from the Isaac Sim rehearsal.</figcaption>

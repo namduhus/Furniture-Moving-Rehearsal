@@ -1,0 +1,13 @@
+{
+  "scene": "configs/scenes/living_room_trio.json",
+  "start": [0.3, 1.1, 3.1416],
+  "moves": [
+    {"target": "pedestal_3", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [0.7, 3.1], "yaw_deg": 180.0}, "strategy": "carry"},
+    {"target": "pedestal_2", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [1.55, 3.1], "yaw_deg": 180.0}, "strategy": "carry"},
+    {"target": "pedestal_1", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [2.4, 3.1], "yaw_deg": 180.0}, "strategy": "carry"}
+  ],
+  "scope": "Three moves in the living_room_trio scene (Muse Image room, SAM 3.1 + Muse Spark spec): the user-corrected pedestals (0.28 x 0.30 x 0.90 m, 3 kg each; Meta estimated 0.40-0.42 m and 12 kg) are carried one after another from beside the door into a row across the front half of the room, 0.85 m apart, set down from the camera side; the one nearest the camera goes first and furthest, so each placed pedestal stays clear of the approach lanes of those still waiting. The first move starts 1.6 m inside the door (0.6 m would put the robot 0.5 m from its first approach goal, under the 1.0 m minimum the approach policy was trained on), and the destinations keep every carry at least 1.0 m (the carry policy's minimum). Each move is a separate rehearsal run starting where the previous one left the robot, with the items already moved at their measured poses."
+}

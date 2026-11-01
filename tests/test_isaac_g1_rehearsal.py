@@ -86,6 +86,30 @@ class RehearsalLayoutTests(unittest.TestCase):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 self.layout(request, scene)
 
+    def test_a_request_can_continue_in_the_room_an_earlier_move_left(self):
+        # The pedestal already moved next to the TV bench, and the robot standing where that move left it.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "request.json"
+            moved = {"tvstand_1": {"center_m": [1.0, 0.4], "yaw_deg": 0.0}}
+            path.write_text(json.dumps({**self.request, "start": [0.0, 0.0, 0.5], "furniture": moved}))
+            request, scene = rehearsal.load_request(path)
+            stand = next(f for f in scene["scene"]["furniture"] if f["id"] == "tvstand_1")
+            self.assertEqual((stand["center_m"], stand["yaw_deg"]), ([1.0, 0.4], 0.0))
+            self.assertEqual(len(scene["scene"]["furniture"]), len(self.scene["scene"]["furniture"]))
+            layout = self.layout(request, scene)
+            np.testing.assert_allclose(layout["start"], [0.0, 0.0, 0.5])
+            np.testing.assert_allclose(layout["approach_path"][0], [0.0, 0.0])
+            # A carried-over start needs only the planner's inflation (0.45 m), not the door start's 0.55 m.
+            near = [1.65 - 0.5, 0.0, 0.0]
+            self.assertEqual(self.layout({**request, "start": near}, scene)["start"][0], near[0])
+            with self.assertRaisesRegex(ValueError, "start is within 0.45"):
+                self.layout({**request, "start": [1.65 - 0.4, 0.0, 0.0]}, scene)
+            for change in ({"start": [0.0, 0.0]}, {"furniture": {"sofa_9": {"center_m": [1.0, 1.0]}}},
+                           {"furniture": {"tvstand_1": {"mass_kg": 3.0}}}):
+                path.write_text(json.dumps({**self.request, **change}))
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    rehearsal.load_request(path)
+
     def test_push_layout_puts_the_robot_behind_the_pushed_face(self):
         layout = self.layout(PUSH_REQUEST, PUSH_SCENE)
         # Spec size [width 0.8, depth 0.6, height 1.0] -> sim [0.6, 0.8, 1.0]; facing +x, so the 0.6 m depth lies along
@@ -156,7 +180,8 @@ class RehearsalLayoutTests(unittest.TestCase):
         raw = json.loads(rehearsal.DEFAULT_CONFIG.read_text())
         cases = [{**raw, "extra": 1}, {**raw, "carry_training": raw["approach_training"]},
                  {**raw, "approach_checkpoint": "../model.pt"}, {**raw, "timeline_seconds": {"reach": 1.0}},
-                 {**raw, "back_away_mps": 0.5}]
+                 {**raw, "back_away_mps": 0.5}, {**raw, "set_down": {**raw["set_down"], "touchdown_m": 0.1}},
+                 {k: v for k, v in raw.items() if k != "set_down"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rehearsal.json"
             for data in cases:
@@ -186,12 +211,20 @@ class RehearsalWorkerTests(unittest.TestCase):
         modules = {"PIL": ModuleType("PIL"), "tensordict": ModuleType("tensordict")}
         modules["PIL"].Image = Image
         modules["tensordict"].TensorDict = lambda groups, batch_size: groups
-        toggles, walls = [], []
+        toggles, walls, bottoms = [], [], []
+        real_bottom = lift.lowest_point_z
+
+        def bottom(item, size):
+            # The first call is the lift check (5 cm off the floor); the lowering then brings it down 6 mm per decision,
+            # so it touches down (within 5 mm) at the eighth.
+            bottoms.append(real_bottom(item, size) - 0.006*len(bottoms))
+            return bottoms[-1]
 
         with tempfile.TemporaryDirectory() as tmp, parallel_isaac(1, scene_profile, asset) as fake, \
                 mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(rehearsal, "rehearsal_layout", side_effect=docked), \
                 mock.patch.object(lift, "apply_hand_attachment", return_value={}), \
+                mock.patch.object(lift, "lowest_point_z", side_effect=bottom), \
                 mock.patch.object(carry, "apply_corridor", side_effect=lambda stage, env, w: walls.extend(w) or w), \
                 mock.patch.object(rehearsal, "require_ffmpeg", return_value="ffmpeg"), \
                 mock.patch.object(rehearsal, "encode_recording", return_value={"status": "passed_video_decode"}) as encode:
@@ -225,19 +258,23 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertLess(result["placement"]["position_m"], 1e-9)
         self.assertTrue(result["placement"]["within_tolerance"])
         np.testing.assert_allclose(result["placement"]["cabinet_spec_xy_m"], [3.0, 2.5], atol=1e-9)
-        # One frame per decision: start, approach 11, reach 10, grasp 5, lift 10, hold 5, carry 1, align 40, lower 15,
-        # release 5, withdraw 10, back away 15.
+        # One frame per decision: start, approach 11, reach 10, grasp 5, lift 10, hold 5, carry 1, align 40, lower 8
+        # (of 25: touchdown), release 5, withdraw 10, back away 15, and the step back, which runs its full 4 s because
+        # the doubles do not move.
         phases = [frame["phase"] for frame in replay["frames"]]
-        self.assertEqual(len(phases), 128)
-        self.assertEqual(encode.call_args.kwargs["count"], 128)
-        self.assertEqual([phases.count(p) for p in ("approach", "reach", "carry", "align", "back_away")], [11, 10, 1, 40, 15])
+        self.assertEqual(len(phases), 161)
+        self.assertEqual(encode.call_args.kwargs["count"], 161)
+        self.assertEqual([phases.count(p) for p in ("approach", "reach", "carry", "align", "lower", "back_away", "step_back")],
+                         [11, 10, 1, 40, 8, 15, 40])
+        self.assertEqual(result["phases"]["lower"]["stopped_s"], 0.8)
+        self.assertEqual(len(bottoms), 9)
         # The doubles hold the cabinet straight ahead at the reach, so the placement goal is where the robot stands.
         np.testing.assert_allclose(result["placement_goal"], result["layout"]["approach_goal"], atol=1e-6)
         self.assertEqual(len(replay["frames"][0]["bodies"]), len(replay["bodies"]))
         self.assertEqual(replay["frames"][-1]["command"], [-0.1, 0.0, 0.0])
         # Key frames: the end of the approach (frame 11), of the hold (41), of the carry (42) and the final frame.
         self.assertEqual(result["key_frames"], ["000011_approach.png", "000041_hold.png", "000042_carry.png",
-                                                "000127_back_away.png"])
+                                                "000160_step_back.png"])
         # The reach measured each palm against its grasp point on the floor-standing cabinet.
         self.assertEqual(set(result["reach"][0]["offset_m"]), {"left", "right"})
         self.assertIsNotNone(result["grasp"]["palm_gap_m"])
@@ -300,7 +337,10 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertEqual(result["phases"]["push_checkpoint_iteration"], 99)
         push = result["phases"]["push"]
         self.assertEqual(push["outcome"], "success")
-        self.assertGreaterEqual(push["progress_m"], 0.5)
+        # The double slides at 0.08 m/s: one more decision (8 mm) plus 0.08^2 / (2 * 0.1 * 9.81) on the sliders.
+        self.assertAlmostEqual(push["coast_m"], 0.008 + 0.0064/1.962)
+        self.assertLess(push["progress_m"], 0.5)
+        self.assertGreaterEqual(push["progress_m"] + push["coast_m"], 0.5)
         self.assertLess(push["lateral_m"], 1e-9)
         # The first push observation: the item 0.3 m + gap + hand reach ahead on the course line, 0.5 m to go.
         first = observations[0][0]
@@ -376,9 +416,9 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertFalse(result["lift"]["lifted"])
         worker, frames = advise.call_args.args[4], advise.call_args.args[5]
         self.assertEqual((worker["status"], worker["lift"]["lifted"]), ("lift_attempt", False))
-        # Frames: the end of the hold (frame 41) and the moment of the diagnosis, after lower 15, release 5, withdraw 10
-        # and the step back, which runs its full 4 s because the doubles do not move (frame 111).
-        self.assertEqual([f.name for f in frames], ["000041.png", "000111.png"])
+        # Frames: the end of the hold (frame 41) and the moment of the diagnosis, after lower 25, release 5, withdraw 10
+        # and the step back, which runs its full 4 s because the doubles do not move (frame 121).
+        self.assertEqual([f.name for f in frames], ["000041.png", "000121.png"])
         self.assertLess(result["phases"]["step_back"]["clearance_m"], 0.5)
         self.assertEqual((result["advice"]["mode"], result["advice"]["decision"]["strategy"]), ("rules_only", "push"))
         self.assertIn("no META_API_KEY", result["advice"]["error"])
