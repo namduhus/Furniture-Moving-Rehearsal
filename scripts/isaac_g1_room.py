@@ -3,7 +3,8 @@
 Each environment has its own rectangular room with 1-3 furniture boxes (static colliders authored before reset). Every
 0.1 s the policy sets the GR00T walk command (forward, lateral, yaw rate) from the goal pose and look-ahead points of an
 A* path in its own heading frame, plus local obstacle distances. Paths end with a straight staging segment along the goal
-heading. With residual_scale > 0 the policy output is a residual added to the scripted docking action.
+heading. With residual_scale > 0 the policy output is a residual added to the scripted docking action. init_checkpoint
+continues training from a saved model (weights and optimizer) for another max_iterations.
 
 - `approach`: no load. The cabinet stands on the floor; the goal is the pre-grasp pose (robot root `reach` metres behind
   the cabinet centre, facing it). Success: within the position/yaw tolerance and nearly stopped, without pushing it.
@@ -46,7 +47,8 @@ def load_config(path):
     config = json.loads(Path(path).read_text())
     if set(config) != {"push_profile", "task", "object", "mass_kg", "arm_lift_m", "lift_prefix_seconds", "room", "goal",
                        "num_envs", "env_spacing_m", "decision_control_steps", "episode_seconds", "action_bounds",
-                       "residual_scale", "termination", "reward", "ppo", "seed", "stage_timeout_seconds", "scope"}:
+                       "residual_scale", "termination", "reward", "ppo", "init_checkpoint", "seed", "stage_timeout_seconds",
+                       "scope"}:
         raise ValueError("Unreviewed room configuration keys")
 
     def number(value, low, high):
@@ -118,6 +120,10 @@ def load_config(path):
         raise ValueError("Invalid reward weights")
     if not ppo.valid_ppo_settings(config["ppo"]):
         raise ValueError("Invalid PPO settings")
+    start = config["init_checkpoint"]
+    if start is not None and (not isinstance(start, str) or not start.startswith("outputs/isaac/") or
+                              not start.endswith(".pt") or ".." in Path(start).parts):
+        raise ValueError("init_checkpoint must be null or a .pt path under outputs/isaac/")
     return config, profile, asset, runtime
 
 
@@ -628,6 +634,9 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             env.recorder = ppo.ProgressLog(directory / "room-progress.jsonl", p["num_steps_per_env"],
                                            config["decision_control_steps"], OUTCOMES)
             runner = OnPolicyRunner(env, ppo.train_config(config), log_dir=str(directory / "train"), device=runtime["device"])
+            if config["init_checkpoint"] is not None:
+                runner.load(str(ROOT / config["init_checkpoint"]), map_location=runtime["device"])
+                result["init_checkpoint"] = {"path": config["init_checkpoint"], "iteration": runner.current_learning_iteration}
             tic = time.perf_counter()
             runner.learn(num_learning_iterations=p["max_iterations"], init_at_random_ep_len=True)
             wall = time.perf_counter() - tic
@@ -671,6 +680,8 @@ def main(argv=None):
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Execute in the existing pinned Isaac image; use --dry-run on Mac")
+    if config["init_checkpoint"] is not None and not (ROOT / config["init_checkpoint"]).is_file():
+        parser.error(f"Missing init_checkpoint: {config['init_checkpoint']}")
     if args.worker:
         write_json(args.run_dir / "versions.json", check_versions(runtime))
         run_worker(config, profile, asset, runtime, ppo.gr00t_models(contract), args.run_dir)

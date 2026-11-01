@@ -11,8 +11,10 @@ sets the cabinet down unless the robot fell. One camera records every decision, 
 poses and the cabinet pose for the WebGL replay. The placement error against the request is measured at the end.
 
 Scene-spec frame: origin at the back-left floor corner, x along the back wall, y toward the camera; a furniture yaw of 0
-faces +y and 90 faces +x. The simulation room is centred on the environment origin, and the robot faces the cabinet's
-front to grasp it.
+faces +y and 90 faces +x. With z up this frame is left-handed, so the right-handed simulation frame flips y: the room is
+centred on the environment origin with x to the right and y toward the back wall (away from the camera); spec x = sim
+x + W/2 and spec y = D/2 - sim y (run 20261101T103451 used the spec axes directly and rendered the room mirrored). The
+robot faces the cabinet's front to grasp it.
 """
 
 from __future__ import annotations
@@ -74,7 +76,7 @@ def load_config(path):
         raise ValueError("Invalid rehearsal timeline")
     cam = config["camera"]
     if (set(cam) != {"eye_from_front_m", "target_height_m"} or not isinstance(cam["eye_from_front_m"], list) or
-            len(cam["eye_from_front_m"]) != 3 or not all(number(v, -5.0, 5.0) for v in cam["eye_from_front_m"]) or
+            len(cam["eye_from_front_m"]) != 3 or not all(number(v, -8.0, 8.0) for v in cam["eye_from_front_m"]) or
             not number(cam["target_height_m"], 0.0, 2.0)):
         raise ValueError("Invalid rehearsal camera")
     if (not number(config["start_inside_door_m"], 0.3, 1.5) or not number(config["back_away_mps"], 0.0, 0.15) or
@@ -93,11 +95,11 @@ def load_request(path):
 
 
 def facing_yaw(yaw_deg):
-    """Simulation yaw of a cabinet whose front faces the spec yaw (0 = +y, 90 = +x): the robot stands in front of it
-    facing back along that direction, so the cabinet's x axis points away from the robot."""
+    """Simulation yaw of a cabinet whose front faces the spec yaw (0 = spec +y, toward the camera = sim -y; 90 = +x): the
+    robot stands in front of it facing back along that direction, so the cabinet's x axis points away from the robot."""
     import numpy as np
     theta = np.radians(yaw_deg)
-    return float(np.arctan2(-np.cos(theta), -np.sin(theta)))
+    return float(np.arctan2(np.cos(theta), -np.sin(theta)))
 
 
 def rehearsal_layout(scene, request, trainings, inside_door, reach):
@@ -119,7 +121,7 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
                          "this target needs the push branch")
 
     def centred(xy):
-        return np.array([xy[0] - width/2, xy[1] - depth/2])
+        return np.array([xy[0] - width/2, depth/2 - xy[1]])
 
     boxes = []
     for f in spec["furniture"]:
@@ -142,9 +144,10 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
     if not room.footprint_clear(layout_room, placed[:2], placed[2], size_xy, c["goal"]["object_margin_m"]):
         raise ValueError("The destination overlaps a wall or other furniture")
     door = spec["door"]
-    start = {"right": [width/2 - inside_door, door["center_m"] - depth/2, np.pi],
-             "left": [-width/2 + inside_door, door["center_m"] - depth/2, 0.0],
-             "back": [door["center_m"] - width/2, -depth/2 + inside_door, np.pi/2]}[door["wall"]]
+    # Side-wall doors are measured from the back wall, back-wall doors from the left wall; the robot faces into the room.
+    start = {"right": [width/2 - inside_door, depth/2 - door["center_m"], np.pi],
+             "left": [-width/2 + inside_door, depth/2 - door["center_m"], 0.0],
+             "back": [door["center_m"] - width/2, depth/2 - inside_door, -np.pi/2]}[door["wall"]]
     start = np.array(start, dtype=float)
     approach_goal = rg.pregrasp_pose(cabinet[:2], cabinet[2], reach)
     carry_goal = rg.pregrasp_pose(placed[:2], placed[2], reach)
@@ -163,7 +166,12 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
         raise ValueError("No collision-free path for the approach or the carry")
     return {"room": layout_room, "start": start, "cabinet": cabinet, "placed": placed, "approach_goal": approach_goal,
             "approach_path": approach_path, "carry_goal": carry_goal, "carry_path": carry_path,
-            "spec_offset_m": [width/2, depth/2]}
+            "spec_transform": {"x": [1.0, width/2], "y": [-1.0, depth/2]}}
+
+
+def to_spec(xy, transform):
+    """Simulation (x, y) -> scene-spec (x, y): spec = sign * sim + offset per axis."""
+    return [transform[axis][0]*float(v) + transform[axis][1] for axis, v in zip(("x", "y"), xy)]
 
 
 def placement_error(cabinet_pose_xyzw, placed):
@@ -273,7 +281,8 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
             layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], reach)
             result["layout"] = {"reach_m": reach, "room": {**layout["room"], "boxes": layout["room"]["boxes"].tolist()},
                                 **{k: np.asarray(layout[k]).tolist() for k in ("start", "cabinet", "placed", "approach_goal",
-                                                                               "carry_goal", "spec_offset_m")}}
+                                                                               "carry_goal")},
+                                "spec_transform": layout["spec_transform"]}
             write_json(evidence, result)
 
             from tensordict import TensorDict
@@ -293,7 +302,8 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
 
             camera, (width, height) = s.scene["camera"], (profile["camera"]["width"], profile["camera"]["height"])
             cam, w, d = config["camera"], layout["room"]["width_m"], layout["room"]["depth_m"]
-            eye = s.origins[0] + [cam["eye_from_front_m"][0], d/2 + cam["eye_from_front_m"][1], cam["eye_from_front_m"][2]]
+            # The camera stands in front of the room (the photo's side, sim -y) and looks toward the back wall.
+            eye = s.origins[0] + [cam["eye_from_front_m"][0], -d/2 - cam["eye_from_front_m"][1], cam["eye_from_front_m"][2]]
             camera.set_world_poses_from_view(s.device(eye[None]), s.device((s.origins[0] + [0, 0, cam["target_height_m"]])[None]))
             case = directory / "rehearsal"
             (case / "frames").mkdir(parents=True)
@@ -324,9 +334,21 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     if 0 in env.last_completed:
                         return env.last_completed[0]
 
-            def scripted(name, begin, end, command=(0.0, 0.0, 0.0)):
+            # Station keeping while setting the load down: plain Balance stepped the robot back 18 cm and dragged the
+            # cabinet 10 cm in run 20261101T103451 (14 cm in the lift probes), so these phases dock to the carry goal.
+            keep = {**carry_config, "goal": {**carry_config["goal"], "position_tolerance_m": 0.03, "yaw_tolerance_deg": 5.0}}
+
+            def scripted(name, begin, end, command=(0.0, 0.0, 0.0), dock=False):
+                """Scripted decisions with arm targets blended from begin to end; dock=True replaces the fixed command by
+                scripted docking to the current goal (3 cm / 5 deg) at every decision."""
+                decisions = int(round(config["timeline_seconds"][name]/env.decision_dt))
                 flags = {"invalid_action": False, "fallen": False}
-                for flags in env.hold(begin, end, int(round(config["timeline_seconds"][name]/env.decision_dt)), command):
+                for d in range(decisions):
+                    if dock:
+                        command = tuple(room.action_commands(room.docking_actions(
+                            env.observe()["policy"].detach().cpu().numpy(), keep), carry_config["action_bounds"])[0])
+                    for step in env.hold(begin + d/decisions*(end - begin), begin + (d + 1)/decisions*(end - begin), 1, command):
+                        flags = {k: flags[k] or step[k] for k in flags}
                     record(name, command)
                 result["phases"][name] = flags
                 return not any(flags.values())
@@ -365,16 +387,19 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     write_json(evidence, result)
                     status = "failed_carry"
                     if result["phases"]["carry"]["outcome"] != "fallen":
-                        scripted("lower", arm["lift"], arm["place"])
+                        # Dock only near the goal; a carry that failed on the way sets the load down where it is.
+                        near = result["phases"]["carry"]["position_error_m"] <= 0.5
+                        scripted("lower", arm["lift"], arm["place"], dock=near)
                         result["release_authored"] = lift.set_attachment(s.sim.stage, env_path, False)
-                        if (scripted("release", arm["place"], arm["place"]) and scripted("withdraw", arm["place"], arm["start"]) and
+                        if (scripted("release", arm["place"], arm["place"], dock=near) and
+                                scripted("withdraw", arm["place"], arm["start"]) and
                                 scripted("back_away", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))):
                             cabinet = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
                             local = np.r_[cabinet[:3] - s.origins[0], cabinet[3:]]
                             error = placement_error(local, layout["placed"])
                             tolerance = carry_config["goal"]
                             result["placement"] = {
-                                **error, "cabinet_spec_xy_m": (local[:2] + layout["spec_offset_m"]).tolist(),
+                                **error, "cabinet_spec_xy_m": to_spec(local[:2], layout["spec_transform"]),
                                 "tilt_deg": lift.tilt_deg(cabinet),
                                 "within_tolerance": bool(error["position_m"] <= tolerance["position_tolerance_m"] and
                                                          error["yaw_deg"] <= tolerance["yaw_tolerance_deg"])}
@@ -383,8 +408,9 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
             result["video"] = encode_recording(case, binary=encoder, count=count, fps=1/Fraction(str(env.decision_dt)),
                                                width=width, height=height, require_motion=False)
             write_json(directory / "replay.json", {"bodies": list(s.bodies), "decision_dt": env.decision_dt,
-                                                   "frame": "simulation room centred on the origin; add spec_offset_m for the scene-spec frame",
-                                                   "spec_offset_m": layout["spec_offset_m"], "cabinet_size_m": o["size_m"],
+                                                   "frame": "simulation room centred on the origin, x right, y toward the back wall; "
+                                                            "spec = sign * sim + offset per axis (spec_transform)",
+                                                   "spec_transform": layout["spec_transform"], "cabinet_size_m": o["size_m"],
                                                    "room": result["layout"]["room"], "frames": replay})
             result["status"] = status
             write_json(evidence, result)

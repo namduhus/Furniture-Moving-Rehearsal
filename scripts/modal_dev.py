@@ -31,8 +31,8 @@ def load_config(path: Path) -> dict:
             raise ValueError(f"{key} must be a positive integer")
     if config["gpu"] != "L40S":
         raise ValueError("This launcher supports the selected L40S only")
-    if not 60 <= config["session_seconds"] <= 7200:
-        raise ValueError("session_seconds must be between 60 and 7200")
+    if not 60 <= config["session_seconds"] <= 10800:
+        raise ValueError("session_seconds must be between 60 and 10800")
     if config["commit_interval_seconds"] >= config["session_seconds"]:
         raise ValueError("Commit interval must be shorter than the session")
     for key in ("app_name", "volume_name"):

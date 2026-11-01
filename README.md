@@ -40,7 +40,7 @@ python3 scripts/modal_dev.py plan --config configs/modal_isaac.json
 python3 scripts/isaac_preflight.py --dry-run
 ```
 
-The Isaac profile requests **one L40S, four physical CPU cores and 32 GiB RAM**, with requests equal to limits, for a maximum 60-minute session including SSH setup, long enough for the corridor carry training (~43 min). At the reviewed prices this is approximately **$2.40** for 60 minutes of compute, or an illustrative **$2.56** including startup/cleanup/scale-down allowances. Image builds, storage, network and other jobs are additional; neither figure is a hard account cap or a measured training requirement.
+The Isaac profile requests **one L40S, four physical CPU cores and 32 GiB RAM**, with requests equal to limits, for a maximum 3-hour session including SSH setup, long enough for a 600-iteration room carry training (~70 min) followed by evaluations and a rehearsal. At the reviewed prices this is approximately **$7.19** for 3 hours of compute, or an illustrative **$7.35** including startup/cleanup/scale-down allowances; a session is billed until it ends, so stop it (`fmr-stop`) when the work is done. Image builds, storage, network and other jobs are additional; neither figure is a hard account cap or a measured training requirement.
 
 After reviewing NVIDIA's [Omniverse EULA](https://docs.isaacsim.omniverse.nvidia.com/latest/common/NVIDIA_Omniverse_License_Agreement.html) and the cost plan, start this specific profile from the local repository root if you accept the terms:
 
@@ -323,6 +323,8 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_room.py --config configs/isaac_g1_room_carry.json
 ```
 
+`init_checkpoint` continues training from a saved model. The carry comparison uses [more training](configs/isaac_g1_room_carry_resume.json) and a [larger residual with a stronger overspeed penalty](configs/isaac_g1_room_carry_strong.json).
+
 #### Furniture-moving rehearsal
 
 [`scripts/isaac_g1_rehearsal.py`](scripts/isaac_g1_rehearsal.py) builds one room from a [scene spec](configs/scenes/living_room_pedestal.json) (SAM 3.1 + Muse Spark) and a [request](configs/rehearsal_living_room_pedestal.json) (target, corrected size/mass, destination). In that room G1 walks from the door to the cabinet, reaches for it and grasps it, lifts and carries it to the destination, then sets it down. Each walking phase uses its room checkpoint, or scripted docking when the [config](configs/isaac_g1_rehearsal.json) leaves the checkpoint null. Outputs: an MP4, per-decision link poses for the WebGL replay (`replay.json`) and the placement error.
@@ -364,7 +366,7 @@ scp -F outputs/modal/ssh_config -r fmr-modal:/workspace/repo/Furniture-Moving-Re
 open outputs/isaac/RUN_ID/rollout.mp4
 ```
 
-Save the remote workspace before stopping it. The existing 60-minute Isaac resource profile and cost estimate apply; the 10-second video duration is simulated time and does not set the GPU session length. A live browser camera viewer is a later step.
+Save the remote workspace before stopping it. The existing 3-hour Isaac resource profile and cost estimate apply; the 10-second video duration is simulated time and does not set the GPU session length. A live browser camera viewer is a later step.
 
 ### Viewing remote simulation from a Mac
 

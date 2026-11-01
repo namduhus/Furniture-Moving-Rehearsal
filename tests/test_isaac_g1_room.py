@@ -127,7 +127,8 @@ class RoomTaskTests(unittest.TestCase):
                  {**raw, "goal": {**raw["goal"], "position_tolerance_m": 0.5}},
                  {**raw, "room": {**raw["room"], "obstacles": [3, 1]}}, {**raw, "residual_scale": 1.5},
                  {**raw, "room": {**raw["room"], "start_clearance_m": 0.3}},
-                 {**raw, "goal": {k: v for k, v in raw["goal"].items() if k != "staging_m"}}]
+                 {**raw, "goal": {k: v for k, v in raw["goal"].items() if k != "staging_m"}},
+                 {**raw, "init_checkpoint": "../model.pt"}, {**raw, "init_checkpoint": "outputs/isaac/run/model.onnx"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "room.json"
             for data in cases:
@@ -135,14 +136,33 @@ class RoomTaskTests(unittest.TestCase):
                 with self.subTest(data=data), self.assertRaises(ValueError):
                     room.load_config(path)
         carry_raw = json.loads(CARRY.read_text())
-        self.assertEqual({k: v for k, v in carry_raw.items() if k not in ("task", "room", "goal", "episode_seconds", "scope")},
-                         {k: v for k, v in raw.items() if k not in ("task", "room", "goal", "episode_seconds", "scope")})
+        # The tasks differ in room, goal, episode length, training length and stage timeout only.
+
+        def shared(c):
+            return {**{k: v for k, v in c.items() if k not in ("task", "room", "goal", "episode_seconds", "scope",
+                                                               "stage_timeout_seconds")},
+                    "ppo": {k: v for k, v in c["ppo"].items() if k != "max_iterations"}}
+
+        self.assertEqual(shared(carry_raw), shared(raw))
+        # The carry A/B variants change only what their scopes name.
+        for name, changed in (("resume", {"init_checkpoint"}), ("strong", {"residual_scale", "reward"})):
+            variant = json.loads((ROOT / f"configs/isaac_g1_room_carry_{name}.json").read_text())
+            room.load_config(ROOT / f"configs/isaac_g1_room_carry_{name}.json")
+            self.assertEqual({k for k in variant if variant[k] != carry_raw[k]}, changed | {"scope"})
+            if name == "strong":
+                self.assertEqual({k for k in variant["reward"] if variant["reward"][k] != carry_raw["reward"][k]}, {"overspeed"})
 
 
 class FakeRunner:
+    loaded = []
+
     def __init__(self, env, cfg, log_dir, device):
-        self.env, self.cfg = env, cfg
+        self.env, self.cfg, self.current_learning_iteration = env, cfg, 0
         assert env.get_observations()["critic"].value.shape == (env.num_envs, room.OBSERVATIONS + 1)
+
+    def load(self, path, map_location):
+        FakeRunner.loaded.append(path)
+        self.current_learning_iteration = 299
 
     def learn(self, num_learning_iterations, init_at_random_ep_len):
         self.env.episode_length_buf = Tensor(np.arange(self.env.num_envs) % 3 + self.env.max_episode_length - 3)
@@ -198,7 +218,10 @@ class RoomWorkerTests(unittest.TestCase):
         self.assertEqual(len(progress), 1)
 
     def test_carry_worker_attaches_and_holds_the_cabinet_at_the_start(self):
-        result, attached, walls, fake, _ = self.run_task(CARRY)
+        result, attached, walls, fake, _ = self.run_task(CARRY, init_checkpoint="outputs/isaac/run/train/model_299.pt")
+        # Training continues from the given checkpoint.
+        self.assertEqual(FakeRunner.loaded[-1], str(ROOT / "outputs/isaac/run/train/model_299.pt"))
+        self.assertEqual(result["init_checkpoint"], {"path": "outputs/isaac/run/train/model_299.pt", "iteration": 299})
         # The scripted evaluation is the zero residual; the learned double adds 0.4 x (+1) to every normalized action,
         # i.e. +0.09 m/s forward and +0.12 rad/s yaw rate on top of the same docking commands (clipped at the bounds).
         scripted, learned = (result[name]["per_env"][0]["commands"] for name in ("scripted_eval", "learned_eval"))

@@ -75,7 +75,7 @@ class ModalDevelopmentTests(unittest.TestCase):
 
     def test_invalid_resource_values_fail_before_cloud_access(self):
         original = json.loads(launcher.DEFAULT_CONFIG.read_text())
-        for name, value in (("session_seconds", 0), ("session_seconds", 7201),
+        for name, value in (("session_seconds", 0), ("session_seconds", 10801),
                             ("memory_mib", True), ("cpu", -1), ("gpu", "H100")):
             with self.subTest(name=name, value=value):
                 path = self.directory / "invalid.json"
