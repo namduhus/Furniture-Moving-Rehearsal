@@ -42,6 +42,11 @@ class RoomTaskTests(unittest.TestCase):
                 self.assertIsNotNone(episode)
                 np.testing.assert_allclose(episode["path"][0], episode["start"][:2])
                 np.testing.assert_allclose(episode["path"][-1], episode["goal"][:2])
+                # The path arrives along the goal heading through a staging point 0.4 m behind the goal.
+                heading = np.array([np.cos(episode["goal"][2]), np.sin(episode["goal"][2])])
+                np.testing.assert_allclose(episode["path"][-2], episode["goal"][:2] - config["goal"]["staging_m"]*heading, atol=1e-12)
+                self.assertGreaterEqual(float(rg.obstacle_distance(episode["start"][:2], self.box_room)),
+                                        config["room"]["start_clearance_m"])
                 self.assertTrue(config["goal"]["min_distance_m"] <= np.linalg.norm(episode["goal"][:2] - episode["start"][:2])
                                 <= config["goal"]["max_distance_m"])
                 target = episode["cabinet"] if config["task"] == "approach" else episode["placed"]
@@ -101,20 +106,23 @@ class RoomTaskTests(unittest.TestCase):
         self.assertTrue(all(room.OUTCOMES[i] == "object_grounded" for i in outcome))
 
     def test_docking_follows_the_path_then_corrects_and_stops(self):
-        obs = np.zeros((3, room.OBSERVATIONS))
+        obs = np.zeros((4, room.OBSERVATIONS))
         obs[:, 3] = 1.0                                       # yaw error 0
         obs[0, :2], obs[0, 6:8] = [2.0, 0.0], [0.6, 0.0]      # far: walk toward the look-ahead point
         obs[1, :2], obs[1, 2:4] = [0.1, -0.05], [np.sin(0.2), np.cos(0.2)]
-        obs[2, :2] = [0.01, 0.0]                              # inside 80% of the 4 cm tolerance: stop
+        obs[2, :2] = [0.04, 0.0]                              # inside 80% of the 6 cm tolerance: stop
+        obs[3, :2] = [0.05, 0.0]                              # 0.8 x 5 cm = 0.04 would be Balance: raised to 0.06
         commands = room.action_commands(room.docking_actions(obs, self.config), self.config["action_bounds"])
-        np.testing.assert_allclose(commands, [[0.2, 0, 0], [0.08, -0.04, 0.24], [0, 0, 0]], atol=1e-12)
+        np.testing.assert_allclose(commands, [[0.2, 0, 0], [0.08, -0.04, 0.24], [0, 0, 0], [0.06, 0, 0]], atol=1e-12)
 
     def test_configuration_rejects_unsafe_or_overlapping_settings(self):
         raw = json.loads(APPROACH.read_text())
         cases = [{**raw, "extra": 1}, {**raw, "task": "dance"}, {**raw, "mass_kg": [2.0, 6.0]}, {**raw, "env_spacing_m": 5.0},
                  {**raw, "action_bounds": {**raw["action_bounds"], "forward_mps": [0.05, 0.3]}},
                  {**raw, "goal": {**raw["goal"], "position_tolerance_m": 0.5}},
-                 {**raw, "room": {**raw["room"], "obstacles": [3, 1]}}]
+                 {**raw, "room": {**raw["room"], "obstacles": [3, 1]}}, {**raw, "residual_scale": 1.5},
+                 {**raw, "room": {**raw["room"], "start_clearance_m": 0.3}},
+                 {**raw, "goal": {k: v for k, v in raw["goal"].items() if k != "staging_m"}}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "room.json"
             for data in cases:
@@ -141,11 +149,11 @@ class FakeRunner:
 
 
 class RoomWorkerTests(unittest.TestCase):
-    def run_task(self, path):
+    def run_task(self, path, **overrides):
         config, profile, asset, runtime = room.load_config(path)
         count = 2
         config = {**config, "num_envs": count, "episode_seconds": 4.0,
-                  "ppo": {**config["ppo"], "max_iterations": 1, "num_steps_per_env": 2}}
+                  "ppo": {**config["ppo"], "max_iterations": 1, "num_steps_per_env": 2}, **overrides}
         o = config["object"]
         scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": 2.0, "friction": o["friction"],
                                                     "gap_m": profile["push_object"]["gap_m"]}}
@@ -166,7 +174,8 @@ class RoomWorkerTests(unittest.TestCase):
         return result, attached, walls, fake, progress
 
     def test_approach_worker_builds_rooms_without_attachments(self):
-        result, attached, walls, fake, progress = self.run_task(APPROACH)
+        # Without the residual the policy output is the action itself.
+        result, attached, walls, fake, progress = self.run_task(APPROACH, residual_scale=0.0)
         # Hand collisions with the cabinet are filtered in both tasks; the joints stay disabled without load.
         self.assertEqual((result["status"], result["task"]), ("passed_room_training", "approach"))
         self.assertEqual(attached, [("/World/envs/env_0", False), ("/World/envs/env_1", False)])
@@ -185,6 +194,10 @@ class RoomWorkerTests(unittest.TestCase):
 
     def test_carry_worker_attaches_and_holds_the_cabinet_at_the_start(self):
         result, attached, walls, fake, _ = self.run_task(CARRY)
+        # The scripted evaluation is the zero residual; the learned double adds 0.4 x (+1) to every normalized action,
+        # i.e. +0.09 m/s forward and +0.12 rad/s yaw rate on top of the same docking commands (clipped at the bounds).
+        scripted, learned = (result[name]["per_env"][0]["commands"] for name in ("scripted_eval", "learned_eval"))
+        self.assertAlmostEqual(learned["forward_mean_mps"], min(scripted["forward_mean_mps"] + 0.09, 0.3), places=6)
         self.assertEqual((result["status"], attached), ("passed_room_training", [("/World/envs/env_0", True), ("/World/envs/env_1", True)]))
         relative = np.array(result["object_in_root"])
         from g1_wbc import pose_matrix

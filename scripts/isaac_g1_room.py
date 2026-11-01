@@ -2,7 +2,8 @@
 
 Each environment has its own rectangular room with 1-3 furniture boxes (static colliders authored before reset). Every
 0.1 s the policy sets the GR00T walk command (forward, lateral, yaw rate) from the goal pose and look-ahead points of an
-A* path in its own heading frame, plus local obstacle distances.
+A* path in its own heading frame, plus local obstacle distances. Paths end with a straight staging segment along the goal
+heading. With residual_scale > 0 the policy output is a residual added to the scripted docking action.
 
 - `approach`: no load. The cabinet stands on the floor; the goal is the pre-grasp pose (robot root `reach` metres behind
   the cabinet centre, facing it). Success: within the position/yaw tolerance and nearly stopped, without pushing it.
@@ -45,7 +46,7 @@ def load_config(path):
     config = json.loads(Path(path).read_text())
     if set(config) != {"push_profile", "task", "object", "mass_kg", "arm_lift_m", "lift_prefix_seconds", "room", "goal",
                        "num_envs", "env_spacing_m", "decision_control_steps", "episode_seconds", "action_bounds",
-                       "termination", "reward", "ppo", "seed", "stage_timeout_seconds", "scope"}:
+                       "residual_scale", "termination", "reward", "ppo", "seed", "stage_timeout_seconds", "scope"}:
         raise ValueError("Unreviewed room configuration keys")
 
     def number(value, low, high):
@@ -60,8 +61,8 @@ def load_config(path):
                              "stage_timeout_seconds": (60, 10800)}.items():
         if type(config[key]) is not int or not low <= config[key] <= high:
             raise ValueError(f"Invalid {key}")
-    if not number(config["episode_seconds"], 5.0, 120.0):
-        raise ValueError("Invalid episode length")
+    if not number(config["episode_seconds"], 5.0, 120.0) or not number(config["residual_scale"], 0.0, 1.0):
+        raise ValueError("Invalid episode length or residual scale")
     profile, asset, runtime = load_plan(ROOT / config["push_profile"])
     if (profile.get("functional_case") != "push" or profile.get("arm_hold") != "implicit" or
             profile.get("initialization", {}).get("mode") != "collision_clearance"):
@@ -80,22 +81,24 @@ def load_config(path):
         raise ValueError("Invalid lift prefix")
     r = config["room"]
     if (set(r) != {"width_m", "depth_m", "obstacles", "obstacle_size_m", "obstacle_gap_m", "grid_m", "inflation_m",
-                   "wall_thickness_m", "wall_height_m"} or not interval(r["width_m"], 2.5, 8.0) or
+                   "start_clearance_m", "wall_thickness_m", "wall_height_m"} or not interval(r["width_m"], 2.5, 8.0) or
             not interval(r["depth_m"], 2.5, 8.0) or not isinstance(r["obstacles"], list) or len(r["obstacles"]) != 2 or
             not all(type(v) is int and 0 <= v <= 5 for v in r["obstacles"]) or r["obstacles"][0] > r["obstacles"][1] or
             not isinstance(r["obstacle_size_m"], list) or len(r["obstacle_size_m"]) != 3 or
             not all(interval(v, 0.1, 3.0) for v in r["obstacle_size_m"]) or not number(r["obstacle_gap_m"], 0.3, 2.0) or
             not number(r["grid_m"], 0.05, 0.2) or not number(r["inflation_m"], 0.2, 0.8) or
+            not number(r["start_clearance_m"], r["inflation_m"], 1.5) or
             not number(r["wall_thickness_m"], 0.02, 0.5) or not number(r["wall_height_m"], 0.5, 3.0)):
         raise ValueError("Invalid room settings")
     if max(r["width_m"][1], r["depth_m"][1]) + 2*r["wall_thickness_m"] + 1.0 > config["env_spacing_m"]:
         raise ValueError("Rooms overlap at this environment spacing")
     g = config["goal"]
     if (set(g) != {"min_distance_m", "max_distance_m", "position_tolerance_m", "yaw_tolerance_deg", "stop_speed_mps",
-                   "object_inflation_m", "object_margin_m"} or not number(g["min_distance_m"], 0.3, 5.0) or
+                   "object_inflation_m", "object_margin_m", "staging_m"} or not number(g["min_distance_m"], 0.3, 5.0) or
             not number(g["max_distance_m"], g["min_distance_m"], 8.0) or not number(g["position_tolerance_m"], 0.01, 0.3) or
             not number(g["yaw_tolerance_deg"], 1.0, 30.0) or not number(g["stop_speed_mps"], 0.01, 0.2) or
-            not number(g["object_inflation_m"], 0.0, 0.5) or not number(g["object_margin_m"], 0.0, 0.5)):
+            not number(g["object_inflation_m"], 0.0, 0.5) or not number(g["object_margin_m"], 0.0, 0.5) or
+            not number(g["staging_m"], 0.1, 1.0)):
         raise ValueError("Invalid goal settings")
     b = config["action_bounds"]
     # Each range contains zero so the policy can stop: a command norm of at most 0.05 selects GR00T Balance.
@@ -128,10 +131,11 @@ def footprint_clear(room, centre, yaw, size_xy, margin):
 
 
 def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=200):
-    """Start pose, cabinet pose, goal root pose and A* path for one episode (None if no valid layout is found).
+    """Start pose, cabinet pose, goal root pose and staged A* path for one episode (None if no valid layout is found).
 
     approach: the cabinet stands on the floor and the goal is its pre-grasp pose; carry: the robot holds the cabinet at
-    `reach` metres ahead and the goal is the pre-grasp pose of a sampled target cabinet pose.
+    `reach` metres ahead and the goal is the pre-grasp pose of a sampled target cabinet pose. The start keeps
+    start_clearance_m from walls and furniture (the fingers reach 0.40 m from the root and the settle drifts it).
     """
     import numpy as np
     w, d = room["width_m"]/2, room["depth_m"]/2
@@ -141,8 +145,8 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
     def free_point():
         return rng.uniform([-w, -d], [w, d])
 
-    def root_clear(point):
-        return float(rg.obstacle_distance(point, room)) >= settings["inflation_m"]
+    def root_clear(point, clearance=settings["inflation_m"]):
+        return float(rg.obstacle_distance(point, room)) >= clearance
 
     for _ in range(tries):
         if task == "approach":
@@ -150,7 +154,8 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
             target = rg.pregrasp_pose(cabinet[:2], cabinet[2], reach)
             start = np.r_[free_point(), rng.uniform(-np.pi, np.pi)]
             if (not footprint_clear(room, cabinet[:2], cabinet[2], size_xy, goal["object_margin_m"]) or not root_clear(target[:2]) or
-                    not root_clear(start[:2]) or rg.rotated_distance(start[:2], cabinet[:2], size_xy, cabinet[2]) < 0.6):
+                    not root_clear(start[:2], settings["start_clearance_m"]) or
+                    rg.rotated_distance(start[:2], cabinet[:2], size_xy, cabinet[2]) < 0.6):
                 continue
             grid = rg.occupancy(room, settings["grid_m"], settings["inflation_m"],
                                 (cabinet[:2], size_xy, cabinet[2], goal["object_inflation_m"]))
@@ -159,7 +164,7 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
             held = rg.pregrasp_pose(start[:2], start[2] + np.pi, reach)      # reach metres ahead of the root
             placed = np.r_[free_point(), rng.uniform(-np.pi, np.pi)]
             target = rg.pregrasp_pose(placed[:2], placed[2], reach)
-            if (not root_clear(start[:2]) or not root_clear(target[:2]) or
+            if (not root_clear(start[:2], settings["start_clearance_m"]) or not root_clear(target[:2]) or
                     not footprint_clear(room, held[:2], start[2], size_xy, goal["object_margin_m"]) or
                     not footprint_clear(room, placed[:2], placed[2], size_xy, goal["object_margin_m"])):
                 continue
@@ -167,11 +172,21 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
         distance = float(np.linalg.norm(target[:2] - start[:2]))
         if not goal["min_distance_m"] <= distance <= goal["max_distance_m"]:
             continue
-        path = rg.plan_path(grid, start[:2], target[:2])
+        path = rg.staged_path(grid, start[:2], target, goal["staging_m"])
         if path is not None:
             return {"start": start, "cabinet": cabinet, "goal": target, "path": path,
                     "placed": placed if task == "carry" else None}
     return None
+
+
+def feasible_room(config, rng, reach=0.411, probes=10):
+    """A random room in which `probes` consecutive episode samplings all succeed; with the start clearance and staging
+    segment a few percent of random rooms leave no valid layout, and resets would then fail during training."""
+    while True:
+        candidate = rg.sample_room(config["room"], rng)
+        if all(sample_episode(config["task"], candidate, config["room"], config["goal"], reach, config["object"]["size_m"], rng)
+               is not None for _ in range(probes)):
+            return candidate
 
 
 def wrap(angle):
@@ -266,7 +281,8 @@ def normalized_action(values, bounds):
 
 def docking_actions(policy_obs, config):
     """Scripted baseline: follow the path at 0.2 m/s toward the 0.6 m look-ahead point, then within 0.5 m of the goal
-    correct position with forward/lateral steps and heading with yaw, and stop (Balance) inside 80% of the tolerance."""
+    correct position with forward/lateral steps and heading with yaw, and stop (Balance) inside 80% of the tolerance.
+    Corrections are at least 0.06 in command norm, because GR00T switches to Balance at 0.05 and the robot would stall."""
     import numpy as np
     g, b = config["goal"], config["action_bounds"]
     dx, dy = policy_obs[:, 0], policy_obs[:, 1]
@@ -278,9 +294,24 @@ def docking_actions(policy_obs, config):
                        np.c_[0.2*np.clip(np.cos(bearing), 0.0, 1.0), np.zeros(len(dx)), np.clip(bearing, *b["yaw_rate_rps"])],
                        np.c_[np.clip(0.8*dx, *b["forward_mps"]), np.clip(0.8*dy, *b["lateral_mps"]),
                              np.clip(1.2*yaw_error, *b["yaw_rate_rps"])])
+    norm = np.linalg.norm(command, axis=1)
+    small = ~far & (norm > 1e-9) & (norm < 0.06)
+    command[small] *= (0.06/norm[small])[:, None]
     done = (distance < 0.8*g["position_tolerance_m"]) & (np.abs(yaw_error) < 0.8*np.radians(g["yaw_tolerance_deg"]))
     command[done] = 0.0
     return normalized_action(np.clip(command, *bound_arrays(b)), b)
+
+
+def scripted_actor(config):
+    """Scripted docking as an actor: a zero residual when the task adds the docking action itself, else the action."""
+    import numpy as np
+    import torch
+
+    def act(obs):
+        policy = obs["policy"].detach().cpu().numpy()
+        action = np.zeros((len(policy), len(ACTION_KEYS))) if config["residual_scale"] > 0 else docking_actions(policy, config)
+        return torch.as_tensor(action, dtype=torch.float32)
+    return act
 
 
 class RoomTaskEnv:
@@ -329,8 +360,17 @@ class RoomTaskEnv:
     def get_observations(self):
         return self.obs
 
+    def episode(self, i, rng):
+        """Episode layout for environment i (up to 5 x 200 sampling tries)."""
+        for _ in range(5):
+            episode = sample_episode(self.config["task"], self.rooms[i], self.config["room"], self.config["goal"], self.reach,
+                                     self.config["object"]["size_m"], rng)
+            if episode is not None:
+                return episode
+        raise RuntimeError(f"No valid episode layout in room {i}")
+
     def reset_envs(self, ids, rng=None):
-        """Sample a layout per environment; the robot starts at its crouch-start height at the sampled pose."""
+        """Lay out each environment's episode; the robot starts at its crouch-start height at the start pose."""
         import numpy as np
         from g1_wbc import axis_rotation, matrix_quat_xyzw, pose_matrix
         s, o = self.s, self.config["object"]
@@ -338,13 +378,7 @@ class RoomTaskEnv:
         n, env_ids = len(ids), ids.tolist()
         robot, cabinet = np.zeros((n, 7)), np.zeros((n, 7))
         for j, i in enumerate(ids):
-            for _ in range(5):
-                episode = sample_episode(self.config["task"], self.rooms[i], self.config["room"], self.config["goal"], self.reach,
-                                         o["size_m"], rng)
-                if episode is not None:
-                    break
-            else:
-                raise RuntimeError(f"No valid episode layout in room {i}")
+            episode = self.episode(i, rng)
             root = pose_matrix(s.root[i])
             root[:3, :3] = axis_rotation([0, 0, 1], episode["start"][2]) @ root[:3, :3]
             root[:2, 3] = s.origins[i, :2] + episode["start"][:2]
@@ -399,12 +433,42 @@ class RoomTaskEnv:
 
         return self.observations({"policy": tensor(task), "critic": tensor(np.c_[task, privileged])})
 
+    def control(self, commands, rpys, arms=None):
+        """One control step: physics substeps, then GR00T lower-body targets for `commands` (and arm targets if given).
+
+        Returns the root pose and velocity read after the substeps and per-environment invalid-action and fallen flags.
+        """
+        import numpy as np
+        from g1_wbc import finite, quat_xyzw_matrices
+        s, n = self.s, self.num_envs
+        for _ in range(self.asset["control_decimation"]):
+            s.scene.write_data_to_sim()
+            s.sim.step(render=False)
+            s.scene.update(self.asset["physics_dt"])
+        pose = finite(s.batch(s.robot.data.root_link_pose_w), (n, 7))
+        velocity = finite(s.batch(s.robot.data.root_link_vel_w), (n, 6))
+        observation = self.history.observe(s.batch(s.robot.data.joint_pos)[:, s.indices],
+                                           s.batch(s.robot.data.joint_vel)[:, s.indices], pose[:, 3:],
+                                           velocity[:, 3:], s.rotation, commands, rpys)
+        lower_targets, _, invalid = self.history.targets(self.policy.batch(observation, commands), s.limits)
+        self.targets[:, s.lower_indices] = lower_targets
+        if arms is not None:
+            self.targets[:, self.arm_ids] = arms
+        s.robot.set_joint_position_target_index(target=s.device(self.targets))
+        gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ s.rotation)[:, 2, :]
+        fallen = ((pose[:, 2] < self.profile["minimum_base_height_m"]) |
+                  (np.arccos(np.clip(-gravity[:, 2], -1, 1)) > self.profile["maximum_tilt_rad"]))
+        return pose, velocity, invalid, fallen
+
     def step(self, actions):
         import numpy as np
         import torch
-        from g1_wbc import finite, quat_xyzw_matrices
-        s, n, profile = self.s, self.num_envs, self.profile
+        n = self.num_envs
         action = np.clip(np.asarray(actions.detach().cpu().numpy(), dtype=float), -1.0, 1.0)
+        if self.config["residual_scale"] > 0:
+            # The policy corrects the scripted docking action computed from the same observation.
+            action = np.clip(docking_actions(self.obs["policy"].detach().cpu().numpy(), self.config) +
+                             self.config["residual_scale"]*action, -1.0, 1.0)
         prefix = self.since_reset < self.prefix_decisions
         commands = action_commands(action, self.config["action_bounds"])
         commands[prefix] = 0.0
@@ -413,26 +477,14 @@ class RoomTaskEnv:
         low_level = {"invalid_action": np.zeros(n, dtype=bool), "fallen": np.zeros(n, dtype=bool)}
         steps, speed = self.config["decision_control_steps"], np.zeros(n)
         for k in range(steps):
-            for _ in range(self.asset["control_decimation"]):
-                s.scene.write_data_to_sim()
-                s.sim.step(render=False)
-                s.scene.update(self.asset["physics_dt"])
-            pose = finite(s.batch(s.robot.data.root_link_pose_w), (n, 7))
-            velocity = finite(s.batch(s.robot.data.root_link_vel_w), (n, 6))
-            speed += np.linalg.norm(velocity[:, :2], axis=1)/steps
-            observation = self.history.observe(s.batch(s.robot.data.joint_pos)[:, s.indices],
-                                               s.batch(s.robot.data.joint_vel)[:, s.indices], pose[:, 3:],
-                                               velocity[:, 3:], s.rotation, commands, rpys)
-            lower_targets, _, invalid = self.history.targets(self.policy.batch(observation, commands), s.limits)
-            self.targets[:, s.lower_indices] = lower_targets
+            arms = None
             if self.carrying:
                 fraction = np.clip((self.since_reset*steps + k + 1 - self.settle_steps)/self.lift_steps, 0.0, 1.0)[:, None]
-                self.targets[:, self.arm_ids] = self.arm_start + fraction*(self.arm_lift - self.arm_start)
-            s.robot.set_joint_position_target_index(target=s.device(self.targets))
-            gravity = -(quat_xyzw_matrices(pose[:, 3:]) @ s.rotation)[:, 2, :]
+                arms = self.arm_start + fraction*(self.arm_lift - self.arm_start)
+            _, velocity, invalid, fallen = self.control(commands, rpys, arms)
+            speed += np.linalg.norm(velocity[:, :2], axis=1)/steps
             low_level["invalid_action"] |= invalid
-            low_level["fallen"] |= ((pose[:, 2] < profile["minimum_base_height_m"]) |
-                                    (np.arccos(np.clip(-gravity[:, 2], -1, 1)) > profile["maximum_tilt_rad"]))
+            low_level["fallen"] |= fallen
         state = self.task_state()[1]
         pushed = np.linalg.norm(state["object_xy"] - self.spawned_xy, axis=1)
         carrying = np.full(n, self.carrying)
@@ -521,7 +573,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     torch.manual_seed(config["seed"])
     wp.config.enable_backward = False
     rng = np.random.default_rng(config["seed"])
-    rooms = [rg.sample_room(config["room"], rng) for _ in range(count)]
+    rooms = [feasible_room(config, rng) for _ in range(count)]
     masses = rng.uniform(*config["mass_kg"], count)
     from isaaclab.app import launch_simulation
 
@@ -564,9 +616,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             arms = ([s.names.index(n) for n in joints], np.zeros(len(joints)), np.array([lifted[n] for n in joints]))
             env = RoomTaskEnv(s, policy, contract, profile, asset, runtime, config, rooms, masses, object_in_root, arms,
                               lambda groups: TensorDict(groups, batch_size=[count]))
-            result["scripted_eval"] = evaluate(
-                env, lambda obs: torch.as_tensor(docking_actions(obs["policy"].detach().cpu().numpy(), config),
-                                                 dtype=torch.float32), config["seed"] + 1)
+            result["scripted_eval"] = evaluate(env, scripted_actor(config), config["seed"] + 1)
             write_json(evidence, result)
 
             from rsl_rl.runners import OnPolicyRunner

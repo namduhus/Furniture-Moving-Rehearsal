@@ -40,6 +40,10 @@ class RoomGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.linalg.norm(ahead[0] - path[0])), 0.3, delta=0.05)
         # A blocked goal (inside the box) has no path; a goal pose next to the box with a smaller object inflation does.
         self.assertIsNone(rg.plan_path(grid, np.array([-1.5, 0.0]), np.array([0.5, 0.0])))
+        # A staged path reaches the goal straight along its heading; a staging point inside the box is rejected.
+        staged = rg.staged_path(grid, np.array([-1.5, 0.0]), np.array([-0.4, -1.0, 0.0]), 0.4)
+        np.testing.assert_allclose(staged[-2:], [[-0.8, -1.0], [-0.4, -1.0]])
+        self.assertIsNone(rg.staged_path(grid, np.array([-1.5, 0.0]), np.array([1.6, 0.0, 0.0]), 1.0))
         pose = rg.pregrasp_pose([0.5, 1.0], -np.pi/2, 0.41)
         np.testing.assert_allclose(pose, [0.5, 1.41, -np.pi/2], atol=1e-12)
 
