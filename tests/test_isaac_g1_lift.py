@@ -24,6 +24,12 @@ class Image:
     def save(self, path): Path(path).write_bytes(b"frame")
 
 
+def forward_grasp(config):
+    """The 8 cm forward side grasp of run 20261101T021433, with the cabinet at the same place as the front grasp."""
+    return {**config, "object": {**config["object"], "near_face_ahead_of_palm_m": -0.06},
+            "arm_offsets_m": {**config["arm_offsets_m"], "forward": 0.08}}
+
+
 class LiftGeometryTests(unittest.TestCase):
     def setUp(self):
         self.config, self.profile, self.asset, _ = lift.load_config(lift.DEFAULT_CONFIG)
@@ -50,18 +56,21 @@ class LiftGeometryTests(unittest.TestCase):
 
     def test_both_palm_joints_imply_the_same_side_grasp_pose(self):
         o, height = self.config["object"], self.contract["height_command"]
-        start = lift.start_pose(self.reference, self.base, self.config["arm_offsets_m"])
-        frames = lift.attachment_frames(self.reference, start, o, height)
-        fk = self.reference.forward(start)
-        for side in ("left", "right"):
-            np.testing.assert_allclose(fk[f"{side}_hand_palm_link"] @ frames["palm_object"][side], frames["pelvis_object"], atol=1e-12)
-        obj, size = frames["pelvis_object"], o["size_m"]
-        palm = fk["left_hand_palm_link"][:3, 3]
-        self.assertAlmostEqual(obj[0, 3] - size[0]/2, palm[0] + o["near_face_ahead_of_palm_m"])
-        # The palms moved forward along the side faces; the cabinet stays where the front-edge grasp held it.
+        # The default front-edge grasp starts from the default arms.
+        self.assertEqual(lift.start_pose(self.reference, self.base, self.config["arm_offsets_m"]), self.base)
         default = self.reference.forward(self.base)["left_hand_palm_link"][:3, 3]
-        self.assertAlmostEqual(palm[0] - default[0], self.config["arm_offsets_m"]["forward"])
-        self.assertAlmostEqual(obj[0, 3] - size[0]/2, default[0] + 0.02)
+        for config in (self.config, forward_grasp(self.config)):
+            start = lift.start_pose(self.reference, self.base, config["arm_offsets_m"])
+            frames = lift.attachment_frames(self.reference, start, config["object"], height)
+            fk = self.reference.forward(start)
+            for side in ("left", "right"):
+                np.testing.assert_allclose(fk[f"{side}_hand_palm_link"] @ frames["palm_object"][side], frames["pelvis_object"], atol=1e-12)
+            obj, size = frames["pelvis_object"], o["size_m"]
+            palm = fk["left_hand_palm_link"][:3, 3]
+            self.assertAlmostEqual(obj[0, 3] - size[0]/2, palm[0] + config["object"]["near_face_ahead_of_palm_m"])
+            # A forward grasp moves the palms along the side faces; the cabinet stays where the front grasp holds it.
+            self.assertAlmostEqual(palm[0] - default[0], config["arm_offsets_m"]["forward"])
+            self.assertAlmostEqual(obj[0, 3] - size[0]/2, default[0] + 0.02)
         # Standing clearance is set at the policy height, not at the raised crouch start (run 013531).
         self.assertAlmostEqual(height + obj[2, 3] - size[2]/2, o["start_clearance_m"])
         self.assertAlmostEqual(frames["palm_inset_m"], abs(palm[1] - obj[1, 3]) - size[1]/2)
@@ -74,11 +83,15 @@ class LiftGeometryTests(unittest.TestCase):
         self.assertLess(lift.lowest_point_z(pose, [0.4, 0.4, 0.4]), 0.5 - 0.2)
 
     def test_feedforward_torque_is_the_gradient_of_the_held_weight(self):
-        config = {**self.config, "cases": [{"mass_kg": 2.0, "feedforward": False}, {"mass_kg": 4.0, "feedforward": True},
-                                           {"mass_kg": 6.0, "feedforward": False}]}
-        start = lift.start_pose(self.reference, self.base, config["arm_offsets_m"])
-        frames = lift.attachment_frames(self.reference, start, config["object"], self.contract["height_command"])
-        joints, angles, plan, loads = lift.arm_plan(self.reference, self.base, config, frames, self.contract)
+        def planned(config):
+            start = lift.start_pose(self.reference, self.base, config["arm_offsets_m"])
+            frames = lift.attachment_frames(self.reference, start, config["object"], self.contract["height_command"])
+            return frames, lift.arm_plan(self.reference, self.base, config, frames, self.contract)
+
+        front = {**self.config, "cases": [{"mass_kg": 2.0, "feedforward": False}, {"mass_kg": 4.0, "feedforward": True},
+                                          {"mass_kg": 6.0, "feedforward": False}]}
+        config = forward_grasp(front)
+        frames, (joints, angles, plan, loads) = planned(config)
         q = {**self.base, **angles["lift"]}
         mass, kp = 3.0, self.contract["upper_hold_kp"]
         efforts = {n: self.reference.limits[n]["effort"] for n in joints}
@@ -94,11 +107,9 @@ class LiftGeometryTests(unittest.TestCase):
                 self.assertAlmostEqual(load["torque_nm"][name], gradient, places=3)
                 self.assertAlmostEqual(load["offset_rad"][name], gradient/kp, places=5)
         # Holding 8 cm further back on the side faces moves the first wrist pitch limit from 3.9 kg to between 4 and 6 kg.
+        front_frames, (*_, front_loads) = planned(front)
+        self.assertEqual(["left_wrist_pitch_joint" in l["left"]["over_limit"] for l in front_loads], [False, True, True])
         self.assertEqual(["left_wrist_pitch_joint" in l["left"]["over_limit"] for l in loads], [False, False, True])
-        front = {**config, "object": {**config["object"], "near_face_ahead_of_palm_m": 0.02},
-                 "arm_offsets_m": {**config["arm_offsets_m"], "forward": 0.0}}
-        front_frames = lift.attachment_frames(self.reference, self.base, front["object"], self.contract["height_command"])
-        front_loads = lift.arm_plan(self.reference, self.base, front, front_frames, self.contract)[3]
         np.testing.assert_allclose(front_frames["pelvis_object"], frames["pelvis_object"], atol=1e-9)
         wrist = [abs(l["left"]["torque_nm"]["left_wrist_pitch_joint"])/c["mass_kg"] for l, c in ((front_loads[0], config["cases"][0]),
                                                                                                 (loads[0], config["cases"][0]))]
@@ -166,7 +177,8 @@ class LiftGeometryTests(unittest.TestCase):
 class LiftWorkerTests(unittest.TestCase):
     def test_worker_runs_each_mass_case_in_its_own_environment(self):
         config, profile, asset, runtime = lift.load_config(lift.DEFAULT_CONFIG)
-        config = {**config, "cases": [{"mass_kg": 2.0, "feedforward": False}, {"mass_kg": 5.0, "feedforward": True}]}
+        # The forward grasp exercises the start pose commanded before the object is placed.
+        config = forward_grasp({**config, "cases": [{"mass_kg": 2.0, "feedforward": False}, {"mass_kg": 5.0, "feedforward": True}]})
         o = config["object"]
         scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": 2.0, "friction": o["friction"],
                                                     "gap_m": profile["push_object"]["gap_m"]}}

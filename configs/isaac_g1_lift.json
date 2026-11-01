@@ -4,7 +4,7 @@
     "size_m": [0.30, 0.28, 0.90],
     "friction": 0.5,
     "start_clearance_m": 0.005,
-    "near_face_ahead_of_palm_m": -0.06
+    "near_face_ahead_of_palm_m": 0.02
   },
   "cases": [
     {"mass_kg": 2.0, "feedforward": false}, {"mass_kg": 4.0, "feedforward": false},
@@ -12,7 +12,7 @@
     {"mass_kg": 10.0, "feedforward": false}
   ],
   "arm_offsets_m": {
-    "forward": 0.08,
+    "forward": 0.0,
     "lift": 0.10,
     "place": -0.02
   },
@@ -40,5 +40,5 @@
     "env_spacing_m": 10.0
   },
   "stage_timeout_seconds": 1800,
-  "scope": "Forward side-grasp lift sweep: the same 0.30 x 0.28 x 0.90 m cabinet stays where the front-edge grasp held it, but both palms move 8 cm forward along its side faces (centre 9 cm instead of 17 cm ahead of the palms; 8 cm is the farthest forward reach that keeps palm orientation at the start, lift and place heights). On the reference model this lowers the static wrist pitch load from 1.28 to 0.89 Nm/kg (first effort limit ~5.6 kg instead of 3.9 kg; arm self-weight excluded). Cases of 2, 4, 6, 8 and 10 kg without feedforward, one environment each; palm-object fixed joints (grasp abstraction that ignores finger grip force) with hand/wrist collisions filtered. IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries for 5 s at 0.2 m/s, Balance holds while the palms lower 2 cm below the start pose, then the joints are disabled. Arm tracking error, the implied PD torque against the effort limits and the cabinet's contact force on the legs and torso are logged per step."
+  "scope": "Front-edge side-grasp lift sweep with diagnostics: the 0.30 x 0.28 x 0.90 m cabinet is held by its side faces with its near face 2 cm ahead of the palms at the default arm pose (centre 17 cm ahead; the geometry the corridor carry policy was trained with). The 8 cm forward grasp (run 20261101T021433) did not raise the pass mass and made the speed runaway worse, so the front grasp is the default again. Static wrist pitch load 1.28 Nm/kg (first effort limit ~3.9 kg, arm self-weight excluded; run 20261031T184440 still carried 4 kg with the cabinet braced on the knees). Cases of 2, 4, 6, 8 and 10 kg without feedforward, one environment each; palm-object fixed joints (grasp abstraction that ignores finger grip force) with hand/wrist collisions filtered. IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries for 5 s at 0.2 m/s, Balance holds while the palms lower 2 cm, then the joints are disabled. Arm tracking error, the implied PD torque against the effort limits and the cabinet's contact force on the legs and torso are logged per step."
 }
