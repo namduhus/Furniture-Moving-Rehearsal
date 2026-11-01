@@ -1,0 +1,192 @@
+{
+ "run": "20261101T142242.110139Z-rehearsal",
+ "status": "completed_rehearsal",
+ "request": {
+  "scene": "configs/scenes/living_room_pedestal.json",
+  "target": "cabinet_1",
+  "corrections": {
+   "size_m": [
+    0.28,
+    0.3,
+    0.9
+   ],
+   "mass_kg": 3.0
+  },
+  "destination": {
+   "center_m": [
+    0.5,
+    3.0
+   ],
+   "yaw_deg": 90.0
+  },
+  "strategy": "carry"
+ },
+ "mass_kg": 3.0,
+ "friction": 0.5,
+ "checkpoints": {
+  "approach": "outputs/isaac/20261101T085012.623231Z-room-approach/train/model_299.pt",
+  "carry": "outputs/isaac/20261101T113949.346965Z-room-carry/train/model_299.pt"
+ },
+ "phases": {
+  "approach_checkpoint_iteration": 299,
+  "carry_checkpoint_iteration": 299,
+  "approach": {
+   "outcome": "success",
+   "progress_m": 2.002846494126925,
+   "seconds": 12.700000000000001,
+   "position_error_m": 0.0328792123954637,
+   "yaw_error_deg": 6.855576695022838
+  },
+  "reach": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "grasp": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "lift": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "hold": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "carry": {
+   "outcome": "success",
+   "progress_m": 1.8086406916388764,
+   "seconds": 21.1,
+   "position_error_m": 0.08767995669069932,
+   "yaw_error_deg": 2.3585227603779444
+  },
+  "align": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "lower": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "release": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "withdraw": {
+   "invalid_action": false,
+   "fallen": false
+  },
+  "back_away": {
+   "invalid_action": false,
+   "fallen": false
+  }
+ },
+ "grasp": {
+  "palm_gap_m": 0.031871487809793514,
+  "authored": true,
+  "object_shift_m": 2.7798330877270638e-05
+ },
+ "lift": {
+  "lifted": true,
+  "bottom_m": 0.03439504653215408,
+  "mass_kg": 3.0
+ },
+ "placement": {
+  "position_m": 0.05466372940778325,
+  "yaw_deg": 4.5514336336738825,
+  "yaw_rad": 3.0621551509961744,
+  "cabinet_spec_xy_m": [
+   0.5546581983566283,
+   3.0007776021957397
+  ],
+  "tilt_deg": 2.599456847082271e-05,
+  "within_tolerance": true
+ },
+ "placement_goal": [
+  -0.7764136591675104,
+  -1.0029199579307289,
+  3.043001566497529
+ ],
+ "key_frames": [
+  "000127_approach.png",
+  "000157_hold.png",
+  "000343_carry.png",
+  "000428_back_away.png"
+ ],
+ "layout": {
+  "reach_m": 0.4112246489681967,
+  "hand_reach_m": 0.41477672861456183,
+  "size_m": [
+   0.3,
+   0.28,
+   0.9
+  ],
+  "room": {
+   "width_m": 3.3,
+   "depth_m": 4.0,
+   "boxes": [
+    [
+     -1.0499999999999998,
+     0.5,
+     0.8500000000000001,
+     0.95,
+     0.75
+    ],
+    [
+     0.0,
+     1.7,
+     1.6,
+     0.3999999999999999,
+     0.42
+    ],
+    [
+     0.0,
+     1.72,
+     1.05,
+     0.08000000000000007,
+     0.65
+    ]
+   ]
+  },
+  "start": [
+   1.0499999999999998,
+   0.8999999999999999,
+   3.141592653589793
+  ],
+  "cabinet": [
+   1.35,
+   -0.5,
+   6.123233995736766e-17
+  ],
+  "placed": [
+   -1.15,
+   -1.0,
+   3.141592653589793
+  ],
+  "approach_goal": [
+   0.9387753510318033,
+   -0.5,
+   6.123233995736766e-17
+  ],
+  "carry_goal": [
+   -0.7387753510318031,
+   -1.0,
+   3.141592653589793
+  ],
+  "push": null,
+  "spec_transform": {
+   "x": [
+    1.0,
+    1.65
+   ],
+   "y": [
+    -1.0,
+    2.0
+   ]
+  }
+ },
+ "walls": {
+  "thickness_m": 0.1,
+  "height_m": 1.2
+ }
+}

@@ -22,6 +22,10 @@
     "examples/jsm/controls/OrbitControls.js": {
       "sha256": "3d79d07ecb686b4e5d93232eedab255331c1beef711e13164eaa1f68655a5f2b",
       "bytes": 40755
+    },
+    "examples/jsm/loaders/STLLoader.js": {
+      "sha256": "023ed97f848b633d8bcd53d4db3b996d29d0c644088700691297c552257d480b",
+      "bytes": 10715
     }
   }
 }

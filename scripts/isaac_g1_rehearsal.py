@@ -259,8 +259,12 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
                 options.append((float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum()), item, goal, path))
         if not options:
             raise ValueError("No end of the item can be reached for the lift attempt")
+        facing = cabinet[2]
         _, cabinet, approach_goal, path = min(options, key=lambda option: option[0])
-        layout["grip_reach_m"] = grip
+        # The destination heading in the same (grip) box frame; run 20261101T145650 compared the item-front heading
+        # with the grip-frame box and reported a 98 deg error for a 7.9 deg one.
+        placed = np.r_[placed[:2], room.wrap(placed[2] + cabinet[2] - facing)]
+        layout["placed"], layout["grip_reach_m"] = placed, grip
         layout["push_goal"], layout["push"] = push_geometry(layout_room, cabinet, size, placed, push_settings, hand_reach,
                                                             a["room"]["inflation_m"], c["goal"]["object_margin_m"])
         reachable(layout["push_goal"], a["room"]["inflation_m"], "push pose")

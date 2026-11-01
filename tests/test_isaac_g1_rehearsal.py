@@ -112,6 +112,8 @@ class RehearsalLayoutTests(unittest.TestCase):
         self.assertEqual(layout["size_m"], [0.8, 0.3, 1.0])
         np.testing.assert_allclose(layout["cabinet"], [-0.4, 0.0, -np.pi/2], atol=1e-12)
         self.assertAlmostEqual(layout["grip_reach_m"], 0.411 + 0.25)
+        # The destination keeps the item's heading, expressed in the same grip frame.
+        self.assertAlmostEqual(float(rehearsal.room.wrap(layout["placed"][2] - layout["cabinet"][2])), 0.0, places=12)
         np.testing.assert_allclose(layout["approach_goal"], [-0.4, 0.661, -np.pi/2], atol=1e-12)
         # The push then slides the 0.8 m front face 0.5 m along +x.
         self.assertEqual((layout["push"]["along_m"], layout["push"]["face_m"]), (0.3, 0.8))

@@ -17,6 +17,7 @@ __pycache__/
 .coverage
 htmlcov/
 build/
+!web/vendor/three/build/
 dist/
 
 # Experiments, API response caches, and downloaded assets
@@ -28,6 +29,7 @@ outputs/
 checkpoints/
 wandb/
 data/
+web/vendor/g1/meshes/
 models/
 *.pt
 *.pth

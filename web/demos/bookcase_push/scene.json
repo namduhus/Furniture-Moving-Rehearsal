@@ -1,0 +1,155 @@
+{
+ "image": "outputs/meta/images/living_room_bookcase.png",
+ "models": {
+  "segmentation": "sam-3.1",
+  "layout": "muse-spark-1.3"
+ },
+ "reference": {
+  "object": "door",
+  "height_m": 2.0,
+  "width_m": 0.8
+ },
+ "detections": [
+  {
+   "id": "door_0",
+   "phrase": "door",
+   "box_px": [
+    1347,
+    277,
+    1462,
+    862
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.8476190567016602,
+   "mask_fill": 0.8399287983994351
+  },
+  {
+   "id": "door_1",
+   "phrase": "door",
+   "box_px": [
+    848,
+    450,
+    967,
+    776
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.8632478713989258,
+   "mask_fill": 0.975815494393476
+  },
+  {
+   "id": "door_2",
+   "phrase": "door",
+   "box_px": [
+    968,
+    450,
+    1085,
+    776
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.8518518805503845,
+   "mask_fill": 0.9701186959000674
+  },
+  {
+   "id": "sofa_0",
+   "phrase": "sofa",
+   "box_px": [
+    315,
+    645,
+    725,
+    987
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.9452055096626282,
+   "mask_fill": 0.7779362005490413
+  },
+  {
+   "id": "cabinet_0",
+   "phrase": "cabinet",
+   "box_px": [
+    848,
+    448,
+    1085,
+    794
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.8202247023582458,
+   "mask_fill": 0.9863536192575013
+  }
+ ],
+ "scene": {
+  "door": {
+   "center_m": 3.8,
+   "detection_id": "door_0",
+   "wall": "right"
+  },
+  "furniture": [
+   {
+    "category": "sofa",
+    "center_m": [
+     0.55,
+     2.5
+    ],
+    "detection_id": "sofa_0",
+    "estimated_mass_kg": 45.0,
+    "id": "sofa_1",
+    "mass_basis": "Typical 2-seat fabric sofa 35-50 kg",
+    "size_m": [
+     2.1,
+     0.95,
+     0.85
+    ],
+    "yaw_deg": 90.0
+   },
+   {
+    "category": "cabinet",
+    "center_m": [
+     2.15,
+     1.1
+    ],
+    "detection_id": "cabinet_0",
+    "estimated_mass_kg": 70.0,
+    "id": "cabinet_1",
+    "mass_basis": "Solid oak 2-door wardrobe ~60-80 kg",
+    "size_m": [
+     1.3,
+     0.6,
+     1.9
+    ],
+    "yaw_deg": 0.0
+   }
+  ],
+  "notes": "Scale anchored on door_0 as 2.0m tall x 0.8m wide on right wall. door_1 and door_2 are false positives on the wooden wardrobe doors and not separate doors. Room width/depth estimated by perspective from door height and typical sofa length ~2.1m, monocular uncertainty ~+/-0.5m in depth and +/-0.4m in width, height +/-0.2m. Door center is y-distance from back wall along right wall. Sofa on left wall facing inward (+x), yaw 90 = perpendicular to camera; cabinet in centre facing camera (+y), yaw 0.",
+  "room": {
+   "depth_m": 5.8,
+   "height_m": 2.7,
+   "width_m": 4.3
+  }
+ },
+ "checks_failed": [],
+ "usage": {
+  "completion_tokens": 3468,
+  "prompt_tokens": 3576,
+  "total_tokens": 7044,
+  "completion_tokens_details": {
+   "reasoning_tokens": 3064
+  },
+  "prompt_tokens_details": {
+   "cached_tokens": 0
+  }
+ }
+}

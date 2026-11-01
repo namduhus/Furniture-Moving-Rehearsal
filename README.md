@@ -341,6 +341,16 @@ uv run python scripts/isaac_g1_rehearsal.py --dry-run            # layout and pa
 uv run python scripts/rehearsal_advisor.py --run outputs/isaac/<run>-rehearsal      # diagnosis (needs META_API_KEY)
 ```
 
+#### WebGL rehearsal viewer
+
+[`web/index.html`](web/index.html) replays recorded rehearsals in the browser: the room from the scene spec, the destination outline, and the real G1 meshes placed at the simulated link poses. Side panels show the source photo, the Meta estimate and the user's correction, the phases with their outcomes, Muse Spark's judgment and the placement error. [`scripts/export_replay.py`](scripts/export_replay.py) copies a run into [`web/demos/`](web/demos/). [`scripts/fetch_g1_meshes.py`](scripts/fetch_g1_meshes.py) downloads the 49 URDF visual meshes (31 MB, Git-ignored) and verifies each against the [pinned manifest](web/vendor/g1/meshes.json).
+
+```sh
+uv run python scripts/fetch_g1_meshes.py
+python3 -m http.server 8000          # from the repository root, then open http://localhost:8000/web/
+uv run python scripts/export_replay.py outputs/isaac/<run>-rehearsal <demo-name>
+```
+
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
 
 ### Record a G1 motion check
@@ -463,7 +473,7 @@ MP4 recording invokes [FFmpeg](https://ffmpeg.org/) with [libx264](https://www.v
 
 Meta model calls go to the [Meta Model API](https://dev.meta.ai/docs/models) (Muse Spark, SAM 3.1, Muse Image) under Meta's terms; the API key is read from the environment or a Git-ignored `.env` (see `.env.example`). SAM 3.1 mask payloads are decoded with Meta's [meta-sam-parser](https://github.com/meta-models/meta-sam) 0.1.0 (SAM License, pinned with hashes in `uv.lock`). Demo interiors are generated with Muse Image with its image/web search tools disabled; they show no real homes or people.
 
-The browser view uses [three.js](https://github.com/mrdoob/three.js) r186 (npm 0.186.1, MIT), vendored unmodified under `web/vendor/three/` with its LICENSE and a SHA-256 manifest (`vendor.json`).
+The browser view uses [three.js](https://github.com/mrdoob/three.js) r186 (npm 0.186.1, MIT), vendored unmodified under `web/vendor/three/` (core build, OrbitControls, STLLoader) with its LICENSE and a SHA-256 manifest (`vendor.json`). The G1 visual meshes are downloaded at the [pinned GR00T-WholeBodyControl commit](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/meshes) and are not committed. They are Unitree G1 description meshes under the [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt), redistributed upstream under [Apache-2.0](licenses/GR00T-WBC.txt).
 
 The GR00T-WBC Balance/Walk checkpoints are downloaded from the [pinned NVIDIA source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc) under the [NVIDIA Open Model License](licenses/GR00T-WBC.txt) and stay Git-ignored. The [reference URDF](assets/references/g1_wbc.urdf) is the unmodified [upstream rev 1.0 model](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf). The derived [deployment](assets/references/g1_wbc_deployment.json), [dynamics](assets/references/g1_wbc_dynamics.json) and [contact](assets/references/g1_wbc_contact.json) references come from the same pinned source. These carry the NVIDIA terms and the [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt).
 
@@ -477,6 +487,7 @@ Update this table in the same commit as each new module or third-party addition.
 | GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py)/[evaluation](scripts/isaac_g1_ppo_eval.py), [lift probe](scripts/isaac_g1_lift.py), [corridor carry training](scripts/isaac_g1_carry.py)/[evaluation](scripts/isaac_g1_carry_eval.py), [room approach/carry](scripts/isaac_g1_room.py) with [room geometry](scripts/room_geometry.py), [rehearsal runner](scripts/isaac_g1_rehearsal.py) with a [generated scene spec](configs/scenes/living_room_pedestal.json), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
 | Contact/dynamics diagnostics and CPU analysis | Derived GR00T deployment/dynamics/contact [reference data](assets/references/) |
 | [Meta model client](scripts/meta_models.py) (Muse Spark chat, SAM 3.1 segmentation, Muse Image generation, response cache), [interior prompts](configs/home_images.json), [rehearsal advisor](scripts/rehearsal_advisor.py) (Muse Spark planning/diagnosis with capability rules) | Meta Model API (Muse Spark, SAM 3.1, Muse Image), meta-sam-parser, [three.js](web/vendor/three/) |
+| [WebGL rehearsal viewer](web/), [replay export](scripts/export_replay.py), [mesh fetcher](scripts/fetch_g1_meshes.py), exported [demos](web/demos/) | [three.js](web/vendor/three/) (core, OrbitControls, STLLoader), G1 meshes (downloaded, [manifest](web/vendor/g1/meshes.json)) |
 | [Tests](tests/), README, [AGENTS.md](AGENTS.md) | NumPy, FFmpeg/libx264, Modal SDK, Ubuntu/libXt, OpenSSH, Git, uv |
 
 ## Assets and credentials
