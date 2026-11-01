@@ -65,9 +65,10 @@ def load_config(path):
             not number(o["friction"], 0.05, 1.5) or not number(o["start_clearance_m"], 0.0, 0.02) or
             not number(o["near_face_ahead_of_palm_m"], 0.0, 0.1)):
         raise ValueError("Invalid carried object")
-    # Lift sweep 20261031T184440 carried up to 4 kg without feedforward and failed at 5 kg.
-    if not interval(config["mass_kg"], 0.5, 4.0) or not number(config["arm_lift_m"], 0.04, 0.12):
-        raise ValueError("Masses must stay within the measured 4 kg capacity and the arm lift within 4-12 cm")
+    # Front-grasp lift sweep 20261101T031211: 6 kg still leaves the floor (2.3 cm at hold, wrist below its limit) and
+    # fails by the walking runaway under a fixed command; 8 kg does not leave the floor.
+    if not interval(config["mass_kg"], 0.5, 6.0) or not number(config["arm_lift_m"], 0.04, 0.12):
+        raise ValueError("Masses must stay within the 6 kg that still leave the floor and the arm lift within 4-12 cm")
     pre = config["lift_prefix_seconds"]
     if set(pre) != {"settle", "lift", "hold"} or not all(number(v, 0.1, 5.0) for v in pre.values()):
         raise ValueError("Invalid lift prefix")

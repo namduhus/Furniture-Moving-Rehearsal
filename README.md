@@ -302,12 +302,13 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Corridor carry PPO policy
 
-[`scripts/isaac_g1_carry.py`](scripts/isaac_g1_carry.py) trains an RSL-RL PPO policy that sets the GR00T walk forward speed and yaw rate every 0.1 s to carry the attached cabinet through an L-shaped corridor. Each environment has its own [corridor](configs/isaac_g1_carry.json) width, corner distance, turn direction and cabinet mass. A pure-pursuit command is evaluated on the same seeded starts. The [smoke config](configs/isaac_g1_carry_smoke.json) runs the same setup for three iterations, and the [speed-limited config](configs/isaac_g1_carry_speed.json) also penalizes walking faster than 0.3 m/s.
+[`scripts/isaac_g1_carry.py`](scripts/isaac_g1_carry.py) trains an RSL-RL PPO policy that sets the GR00T walk forward speed and yaw rate every 0.1 s to carry the attached cabinet through an L-shaped corridor. Each environment has its own [corridor](configs/isaac_g1_carry.json) width, corner distance, turn direction and cabinet mass. A pure-pursuit command is evaluated on the same seeded starts. The [smoke config](configs/isaac_g1_carry_smoke.json) runs the same setup for three iterations, and the [speed-limited config](configs/isaac_g1_carry_speed.json) also penalizes walking faster than 0.3 m/s ([2-6 kg variant](configs/isaac_g1_carry_speed_6kg.json)).
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_smoke.json
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry.json
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_speed.json
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_speed_6kg.json
 ```
 
 [`scripts/isaac_g1_carry_eval.py`](scripts/isaac_g1_carry_eval.py) evaluates a checkpoint on held-out corridors and masses against pure pursuit, logging walking speed, and records [showcase corridors](configs/isaac_g1_carry_eval.json) driven by pursuit and by the checkpoint side by side.

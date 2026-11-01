@@ -114,7 +114,7 @@ class TaskStepTests(unittest.TestCase):
     def test_configuration_rejects_unreviewed_masses_commands_and_overlap(self):
         raw = json.loads(carry.DEFAULT_CONFIG.read_text())
         cases = [{**raw, "extra": 1},
-                 {**raw, "mass_kg": [2.0, 5.0]},
+                 {**raw, "mass_kg": [2.0, 7.0]},
                  {**raw, "env_spacing_m": 4.0},
                  {**raw, "action_bounds": {**raw["action_bounds"], "forward_mps": [-0.1, 0.3]}},
                  {**raw, "scripted": {**raw["scripted"], "forward_mps": 0.5}},
@@ -135,6 +135,12 @@ class TaskStepTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in smoke["ppo"].items() if k not in ("max_iterations", "save_interval")},
                          {k: v for k, v in raw["ppo"].items() if k not in ("max_iterations", "save_interval")})
         self.assertEqual(smoke["ppo"]["max_iterations"], 3)
+        # The 6 kg variant changes only the mass range of the speed-limited training.
+        speed = json.loads((ROOT / "configs/isaac_g1_carry_speed.json").read_text())
+        heavy = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg.json")[0]
+        self.assertEqual(heavy["mass_kg"], [2.0, 6.0])
+        self.assertEqual({k: v for k, v in heavy.items() if k not in ("mass_kg", "scope")},
+                         {k: v for k, v in speed.items() if k not in ("mass_kg", "scope")})
 
 
 class FakeRunner:
