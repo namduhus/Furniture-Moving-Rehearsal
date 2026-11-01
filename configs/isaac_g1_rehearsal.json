@@ -1,14 +1,14 @@
 {
   "approach_training": "configs/isaac_g1_room_approach.json",
-  "carry_training": "configs/isaac_g1_room_carry.json",
+  "carry_training": "configs/isaac_g1_room_carry_strong.json",
   "approach_checkpoint": "outputs/isaac/20261101T085012.623231Z-room-approach/train/model_299.pt",
-  "carry_checkpoint": "outputs/isaac/20261101T095655.188349Z-room-carry/train/model_299.pt",
+  "carry_checkpoint": "outputs/isaac/20261101T113949.346965Z-room-carry/train/model_299.pt",
   "request": "configs/rehearsal_living_room_pedestal.json",
   "start_inside_door_m": 0.6,
-  "timeline_seconds": {"reach": 1.0, "grasp": 0.5, "lift": 1.0, "hold": 0.5, "lower": 1.5, "release": 0.5, "withdraw": 1.0,
+  "timeline_seconds": {"reach": 1.0, "grasp": 0.5, "lift": 1.0, "hold": 0.5, "align": 4.0, "lower": 1.5, "release": 0.5, "withdraw": 1.0,
                        "back_away": 1.5},
   "back_away_mps": 0.1,
   "camera": {"eye_from_front_m": [0.0, 2.0, 5.5], "target_height_m": 0.0},
   "stage_timeout_seconds": 1800,
-  "scope": "One rehearsal in the room built from the Muse Spark scene spec of the generated living-room image (living_room_pedestal): the user-corrected pedestal (0.30 x 0.28 x 0.90 m, 3 kg) is approached from the door, grasped (IK reach, joints re-anchored to the palms), lifted 10 cm, carried to the requested pose and set down. The approach uses the residual policy of run 20261101T085012 (model_299: 86.3% vs scripted 83.2% on the same 256 starts); the carry uses the residual policy of run 20261101T095655 (model_299: 71.9% vs scripted 42.6% on the same 256 starts; 3-4 kg 55% vs 1%). Placement error is measured against the requested pose with the carry tolerance (10 cm / 10 degrees)."
+  "scope": "One rehearsal in the room built from the Muse Spark scene spec of the generated living-room image (living_room_pedestal): the user-corrected pedestal (0.30 x 0.28 x 0.90 m, 3 kg) is approached from the door, grasped (IK reach, joints re-anchored to the palms), lifted 10 cm, carried to the requested pose and set down. The approach uses the residual policy of run 20261101T085012 (model_299: 86.3% vs scripted 83.2% on the same 256 starts); the carry uses the residual policy of run 20261101T113949 (variant B: residual 0.7, overspeed 10; 78.9% vs base 71.9%, paired p = 0.004; 3-4 kg 69%). After the carry, a 4 s scripted alignment docks (3 cm / 5 deg) to the root pose that puts the cabinet, as held, at the requested pose; lowering and release keep docking to it. Placement error is measured against the requested pose with the carry tolerance (10 cm / 10 degrees)."
 }

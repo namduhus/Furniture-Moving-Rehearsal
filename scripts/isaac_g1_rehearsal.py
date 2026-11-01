@@ -6,7 +6,8 @@ naming the target, the user's corrections (size and mass) and the destination. W
 every other furniture item is a static axis-aligned box, and the target is the dynamic cabinet the room policies were
 trained with. Phases: approach (room approach checkpoint, or scripted docking: the zero residual) -> reach (arm IK to the grasp points) ->
 grasp (palm joints re-anchored to the current palm pose and enabled) -> lift -> hold -> carry (room carry checkpoint, or
-scripted docking) -> lower -> release -> withdraw -> back away. A failed approach stops the run; a failed carry still
+scripted docking) -> align (scripted docking to the root pose that puts the cabinet, as actually held, at the requested
+pose) -> lower -> release -> withdraw -> back away. A failed approach stops the run; a failed carry still
 sets the cabinet down unless the robot fell. One camera records every decision, and every decision logs the robot link
 poses and the cabinet pose for the WebGL replay. The placement error against the request is measured at the end.
 
@@ -40,7 +41,7 @@ from isaac_preflight import check_versions, run_stage, write_json
 from isaac_video import encode_recording, require_ffmpeg
 
 DEFAULT_CONFIG = ROOT / "configs/isaac_g1_rehearsal.json"
-TIMELINE = ("reach", "grasp", "lift", "hold", "lower", "release", "withdraw", "back_away")
+TIMELINE = ("reach", "grasp", "lift", "hold", "align", "lower", "release", "withdraw", "back_away")
 
 
 def repo_path(value, prefix, suffix):
@@ -172,6 +173,15 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
 def to_spec(xy, transform):
     """Simulation (x, y) -> scene-spec (x, y): spec = sign * sim + offset per axis."""
     return [transform[axis][0]*float(v) + transform[axis][1] for axis, v in zip(("x", "y"), xy)]
+
+
+def placement_goal(cabinet_in_root, placed):
+    """Root pose (x, y, yaw) that puts a cabinet held at `cabinet_in_root` (4x4 in the root frame) at the placed pose."""
+    import numpy as np
+    yaw = placed[2] - np.arctan2(cabinet_in_root[1, 0], cabinet_in_root[0, 0])
+    c, s = np.cos(yaw), np.sin(yaw)
+    dx, dy = cabinet_in_root[:2, 3]
+    return np.array([placed[0] - (c*dx - s*dy), placed[1] - (s*dx + c*dy), float(room.wrap(yaw))])
 
 
 def placement_error(cabinet_pose_xyzw, placed):
@@ -389,6 +399,16 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     if result["phases"]["carry"]["outcome"] != "fallen":
                         # Dock only near the goal; a carry that failed on the way sets the load down where it is.
                         near = result["phases"]["carry"]["position_error_m"] <= 0.5
+                        if near:
+                            # Precision placement: the carry stops within 10 cm of its root goal and the grasp holds the
+                            # cabinet a few cm off nominal (14 cm placement error in run 20261101T105656), so dock to the
+                            # root pose that puts the cabinet, as held now, at the requested pose.
+                            root = pose_matrix(finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0])
+                            held = np.linalg.inv(root) @ pose_matrix(finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0])
+                            goal = placement_goal(held, layout["placed"])
+                            env.goals[0], env.paths[0] = goal, np.array([root[:2, 3] - s.origins[0, :2], goal[:2]])
+                            result["placement_goal"] = goal.tolist()
+                            scripted("align", arm["lift"], arm["lift"], dock=True)
                         scripted("lower", arm["lift"], arm["place"], dock=near)
                         result["release_authored"] = lift.set_attachment(s.sim.stage, env_path, False)
                         if (scripted("release", arm["place"], arm["place"], dock=near) and

@@ -68,6 +68,17 @@ class RehearsalLayoutTests(unittest.TestCase):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 self.layout(request, scene)
 
+    def test_placement_goal_puts_the_held_cabinet_on_the_requested_pose(self):
+        from g1_wbc import pose_matrix
+        yaw = np.radians(8.0)
+        held = pose_matrix([0.38, -0.02, -0.29, 0.0, 0.0, np.sin(yaw/2), np.cos(yaw/2)])      # 3 cm short, 2 cm right, 8 deg
+        placed = np.array([-1.15, -1.0, np.pi])
+        goal = rehearsal.placement_goal(held, placed)
+        root = pose_matrix([goal[0], goal[1], 0.75, 0.0, 0.0, np.sin(goal[2]/2), np.cos(goal[2]/2)])
+        cabinet = root @ held
+        np.testing.assert_allclose(cabinet[:2, 3], placed[:2], atol=1e-12)
+        self.assertAlmostEqual(float(room.wrap(np.arctan2(cabinet[1, 0], cabinet[0, 0]) - placed[2])), 0.0, places=12)
+
     def test_placement_error_and_configuration_checks(self):
         yaw = np.radians(170.0)
         error = rehearsal.placement_error([0.03, 1.04, 0.45, 0.0, 0.0, np.sin(yaw/2), np.cos(yaw/2)], np.array([0.0, 1.0, -np.pi]))
@@ -145,12 +156,14 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertLess(result["placement"]["position_m"], 1e-9)
         self.assertTrue(result["placement"]["within_tolerance"])
         np.testing.assert_allclose(result["placement"]["cabinet_spec_xy_m"], [3.0, 2.5], atol=1e-9)
-        # One frame per decision: start, approach 11, reach 10, grasp 5, lift 10, hold 5, carry 1, lower 15, release 5,
-        # withdraw 10, back away 15.
+        # One frame per decision: start, approach 11, reach 10, grasp 5, lift 10, hold 5, carry 1, align 40, lower 15,
+        # release 5, withdraw 10, back away 15.
         phases = [frame["phase"] for frame in replay["frames"]]
-        self.assertEqual(len(phases), 88)
-        self.assertEqual(encode.call_args.kwargs["count"], 88)
-        self.assertEqual([phases.count(p) for p in ("approach", "reach", "carry", "back_away")], [11, 10, 1, 15])
+        self.assertEqual(len(phases), 128)
+        self.assertEqual(encode.call_args.kwargs["count"], 128)
+        self.assertEqual([phases.count(p) for p in ("approach", "reach", "carry", "align", "back_away")], [11, 10, 1, 40, 15])
+        # The doubles hold the cabinet straight ahead at the reach, so the placement goal is where the robot stands.
+        np.testing.assert_allclose(result["placement_goal"], result["layout"]["approach_goal"], atol=1e-6)
         self.assertEqual(len(replay["frames"][0]["bodies"]), len(replay["bodies"]))
         self.assertEqual(replay["frames"][-1]["command"], [-0.1, 0.0, 0.0])
         # The reach measured each palm against its grasp point on the floor-standing cabinet.
