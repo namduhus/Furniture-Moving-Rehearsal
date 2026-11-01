@@ -14,7 +14,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 import isaac_g1_carry as carry
 import isaac_g1_lift as lift
+import isaac_g1_ppo_eval as ppo_eval
 import isaac_g1_rehearsal as rehearsal
+import isaac_g1_room as room
 import room_geometry as rg
 from test_isaac_g1_lift import Image
 from test_isaac_g1_rl import parallel_isaac
@@ -119,12 +121,17 @@ class RehearsalWorkerTests(unittest.TestCase):
                 toggles.append((env, on, held))
                 return True
 
-            with mock.patch.object(lift, "set_attachment", side_effect=attach):
+            # The approach checkpoint loads through the evaluation loader; its double is the zero residual.
+            loaded = mock.patch.object(ppo_eval, "load_policy",
+                                       side_effect=lambda env, training, path, device: (room.scripted_actor(training), 299))
+            with mock.patch.object(lift, "set_attachment", side_effect=attach), loaded as load:
                 directory = Path(tmp)
                 rehearsal.run_worker(config, trainings, request, scene, (Path("walk.onnx"), Path("balance.onnx")), directory)
             result = json.loads((directory / "rehearsal-worker.json").read_text())
             replay = json.loads((directory / "replay.json").read_text())
         self.assertEqual(result["status"], "completed_rehearsal")
+        self.assertEqual(load.call_args.args[2], ROOT / config["approach_checkpoint"])
+        self.assertEqual(result["phases"]["approach_checkpoint_iteration"], 299)
         # Four walls plus the three spec furniture boxes; joints enabled with re-anchored frames, then disabled.
         self.assertEqual(result["walls"], 7)
         self.assertEqual([(on, held is None) for _, on, held in toggles], [(True, False), (False, True)])

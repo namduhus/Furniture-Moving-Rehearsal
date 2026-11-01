@@ -50,8 +50,8 @@
     ],
     "obstacle_gap_m": 0.8,
     "grid_m": 0.1,
-    "inflation_m": 0.45,
-    "start_clearance_m": 0.55,
+    "inflation_m": 0.6,
+    "start_clearance_m": 0.6,
     "wall_thickness_m": 0.1,
     "wall_height_m": 1.2
   },
@@ -123,5 +123,5 @@
   },
   "seed": 0,
   "stage_timeout_seconds": 4800,
-  "scope": "Room carry, second run (residual): 256 environments, each a random 3-5 m room with 1-3 furniture boxes; the robot carries the held cabinet (2-4 kg, lifted from a crouch start) to the pre-grasp pose of a target cabinet pose. Success: within 10 cm and 10 degrees at under 0.05 m/s. Every 0.1 s the GR00T walk command (forward -0.15-0.3 m/s, lateral +-0.15 m/s, yaw rate +-0.3 rad/s) is the scripted pursuit-and-docking action plus 0.4 x the PPO residual, from the goal pose and A* look-ahead points in the heading frame plus local obstacle distances. Fixes after run 20261101T075803 (learned 0% through iteration 196; scripted 37.5%): starts keep 0.55 m from walls and furniture (half of the scripted wall contacts happened at 0.1 s because the fingers reach 0.40 m from the root), paths keep 0.45 m and end with a 0.4 m straight staging segment along the goal heading (97% of pushed cabinets were reached more than 45 degrees off), and docking corrections are at least 0.06 in command norm (timeouts stalled 5-6 cm short in GR00T Balance). The scripted evaluation is the zero residual; walking above 0.3 m/s is penalized. Lateral and backward GR00T walking are untested outside this training."
+  "scope": "Room carry, second run (residual): 256 environments, each a random 3-5 m room with 1-3 furniture boxes; the robot carries the held cabinet (2-4 kg, lifted from a crouch start) to the pre-grasp pose of a target cabinet pose. Success: within 10 cm and 10 degrees at under 0.05 m/s. Every 0.1 s the GR00T walk command (forward -0.15-0.3 m/s, lateral +-0.15 m/s, yaw rate +-0.3 rad/s) is the scripted pursuit-and-docking action plus 0.4 x the PPO residual, from the goal pose and A* look-ahead points in the heading frame plus local obstacle distances. Fixes after run 20261101T075803 (learned 0% through iteration 196; scripted 37.5%): starts keep 0.6 m from walls and furniture (half of the scripted wall contacts happened at 0.1 s because the fingers reach 0.40 m from the root), paths keep 0.6 m (the held cabinet's far corners are 0.58 m from the root) and end with a 0.4 m straight staging segment along the goal heading (97% of pushed cabinets were reached more than 45 degrees off), and docking corrections are at least 0.06 in command norm (timeouts stalled 5-6 cm short in GR00T Balance). The scripted evaluation is the zero residual; walking above 0.3 m/s is penalized. Lateral and backward GR00T walking are untested outside this training."
 }

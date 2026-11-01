@@ -135,7 +135,9 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
 
     approach: the cabinet stands on the floor and the goal is its pre-grasp pose; carry: the robot holds the cabinet at
     `reach` metres ahead and the goal is the pre-grasp pose of a sampled target cabinet pose. The start keeps
-    start_clearance_m from walls and furniture (the fingers reach 0.40 m from the root and the settle drifts it).
+    start_clearance_m from walls and furniture (the fingers reach 0.40 m from the root and the settle drifts it). The
+    approach path keeps the room inflation from the cabinet too (run 20261101T085012 pushed it only on paths passing
+    within 0.35 m); only its final straight segment uses the smaller object_inflation_m.
     """
     import numpy as np
     w, d = room["width_m"]/2, room["depth_m"]/2
@@ -158,7 +160,9 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
                     rg.rotated_distance(start[:2], cabinet[:2], size_xy, cabinet[2]) < 0.6):
                 continue
             grid = rg.occupancy(room, settings["grid_m"], settings["inflation_m"],
-                                (cabinet[:2], size_xy, cabinet[2], goal["object_inflation_m"]))
+                                (cabinet[:2], size_xy, cabinet[2], settings["inflation_m"]))
+            final = rg.occupancy(room, settings["grid_m"], settings["inflation_m"],
+                                 (cabinet[:2], size_xy, cabinet[2], goal["object_inflation_m"]))
         else:
             start = np.r_[free_point(), rng.uniform(-np.pi, np.pi)]
             held = rg.pregrasp_pose(start[:2], start[2] + np.pi, reach)      # reach metres ahead of the root
@@ -168,11 +172,11 @@ def sample_episode(task, room, settings, goal, reach, object_size, rng, tries=20
                     not footprint_clear(room, held[:2], start[2], size_xy, goal["object_margin_m"]) or
                     not footprint_clear(room, placed[:2], placed[2], size_xy, goal["object_margin_m"])):
                 continue
-            cabinet, grid = np.r_[held[:2], start[2]], static
+            cabinet, grid, final = np.r_[held[:2], start[2]], static, None
         distance = float(np.linalg.norm(target[:2] - start[:2]))
         if not goal["min_distance_m"] <= distance <= goal["max_distance_m"]:
             continue
-        path = rg.staged_path(grid, start[:2], target, goal["staging_m"])
+        path = rg.staged_path(grid, start[:2], target, goal["staging_m"], final)
         if path is not None:
             return {"start": start, "cabinet": cabinet, "goal": target, "path": path,
                     "placed": placed if task == "carry" else None}

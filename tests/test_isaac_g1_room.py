@@ -51,6 +51,11 @@ class RoomTaskTests(unittest.TestCase):
                                 <= config["goal"]["max_distance_m"])
                 target = episode["cabinet"] if config["task"] == "approach" else episode["placed"]
                 np.testing.assert_allclose(episode["goal"], rg.pregrasp_pose(target[:2], target[2], 0.41), atol=1e-12)
+                if config["task"] == "approach":
+                    # Path cells keep the room inflation from the cabinet; only the final segment comes closer.
+                    self.assertGreaterEqual(rg.rotated_distance(episode["path"][1:-2], episode["cabinet"][:2], size[:2],
+                                                                episode["cabinet"][2]).min(),
+                                            config["room"]["inflation_m"] - 1e-9)
                 if config["task"] == "carry":
                     # The held cabinet sits `reach` ahead of the start root.
                     ahead = episode["start"][:2] + 0.41*np.array([np.cos(episode["start"][2]), np.sin(episode["start"][2])])

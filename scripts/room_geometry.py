@@ -155,13 +155,14 @@ def plan_path(grid, start, goal):
     return np.vstack([np.asarray(start, dtype=float)[None], points[1:-1], np.asarray(goal, dtype=float)[None]])
 
 
-def staged_path(grid, start, goal, staging):
+def staged_path(grid, start, goal, staging, final_grid=None):
     """A* path from start to a staging point `staging` metres behind the goal pose (x, y, yaw), then straight to the goal,
-    so the robot arrives along the goal heading. None when the straight segment, the staging point or the path is blocked.
+    so the robot arrives along the goal heading. The straight segment is checked on `final_grid` when given (e.g. with a
+    smaller inflation around the object the goal faces). None when the segment, the staging point or the path is blocked.
     """
     stage = goal[:2] - staging*np.array([np.cos(goal[2]), np.sin(goal[2])])
     segment = stage + np.linspace(0.0, 1.0, max(2, int(np.ceil(staging/grid["resolution"])) + 1))[:, None]*(goal[:2] - stage)
-    if not all(grid["free"][cell_of(grid, point)] for point in segment):
+    if not all((final_grid or grid)["free"][cell_of(final_grid or grid, point)] for point in segment):
         return None
     path = plan_path(grid, start, stage)
     return None if path is None else np.vstack([path, np.asarray(goal[:2], dtype=float)[None]])

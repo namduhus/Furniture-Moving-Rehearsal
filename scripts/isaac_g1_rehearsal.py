@@ -153,9 +153,10 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
                                    ("carry goal", carry_goal, c["room"]["inflation_m"])):
         if float(rg.obstacle_distance(point[:2], layout_room)) < inflation:
             raise ValueError(f"The {name} is within {inflation} m of a wall or furniture")
-    approach_grid = rg.occupancy(layout_room, a["room"]["grid_m"], a["room"]["inflation_m"],
-                                 (cabinet[:2], size_xy, cabinet[2], a["goal"]["object_inflation_m"]))
-    approach_path = rg.staged_path(approach_grid, start[:2], approach_goal, a["goal"]["staging_m"])
+    approach_grid, final_grid = (rg.occupancy(layout_room, a["room"]["grid_m"], a["room"]["inflation_m"],
+                                              (cabinet[:2], size_xy, cabinet[2], inflation))
+                                 for inflation in (a["room"]["inflation_m"], a["goal"]["object_inflation_m"]))
+    approach_path = rg.staged_path(approach_grid, start[:2], approach_goal, a["goal"]["staging_m"], final_grid)
     carry_path = rg.staged_path(rg.occupancy(layout_room, c["room"]["grid_m"], c["room"]["inflation_m"]),
                                 approach_goal[:2], carry_goal, c["goal"]["staging_m"])
     if approach_path is None or carry_path is None:
