@@ -27,7 +27,7 @@ from isaac_preflight import check_versions, run_stage, write_json
 from isaac_video import encode_recording, file_sha256, require_ffmpeg
 
 
-DEFAULT_CONFIG = ROOT / "configs/isaac_g1_carry_eval.json"
+DEFAULT_CONFIG = ROOT / "configs/isaac_g1_carry_speed_eval.json"
 STAGES = ("held_out", "showcase")
 
 

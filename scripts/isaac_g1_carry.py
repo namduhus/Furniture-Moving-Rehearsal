@@ -28,7 +28,7 @@ from isaac_g1_wbc import ROOT, load_plan, trial_contract
 from isaac_preflight import check_versions, run_stage, write_json
 
 
-DEFAULT_CONFIG = ROOT / "configs/isaac_g1_carry.json"
+DEFAULT_CONFIG = ROOT / "configs/isaac_g1_carry_speed.json"
 ACTION_KEYS = ("forward_mps", "yaw_rate_rps", "lean_pitch_rad")
 FAILURES = ("invalid_action", "fallen", "wall_contact", "object_tipped", "object_grounded")
 OUTCOMES = (*FAILURES, "success", "time_out")

@@ -22,7 +22,7 @@ from isaac_g1_wbc import (ROOT, apply_fixed_hands, apply_palm_override, apply_so
 from isaac_preflight import check_versions, run_stage, write_json
 
 
-DEFAULT_CONFIG = ROOT / "configs/isaac_g1_rl_throughput.json"
+DEFAULT_CONFIG = ROOT / "configs/isaac_g1_rl_throughput_256.json"
 
 
 def load_config(path):

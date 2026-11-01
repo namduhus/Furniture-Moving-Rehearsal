@@ -61,5 +61,5 @@
   },
   "seed": 0,
   "stage_timeout_seconds": 4800,
-  "scope": "Corridor carry with a walking speed limit: identical to configs/isaac_g1_carry.json (same seed, corridors, masses, actions, 300 iterations) except that the robot's mean planar walking speed over each 0.1 s decision above 0.3 m/s (the forward command cap) costs 5.0 per m/s, more than the 2.0 progress reward per m/s, so outpacing the limit no longer pays. Run 20261101T022430 measured the unpenalized policy at 0.42 m/s mean and 0.77 m/s peak on held-out corridors."
+  "scope": "Corridor carry with a walking speed limit: the same seed, corridors, 2-4 kg masses, actions and 300 iterations as the unlimited first run (20261101T010729), except that the robot's mean planar walking speed over each 0.1 s decision above 0.3 m/s (the forward command cap) costs 5.0 per m/s, more than the 2.0 progress reward per m/s, so outpacing the limit no longer pays. Run 20261101T022430 measured the unpenalized policy at 0.42 m/s mean and 0.77 m/s peak on held-out corridors."
 }

@@ -1,0 +1,12 @@
+{
+  "size": "1536x1024",
+  "style": "Photorealistic interior photograph of a staged, unoccupied apartment, eye-level wide-angle view from the room's entrance, even daylight, plain matte walls, light wooden floor with clear open walking space in the middle, a standard white interior door (about 2 m tall) fully visible on one wall. No people, no pets, no text, no logos, no artwork with faces.",
+  "images": {
+    "living_room": "Living room: a three-seat fabric sofa against the left wall, a low coffee table in front of it, and a small wooden two-drawer side cabinet about 60 cm tall standing alone near the right wall.",
+    "bedroom": "Bedroom: a double bed against the back wall, a small bedside nightstand next to it, and a light wooden chest of drawers about 70 cm tall standing alone near the right wall.",
+    "study": "Home office: a desk with a chair against the back wall, and a small wooden bookshelf cabinet about 80 cm tall standing alone on the floor near the left wall.",
+    "living_room_light": "Small living room: an armchair against the left wall, a low TV bench against the back wall, and a slim hollow light wooden pedestal stand about 30 cm square and 90 cm tall (empty, nothing on it) standing alone on the floor near the right wall.",
+    "living_room_pedestal": "Small living room: an armchair against the left wall, a low TV bench against the back wall, and one tall, narrow, closed box-shaped display pedestal with solid light-wood panels on all sides (a plinth about 30 cm wide, 30 cm deep and 90 cm tall, flat empty top, no legs, no openings) standing alone on the floor near the right wall."
+  },
+  "scope": "Self-generated home interiors for the image-to-scene pipeline (no real homes, people or retrieved photos): each shows furniture obstacles, one candidate piece to move and a standard door as the scale reference. living_room_light and living_room_pedestal hold a slim, light pedestal shaped like the simulated carry proxy (0.30 x 0.28 x 0.90 m, 2-4 kg) for the lift-and-carry tier; the other rooms' pieces are expected to be heavy. Muse Image sets only the aspect ratio from size."
+}

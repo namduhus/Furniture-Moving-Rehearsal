@@ -18,6 +18,7 @@
   },
   "timeline": [
     {"name": "settle", "seconds": 1.0, "command": [0, 0, 0], "arms": "start"},
+    {"name": "grasp", "seconds": 0.5, "command": [0, 0, 0], "arms": "start", "grasp": true},
     {"name": "lift", "seconds": 1.0, "command": [0, 0, 0], "arms": ["start", "lift"]},
     {"name": "hold", "seconds": 1.0, "command": [0, 0, 0], "arms": "lift"},
     {"name": "carry", "seconds": 5.0, "command": [0.2, 0, 0], "arms": "lift"},
@@ -40,5 +41,5 @@
     "env_spacing_m": 10.0
   },
   "stage_timeout_seconds": 1800,
-  "scope": "Front-edge side-grasp lift sweep with diagnostics: the 0.30 x 0.28 x 0.90 m cabinet is held by its side faces with its near face 2 cm ahead of the palms at the default arm pose (centre 17 cm ahead; the geometry the corridor carry policy was trained with). The 8 cm forward grasp (run 20261101T021433) did not raise the pass mass and made the speed runaway worse, so the front grasp is the default again. Static wrist pitch load 1.28 Nm/kg (first effort limit ~3.9 kg, arm self-weight excluded; run 20261031T184440 still carried 4 kg with the cabinet braced on the knees). Cases of 2, 4, 6, 8 and 10 kg without feedforward, one environment each; palm-object fixed joints (grasp abstraction that ignores finger grip force) with hand/wrist collisions filtered. IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries for 5 s at 0.2 m/s, Balance holds while the palms lower 2 cm, then the joints are disabled. Arm tracking error, the implied PD torque against the effort limits and the cabinet's contact force on the legs and torso are logged per step."
+  "scope": "Front-edge side-grasp lift sweep with diagnostics: the 0.30 x 0.28 x 0.90 m cabinet is held by its side faces with its near face 2 cm ahead of the palms at the default arm pose (centre 17 cm ahead; the geometry the corridor carry policy was trained with). The 8 cm forward grasp (run 20261101T021433) did not raise the pass mass and made the speed runaway worse, so the front grasp is the default again. Static wrist pitch load 1.28 Nm/kg (first effort limit ~3.9 kg, arm self-weight excluded; run 20261031T184440 still carried 4 kg with the cabinet braced on the knees). Cases of 2, 4, 6, 8 and 10 kg without feedforward, one environment each; palm-object fixed joints (grasp abstraction that ignores finger grip force) with hand/wrist collisions filtered. The joints start disabled with the cabinet on the floor and are enabled at runtime after the settle (grasp; the error before enabling and the cabinet's shift are measured), then IK raises both palms 10 cm under GR00T Balance, GR00T Walk carries for 5 s at 0.2 m/s, Balance holds while the palms lower 2 cm, then the joints are disabled. Arm tracking error, the implied PD torque against the effort limits and the cabinet's contact force on the legs and torso are logged per step."
 }

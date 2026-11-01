@@ -54,15 +54,10 @@ class CarryEvaluationConfigTests(unittest.TestCase):
                 with self.subTest(data=data), self.assertRaises(ValueError):
                     ev.load_config(path)
 
-    def test_speed_limited_evaluation_reuses_the_unlimited_corridors(self):
-        speed, training, *_ = ev.load_config(ROOT / "configs/isaac_g1_carry_speed_eval.json")
-        base = ev.load_config(ev.DEFAULT_CONFIG)[0]
-        self.assertEqual(training["reward"]["overspeed"], 5.0)
-        self.assertNotEqual(speed["checkpoint"], base["checkpoint"])
-        self.assertEqual((speed["held_out"], speed["showcase"]), (base["held_out"], base["showcase"]))
-        heavy, heavy_training, *_ = ev.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_eval.json")
-        self.assertEqual((heavy_training["mass_kg"], heavy["held_out"]), ([2.0, 6.0], base["held_out"]))
-        self.assertEqual(max(c["mass_kg"] for c in heavy["showcase"]["cases"]), 5.8)
+    def test_default_evaluation_targets_the_speed_limited_policy(self):
+        config, training, *_ = ev.load_config(ev.DEFAULT_CONFIG)
+        self.assertEqual((config["training_config"], training["reward"]["overspeed"]), ("configs/isaac_g1_carry_speed.json", 5.0))
+        self.assertIn("20261101T024024", config["checkpoint"])
 
     def test_showcase_pairs_each_corridor_and_frames_it_from_its_corner(self):
         cases = [{"width_m": 1.2, "corner_m": 1.5, "turn": "left", "mass_kg": 3.0},

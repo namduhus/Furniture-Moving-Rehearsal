@@ -61,10 +61,7 @@ class BatchAdapterTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             policy.batch(np.zeros((4, 515)))
         config, profile, _, _ = rl.load_config(rl.DEFAULT_CONFIG)
-        self.assertEqual((config["num_envs"], profile["push_object"]["friction"]), (64, 0.1))
-        scaling, scaling_profile, _, _ = rl.load_config(ROOT / "configs/isaac_g1_rl_throughput_256.json")
-        self.assertEqual((scaling["num_envs"], scaling["control_steps"]), (256, 100))
-        self.assertEqual(scaling_profile, profile)
+        self.assertEqual((config["num_envs"], config["control_steps"], profile["push_object"]["friction"]), (256, 100, 0.1))
         raw = json.loads(rl.DEFAULT_CONFIG.read_text())
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rl.json"

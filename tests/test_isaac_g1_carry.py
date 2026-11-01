@@ -78,13 +78,19 @@ class CorridorGeometryTests(unittest.TestCase):
         np.testing.assert_allclose(commands, [[0.2, 0, 0.0], [0.2, 0, 0.3], [0.2, 0, -0.3]], atol=1e-12)
         np.testing.assert_allclose(rpys, 0.0)
         # With a lean bound the policy has a third action, the GR00T pitch command; pursuit keeps it at zero.
-        lean = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_lean.json")[0]
+        lean = lean_config(self.config)
         bounds = lean["action_bounds"]
         self.assertEqual((carry.action_keys(bounds), carry.observation_count(bounds)), (carry.ACTION_KEYS, 26))
         commands, rpys = carry.action_commands([[-1.0, 0.0, -1.0], [1.0, 0.0, 1.0]], bounds)
         np.testing.assert_allclose(rpys, [[0, -0.3, 0], [0, 0.3, 0]], atol=1e-12)
         actions = carry.pursuit_actions(np.zeros((1, 26)), lean)
         np.testing.assert_allclose(carry.action_commands(actions, bounds)[1], [[0, 0, 0]], atol=1e-12)
+
+
+def lean_config(config):
+    """The 2-6 kg torso-lean variant of run 20261101T041243, built from the final config."""
+    return {**config, "mass_kg": [2.0, 6.0],
+            "action_bounds": {**config["action_bounds"], "lean_pitch_rad": [-0.3, 0.3]}}
 
 
 class TaskStepTests(unittest.TestCase):
@@ -139,19 +145,10 @@ class TaskStepTests(unittest.TestCase):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError):
                     carry.load_config(path)
-        # The smoke check runs the training setup unchanged except for the iteration count and its timeout.
-        smoke = carry.load_config(ROOT / "configs/isaac_g1_carry_smoke.json")[0]
-        changed = ("ppo", "stage_timeout_seconds", "scope")
-        self.assertEqual({k: v for k, v in smoke.items() if k not in changed}, {k: v for k, v in raw.items() if k not in changed})
-        self.assertEqual({k: v for k, v in smoke["ppo"].items() if k not in ("max_iterations", "save_interval")},
-                         {k: v for k, v in raw["ppo"].items() if k not in ("max_iterations", "save_interval")})
-        self.assertEqual(smoke["ppo"]["max_iterations"], 3)
-        # The 6 kg variant changes only the mass range of the speed-limited training.
-        speed = json.loads((ROOT / "configs/isaac_g1_carry_speed.json").read_text())
-        heavy = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg.json")[0]
-        self.assertEqual(heavy["mass_kg"], [2.0, 6.0])
-        self.assertEqual({k: v for k, v in heavy.items() if k not in ("mass_kg", "scope")},
-                         {k: v for k, v in speed.items() if k not in ("mass_kg", "scope")})
+            # The 2-6 kg torso-lean variant is a valid configuration.
+            path.write_text(json.dumps(lean_config(raw)))
+            self.assertEqual(carry.load_config(path)[0]["action_bounds"]["lean_pitch_rad"], [-0.3, 0.3])
+        self.assertEqual(raw["reward"]["overspeed"], 5.0)
 
 
 class FakeRunner:
@@ -171,9 +168,9 @@ class FakeRunner:
 
 class CarryWorkerTests(unittest.TestCase):
     def test_lean_action_reaches_gr00t_only_after_the_lift_prefix(self):
-        config, profile, asset, runtime = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_lean.json")
+        config, profile, asset, runtime = carry.load_config(carry.DEFAULT_CONFIG)
         count = 2
-        config = {**config, "num_envs": count, "episode_seconds": 5.0,
+        config = {**lean_config(config), "num_envs": count, "episode_seconds": 5.0,
                   "ppo": {**config["ppo"], "max_iterations": 1, "num_steps_per_env": 2}}
         o = config["object"]
         scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": 2.0, "friction": o["friction"],

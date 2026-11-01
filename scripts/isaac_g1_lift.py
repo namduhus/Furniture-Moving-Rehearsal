@@ -5,7 +5,8 @@ grasp start pose (the default arms with both palms moved forward by arm_offsets_
 and hand/wrist collisions with the object are filtered. The object's weight and contacts reach the robot through the
 joints. Arm targets for lifting and lowering come from position-and-orientation IK on the pinned reference model;
 GR00T Balance/Walk drive the lower body on the source schedule (Balance whenever the command norm is at most 0.05).
-Disabling the joints at runtime (release) is attempted and measured, not assumed. Cases sweep the object mass, with and
+Enabling the joints at runtime (grasp, when a timeline phase asks for it; the joints then start disabled and the
+object rests on the floor) and disabling them (release) are attempted and measured, not assumed. Cases sweep the object mass, with and
 without static load feedforward on the arm targets, to measure where lifting fails; arm tracking, the implied PD torque
 and the object's contact with the legs and torso are logged to show what limits it.
 """
@@ -68,13 +69,17 @@ def load_config(path):
         return isinstance(arms, list) and len(arms) == 2 and all(a in ARM_POSES for a in arms)
 
     for phase in config["timeline"]:
-        if (set(phase) - {"release"} != {"name", "seconds", "command", "arms"} or not number(phase["seconds"], 0.1, 20.0) or
+        if (set(phase) - {"release", "grasp"} != {"name", "seconds", "command", "arms"} or not number(phase["seconds"], 0.1, 20.0) or
                 not arms_valid(phase["arms"]) or phase["command"] not in ([0, 0, 0], [0.2, 0, 0]) or
-                phase.get("release", False) not in (True, False)):
+                phase.get("release", False) not in (True, False) or phase.get("grasp", False) not in (True, False)):
             raise ValueError("Timeline phases need a reviewed command (stand or 0.2 m/s forward) and arm poses")
     names = [p["name"] for p in config["timeline"]]
     if len(set(names)) != len(names) or not {"carry", "lower", "release", "withdraw"} <= set(names):
         raise ValueError("Timeline needs unique carry, lower, release and withdraw phases")
+    grasps = [i for i, p in enumerate(config["timeline"]) if p.get("grasp")]
+    if grasps and (len(grasps) > 1 or "lift" not in names or grasps[0] > names.index("lift") or
+                   config["timeline"][grasps[0]]["command"] != [0, 0, 0]):
+        raise ValueError("At most one standing grasp phase, before the lift")
     c = config["checks"]
     if set(c) != {"attachment_error_m", "carry_clearance_m", "carry_distance_m", "placed_clearance_m", "object_tilt_deg"}:
         raise ValueError("Invalid lift checks")
@@ -228,8 +233,9 @@ def tilt_deg(pose_xyzw):
     return float(np.degrees(np.arccos(np.clip(quat_xyzw_matrix(pose_xyzw[3:])[2, 2], -1.0, 1.0))))
 
 
-def apply_hand_attachment(stage, robot, box, env, frames):
-    """Author palm-object fixed joints and hand/wrist collision filters in the session layer before reset."""
+def apply_hand_attachment(stage, robot, box, env, frames, enabled=True):
+    """Author palm-object fixed joints (enabled or not) and hand/wrist collision filters in the session layer before
+    reset."""
     from pxr import Gf, Usd, UsdPhysics
     from g1_wbc import matrix_quat_xyzw
 
@@ -254,7 +260,7 @@ def apply_hand_attachment(stage, robot, box, env, frames):
             joint.CreateLocalPos1Attr(Gf.Vec3f(*map(float, local[:3, 3])))
             joint.CreateLocalRot1Attr(Gf.Quatf(float(quat[3]), Gf.Vec3f(*map(float, quat[:3]))))
             joint.CreateExcludeFromArticulationAttr(True)
-            joint.CreateJointEnabledAttr(True)
+            joint.CreateJointEnabledAttr(bool(enabled))
             report["joints"][side] = {"path": str(joint.GetPath()), "palm": str(palm.GetPath()),
                                       "local_pos1_m": local[:3, 3].tolist(), "local_rot1_xyzw": quat.tolist()}
         filtered = [p for p in links if not p.IsInstanceProxy()]
@@ -264,33 +270,34 @@ def apply_hand_attachment(stage, robot, box, env, frames):
     return report
 
 
-def release_attachment(stage, env):
+def set_attachment(stage, env, enabled):
+    """Enable (grasp) or disable (release) both palm joints at runtime."""
     from pxr import Usd, UsdPhysics
     with Usd.EditContext(stage, stage.GetSessionLayer()):
-        return all(UsdPhysics.Joint(stage.GetPrimAtPath(f"{env}/HandAttachment/{side}")).GetJointEnabledAttr().Set(False)
+        return all(UsdPhysics.Joint(stage.GetPrimAtPath(f"{env}/HandAttachment/{side}")).GetJointEnabledAttr().Set(bool(enabled))
                    for side in ("left", "right"))
 
 
 def schedule(timeline, control_dt):
-    """Per-control-step phase name, command, arm blend (from, to, fraction) and release flag."""
+    """Per-control-step phase name, command, arm blend (from, to, fraction) and grasp/release flags."""
     steps = []
     for phase in timeline:
         count = int(round(phase["seconds"]/control_dt))
         arms = phase["arms"] if isinstance(phase["arms"], list) else [phase["arms"]]*2
         for k in range(count):
             steps.append({"phase": phase["name"], "command": phase["command"], "arms": arms, "fraction": (k + 1)/count,
-                          "release": bool(phase.get("release")) and k == 0})
+                          "grasp": bool(phase.get("grasp")) and k == 0, "release": bool(phase.get("release")) and k == 0})
     return steps
 
 
 def lift_summary(records, checks):
-    """Functional checks over the logged control steps; release is reported, not required."""
+    """Functional checks over the logged control steps; grasp and release are reported, not required."""
     import numpy as np
 
     def phase(*names):
         return [r for r in records if r["phase"] in names]
 
-    attached = [r for r in records if not r["released"]]
+    attached = [r for r in records if r["attached"]]
     settle, carry, hold = phase("settle"), phase("carry"), phase("hold")
     held = phase("hold", "carry", "stop")
     placed = phase("release")[-1] if phase("release") else None
@@ -315,6 +322,11 @@ def lift_summary(records, checks):
         "actions_in_bound": not any(r.get("invalid_action", False) for r in records),
         "set_down": result["placed_clearance_m"] is not None and result["placed_clearance_m"] <= checks["placed_clearance_m"],
         "object_upright": result["placed_tilt_deg"] is not None and result["placed_tilt_deg"] <= checks["object_tilt_deg"]}
+    grasp = phase("grasp")
+    if grasp:
+        before = records[records.index(grasp[0]) - 1]
+        result["grasp"] = {"error_before_m": before["attachment_error_m"], "error_after_m": grasp[-1]["attachment_error_m"],
+                           "object_shift_m": float(np.linalg.norm(np.subtract(grasp[0]["object_xyz"], before["object_xyz"])))}
     if withdraw and placed:
         palm_rise = float(np.mean([withdraw[-1]["palm_z"][s] - placed["palm_z"][s] for s in SIDES]))
         object_rise = withdraw[-1]["object_bottom_m"] - placed["object_bottom_m"]
@@ -386,11 +398,15 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     with launch_simulation(built.cfg, {**rl.LAUNCH_SETTINGS, "enable_cameras": True, "device": runtime["device"]}):
         try:
             attachment = {}
+            # With a grasp phase the joints start disabled and the object rests on the floor until the grasp.
+            grasping = any(phase.get("grasp") for phase in config["timeline"])
+            result["grasp_phase"] = grasping
             # The enabled joints pull the object off its push spawn in the reset warmup step; it is placed below.
             s = rl.prepare_push_scene(
                 built, count, scene_profile, asset, runtime, contract, reference, directory, result, evidence,
                 box_properties=(masses, np.full(count, float(o["friction"]))),
-                extra_edits=lambda stage, robot, box, env: attachment.update({env: apply_hand_attachment(stage, robot, box, env, frames)}),
+                extra_edits=lambda stage, robot, box, env: attachment.update({env: apply_hand_attachment(stage, robot, box, env, frames,
+                                                                                                         not grasping)}),
                 check_box_start=False)
             result["attachment"] = attachment
             robot, box, batch, device = s.robot, s.box, s.batch, s.device
@@ -438,7 +454,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             directories = [directory / f"case_{i}" for i in range(count)]
             for case in directories:
                 (case / "frames").mkdir(parents=True)
-            frame_count, released, records = 0, False, [[] for _ in range(count)]
+            frame_count, attached, released, records = 0, not grasping, False, [[] for _ in range(count)]
             width, height = profile["camera"]["width"], profile["camera"]["height"]
 
             def capture():
@@ -457,10 +473,14 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             logs = [(case / "trajectory.jsonl").open("w") for case in directories]
             try:
                 for k, step in enumerate(steps):
+                    if step["grasp"]:
+                        result["grasp_authored"] = all([set_attachment(s.sim.stage, f"/World/envs/env_{i}", True)
+                                                        for i in range(count)])
+                        attached = True
                     if step["release"]:
-                        result["release_authored"] = all([release_attachment(s.sim.stage, f"/World/envs/env_{i}")
+                        result["release_authored"] = all([set_attachment(s.sim.stage, f"/World/envs/env_{i}", False)
                                                           for i in range(count)])
-                        released = True
+                        attached, released = False, True
                     for _ in range(asset["control_decimation"]):
                         s.scene.write_data_to_sim()
                         s.sim.step(render=False)
@@ -487,7 +507,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                     for i in range(count):
                         predicted = (palms["left"][i] @ frames["palm_object"]["left"])[:3, 3]
                         record = {"time_s": (k + 1)*control_dt, "phase": step["phase"], "command": step["command"],
-                                  "released": released, "root_xyz": (pose[i, :3] - s.origins[i]).tolist(),
+                                  "attached": attached, "released": released, "root_xyz": (pose[i, :3] - s.origins[i]).tolist(),
                                   "robot_tilt_deg": float(np.degrees(tilt[i])),
                                   "fallen": bool(pose[i, 2] < profile["minimum_base_height_m"] or tilt[i] > profile["maximum_tilt_rad"]),
                                   "invalid_action": bool(invalid[i]),
@@ -568,7 +588,7 @@ def main(argv=None):
              {"status": r["summary"]["status"], "failed_checks": [c for c, ok in r["summary"]["checks"].items() if not ok]} |
              {k: r["summary"][k] for k in ("palm_rise_m", "carry_clearance_min_m", "held_tilt_max_deg", "carry_distance_m")} |
              {"saturated_joints": r["diagnostics"]["saturated_joints"],
-              "body_contact_max_n": r["diagnostics"]["body_contact"]["held_max_n"]}
+              "body_contact_max_n": r["diagnostics"]["body_contact"]["held_max_n"], "grasp": r["summary"].get("grasp")}
              for r in evidence.get("results", [])]
     summary = {"status": evidence.get("status") if code == 0 else "failed", "exit_code": code, "run_dir": str(directory),
                "heaviest_passed_kg": evidence.get("heaviest_passed_kg"), "cases": cases, "error": evidence.get("error")}
