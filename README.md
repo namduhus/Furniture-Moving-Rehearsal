@@ -272,10 +272,10 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Parallel push environments (RL stage 2)
 
-[`scripts/isaac_g1_rl.py`](scripts/isaac_g1_rl.py) builds parallel copies of the slider push with the frozen GR00T walk policy, checks that every copy carries the qualified setup, and measures throughput against the single-environment baseline. It does not train. The [256-environment config](configs/isaac_g1_rl_throughput_256.json) is a shorter scaling check with per-phase timing.
+[`scripts/isaac_g1_rl.py`](scripts/isaac_g1_rl.py) builds parallel copies of the slider push with the frozen GR00T walk policy, checks that every copy carries the qualified setup, and measures throughput with per-phase timing ([256 environments](configs/isaac_g1_rl_throughput_256.json)). It does not train.
 
 ```sh
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_rl.py --config configs/isaac_g1_rl_throughput.json
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_rl.py --config configs/isaac_g1_rl_throughput_256.json
 ```
 
 #### High-level PPO push policy (RL stage 3)
@@ -302,20 +302,15 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Corridor carry PPO policy
 
-[`scripts/isaac_g1_carry.py`](scripts/isaac_g1_carry.py) trains an RSL-RL PPO policy that sets the GR00T walk forward speed and yaw rate every 0.1 s to carry the attached cabinet through an L-shaped corridor. Each environment has its own [corridor](configs/isaac_g1_carry.json) width, corner distance, turn direction and cabinet mass. A pure-pursuit command is evaluated on the same seeded starts. The [smoke config](configs/isaac_g1_carry_smoke.json) runs the same setup for three iterations, and the [speed-limited config](configs/isaac_g1_carry_speed.json) also penalizes walking faster than 0.3 m/s ([2-6 kg variant](configs/isaac_g1_carry_speed_6kg.json), [with a torso lean action](configs/isaac_g1_carry_speed_6kg_lean.json)).
+[`scripts/isaac_g1_carry.py`](scripts/isaac_g1_carry.py) trains an RSL-RL PPO policy that sets the GR00T walk forward speed and yaw rate every 0.1 s to carry the attached cabinet through an L-shaped corridor. Each environment has its own [corridor](configs/isaac_g1_carry_speed.json) width, corner distance, turn direction and cabinet mass (2-4 kg), and walking faster than 0.3 m/s is penalized. A pure-pursuit command is evaluated on the same seeded starts. A torso lean action is available when the config bounds `lean_pitch_rad`.
 
 ```sh
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_smoke.json
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry.json
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_speed.json
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_speed_6kg.json
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry.py --config configs/isaac_g1_carry_speed_6kg_lean.json
 ```
 
-[`scripts/isaac_g1_carry_eval.py`](scripts/isaac_g1_carry_eval.py) evaluates a checkpoint on held-out corridors and masses against pure pursuit, logging walking speed, and records [showcase corridors](configs/isaac_g1_carry_eval.json) driven by pursuit and by the checkpoint side by side.
+[`scripts/isaac_g1_carry_eval.py`](scripts/isaac_g1_carry_eval.py) evaluates a checkpoint on held-out corridors and masses against pure pursuit, logging walking speed, and records [showcase corridors](configs/isaac_g1_carry_speed_eval.json) driven by pursuit and by the checkpoint side by side.
 
 ```sh
-/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry_eval.py --config configs/isaac_g1_carry_eval.json
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry_eval.py --config configs/isaac_g1_carry_speed_eval.json
 ```
 
@@ -439,6 +434,10 @@ The Isaac image's [Ubuntu libxt6t64 package](https://packages.ubuntu.com/noble/l
 
 MP4 recording invokes [FFmpeg](https://ffmpeg.org/) with [libx264](https://www.videolan.org/developers/x264.html). FFmpeg's [license depends on the configured components](https://github.com/FFmpeg/FFmpeg/blob/n6.1.1/LICENSE.md), including GPL terms for libx264-enabled builds. Retain the selected distribution's `/usr/share/doc/ffmpeg/copyright` and linked-library notices. This project invokes the encoder as a separate process and does not claim authorship of the codec. Each recording stores the executable's version/build configuration; its resolved system packages are separate from the upstream Python lock.
 
+Meta model calls go to the [Meta Model API](https://dev.meta.ai/docs/models) (Muse Spark, SAM 3.1, Muse Image) under Meta's terms; the API key is read from the environment or a Git-ignored `.env` (see `.env.example`). SAM 3.1 mask payloads are decoded with Meta's [meta-sam-parser](https://github.com/meta-models/meta-sam) 0.1.0 (SAM License, pinned with hashes in `uv.lock`). Demo interiors are generated with Muse Image with its image/web search tools disabled; they show no real homes or people.
+
+The browser view uses [three.js](https://github.com/mrdoob/three.js) r186 (npm 0.186.1, MIT), vendored unmodified under `web/vendor/three/` with its LICENSE and a SHA-256 manifest (`vendor.json`).
+
 The GR00T-WBC Balance/Walk checkpoints are downloaded from the [pinned NVIDIA source](https://github.com/NVlabs/GR00T-WholeBodyControl/tree/4141c34280abb67c82e115342a8720f4a83d750d/decoupled_wbc) under the [NVIDIA Open Model License](licenses/GR00T-WBC.txt) and stay Git-ignored. The [reference URDF](assets/references/g1_wbc.urdf) is the unmodified [upstream rev 1.0 model](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/4141c34280abb67c82e115342a8720f4a83d750d/gear_sonic/data/robots/g1/g1_29dof_with_hand_rev_1_0.urdf). The derived [deployment](assets/references/g1_wbc_deployment.json), [dynamics](assets/references/g1_wbc_dynamics.json) and [contact](assets/references/g1_wbc_contact.json) references come from the same pinned source. These carry the NVIDIA terms and the [Unitree BSD notice](licenses/UNITREE-BSD-3-CLAUSE.txt).
 
 ## Original contributions and third-party components
@@ -450,6 +449,7 @@ Update this table in the same commit as each new module or third-party addition.
 | [Modal launcher](scripts/modal_dev.py), Isaac [preflight](scripts/isaac_preflight.py)/[recording](scripts/isaac_video.py)/[observer](scripts/isaac_observe.py)/[G1 asset inventory](scripts/isaac_g1_asset.py) | Isaac Sim, Isaac Lab, RSL-RL, PyTorch, G1 USD assets |
 | GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py)/[evaluation](scripts/isaac_g1_ppo_eval.py), [lift probe](scripts/isaac_g1_lift.py), [corridor carry training](scripts/isaac_g1_carry.py)/[evaluation](scripts/isaac_g1_carry_eval.py), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
 | Contact/dynamics diagnostics and CPU analysis | Derived GR00T deployment/dynamics/contact [reference data](assets/references/) |
+| [Meta model client](scripts/meta_models.py) (Muse Spark chat, SAM 3.1 segmentation, Muse Image generation, response cache), [interior prompts](configs/home_images.json) | Meta Model API (Muse Spark, SAM 3.1, Muse Image), meta-sam-parser, [three.js](web/vendor/three/) |
 | [Tests](tests/), README, [AGENTS.md](AGENTS.md) | NumPy, FFmpeg/libx264, Modal SDK, Ubuntu/libXt, OpenSSH, Git, uv |
 
 ## Assets and credentials
@@ -457,9 +457,3 @@ Update this table in the same commit as each new module or third-party addition.
 The G1 reference URDF is imported robot data used for kinematic checks; its original bytes and license notices are retained. Simulation uses the separately licensed Isaac USD asset. Use self-rendered or explicitly licensed images and record each source and license here when added. Do not use real home photos or personal information.
 
 Keep API keys and tokens in environment variables. Do not include them in source files, prompts, logs, or commits. Local environment files, caches, model weights, and run artifacts are ignored by default.
-
-## Validation and submission
-
-Report only measured results. Record seeds and configurations for experiments, distinguish simulated outcomes from real-world claims, and cache model responses without retaining credentials.
-
-Submission requirements include a public repository, a demo video of at most three minutes, clear identification of new hackathon work, verified asset licenses, and meaningful Meta model usage.

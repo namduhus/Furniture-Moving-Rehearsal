@@ -1,0 +1,26 @@
+{
+  "chat_model": "muse-spark-1.3",
+  "phrases": [
+    "door",
+    "sofa",
+    "armchair",
+    "coffee table",
+    "tv stand",
+    "cabinet",
+    "bed",
+    "chest of drawers",
+    "nightstand",
+    "desk",
+    "chair",
+    "bookshelf",
+    "plant stand",
+    "side table",
+    "pedestal"
+  ],
+  "reference": {
+    "object": "door",
+    "height_m": 2.0,
+    "width_m": 0.8
+  },
+  "scope": "Image-to-scene step: SAM 3.1 is called once per short noun phrase (phrases with no match return nothing), then Muse Spark reads the image together with the SAM boxes and returns a metric floor-plan scene spec, scaled by assuming a standard interior door of the given size. The spec is an estimate shown for user correction, not a measurement."
+}
