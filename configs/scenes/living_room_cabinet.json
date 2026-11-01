@@ -1,0 +1,155 @@
+{
+  "image": "outputs/meta/images/living_room_cabinet.png",
+  "models": {
+    "segmentation": "sam-3.1",
+    "layout": "muse-spark-1.3"
+  },
+  "reference": {
+    "object": "door",
+    "height_m": 2.0,
+    "width_m": 0.8
+  },
+  "detections": [
+    {
+      "id": "door_0",
+      "phrase": "door",
+      "box_px": [
+        1438,
+        274,
+        1578,
+        947
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.8787879347801208,
+      "mask_fill": 0.7934844371488099
+    },
+    {
+      "id": "door_1",
+      "phrase": "door",
+      "box_px": [
+        759,
+        575,
+        887,
+        919
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.827957034111023,
+      "mask_fill": 0.9758004718570947
+    },
+    {
+      "id": "door_2",
+      "phrase": "door",
+      "box_px": [
+        889,
+        575,
+        1016,
+        918
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.8324607610702515,
+      "mask_fill": 0.9753361191860465
+    },
+    {
+      "id": "sofa_0",
+      "phrase": "sofa",
+      "box_px": [
+        145,
+        664,
+        627,
+        946
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.9532163739204407,
+      "mask_fill": 0.7759073517254498
+    },
+    {
+      "id": "cabinet_0",
+      "phrase": "cabinet",
+      "box_px": [
+        759,
+        569,
+        1017,
+        937
+      ],
+      "image_px": [
+        1920,
+        1280
+      ],
+      "confidence": 0.8709677457809448,
+      "mask_fill": 0.9896516725785018
+    }
+  ],
+  "scene": {
+    "door": {
+      "center_m": 3.6,
+      "detection_id": "door_0",
+      "wall": "right"
+    },
+    "furniture": [
+      {
+        "category": "sofa",
+        "center_m": [
+          0.65,
+          2.8
+        ],
+        "detection_id": "sofa_0",
+        "estimated_mass_kg": 55.0,
+        "id": "sofa_1",
+        "mass_basis": "typical 3-seat fabric sofa 50-60kg",
+        "size_m": [
+          2.2,
+          0.9,
+          0.8
+        ],
+        "yaw_deg": 90.0
+      },
+      {
+        "category": "cabinet",
+        "center_m": [
+          2.2,
+          2.8
+        ],
+        "detection_id": "cabinet_0",
+        "estimated_mass_kg": 45.0,
+        "id": "cabinet_1",
+        "mass_basis": "solid oak 2-door cupboard ~40-50kg",
+        "size_m": [
+          0.95,
+          0.5,
+          1.25
+        ],
+        "yaw_deg": 0.0
+      }
+    ],
+    "notes": "Scaled from door_0 as 2.0m tall 0.8m wide on right wall. door_1 and door_2 are false positives for the two leaves of cabinet_0, not separate doors. Room size estimated by perspective: width ~4.5m, depth ~5.2m, height ~2.6m, uncertainty +/-0.5m. Sofa on left wall facing +x (yaw 90 from camera-facing). Cabinet front faces camera (+y, yaw 0). Small potted plant near back-left window visible but not in detections and omitted from furniture list.",
+    "room": {
+      "depth_m": 5.2,
+      "height_m": 2.6,
+      "width_m": 4.5
+    }
+  },
+  "checks_failed": [],
+  "usage": {
+    "completion_tokens": 3071,
+    "prompt_tokens": 3575,
+    "total_tokens": 6646,
+    "completion_tokens_details": {
+      "reasoning_tokens": 2675
+    },
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  }
+}

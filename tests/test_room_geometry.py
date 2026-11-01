@@ -44,6 +44,11 @@ class RoomGeometryTests(unittest.TestCase):
         staged = rg.staged_path(grid, np.array([-1.5, 0.0]), np.array([-0.4, -1.0, 0.0]), 0.4)
         np.testing.assert_allclose(staged[-2:], [[-0.8, -1.0], [-0.4, -1.0]])
         self.assertIsNone(rg.staged_path(grid, np.array([-1.5, 0.0]), np.array([1.6, 0.0, 0.0]), 1.0))
+        # A start inside the inflation snaps to the nearest free cell centre; a free start stays where it is.
+        np.testing.assert_allclose(rg.nearest_free(grid, np.array([-1.5, 0.0])), [-1.5, 0.0])
+        snapped = rg.nearest_free(grid, np.array([0.5, 0.35]))
+        self.assertTrue(grid["free"][rg.cell_of(grid, snapped)])
+        self.assertLess(float(np.linalg.norm(snapped - [0.5, 0.35])), 0.35)       # free from y = 0.6, cell centre 0.65
         pose = rg.pregrasp_pose([0.5, 1.0], -np.pi/2, 0.41)
         np.testing.assert_allclose(pose, [0.5, 1.41, -np.pi/2], atol=1e-12)
 

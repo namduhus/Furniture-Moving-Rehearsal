@@ -1,6 +1,7 @@
 {
   "scene": "configs/scenes/living_room_pedestal.json",
   "target": "cabinet_1",
-  "corrections": {"size_m": [0.30, 0.28, 0.90], "mass_kg": 3.0},
-  "destination": {"center_m": [0.5, 3.0], "yaw_deg": 90.0}
+  "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+  "destination": {"center_m": [0.5, 3.0], "yaw_deg": 90.0},
+  "strategy": "carry"
 }

@@ -116,6 +116,17 @@ def cell_of(grid, point):
     return i, j
 
 
+def nearest_free(grid, point):
+    """`point` if its cell is free, else the centre of the nearest free cell (None if no cell is free)."""
+    if grid["free"][cell_of(grid, point)]:
+        return np.asarray(point, dtype=float)
+    cells = np.argwhere(grid["free"])
+    if len(cells) == 0:
+        return None
+    centres = np.stack([grid["xs"][cells[:, 0]], grid["ys"][cells[:, 1]]], axis=1)
+    return centres[np.argmin(np.linalg.norm(centres - np.asarray(point, dtype=float), axis=1))]
+
+
 def plan_path(grid, start, goal):
     """8-connected A* between the free cells holding start and goal; the polyline (k, 2) runs from start to goal.
 

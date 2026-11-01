@@ -270,9 +270,9 @@ def tilt_deg(pose_xyzw):
     return float(np.degrees(np.arccos(np.clip(quat_xyzw_matrix(pose_xyzw[3:])[2, 2], -1.0, 1.0))))
 
 
-def apply_hand_attachment(stage, robot, box, env, frames, enabled=True):
-    """Author palm-object fixed joints (enabled or not) and hand/wrist collision filters in the session layer before
-    reset."""
+def apply_hand_attachment(stage, robot, box, env, frames, enabled=True, filter_hands=True):
+    """Author palm-object fixed joints (enabled or not) and, unless filter_hands is False, hand/wrist collision filters
+    in the session layer before reset (an item that is pushed after a grasp needs the hand collisions)."""
     from pxr import Gf, Usd, UsdPhysics
     from g1_wbc import matrix_quat_xyzw
 
@@ -300,8 +300,9 @@ def apply_hand_attachment(stage, robot, box, env, frames, enabled=True):
             joint.CreateJointEnabledAttr(bool(enabled))
             report["joints"][side] = {"path": str(joint.GetPath()), "palm": str(palm.GetPath()),
                                       "local_pos1_m": local[:3, 3].tolist(), "local_rot1_xyzw": quat.tolist()}
-        filtered = [p for p in links if not p.IsInstanceProxy()]
-        UsdPhysics.FilteredPairsAPI.Apply(obj).CreateFilteredPairsRel().SetTargets([p.GetPath() for p in filtered])
+        filtered = [p for p in links if not p.IsInstanceProxy()] if filter_hands else []
+        if filter_hands:
+            UsdPhysics.FilteredPairsAPI.Apply(obj).CreateFilteredPairsRel().SetTargets([p.GetPath() for p in filtered])
     report["filtered_links"] = [str(p.GetPath()) for p in filtered]
     report["unfiltered_instance_proxies"] = [str(p.GetPath()) for p in links if p.IsInstanceProxy()]
     return report

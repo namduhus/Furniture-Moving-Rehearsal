@@ -1,0 +1,7 @@
+{
+  "scene": "configs/scenes/living_room_cabinet.json",
+  "target": "cabinet_1",
+  "corrections": {"size_m": [0.80, 0.60, 1.00], "mass_kg": 15.0},
+  "destination": {"center_m": [2.2, 1.8], "yaw_deg": 0.0},
+  "strategy": "push"
+}

@@ -1,0 +1,7 @@
+{
+  "scene": "configs/scenes/living_room_bookcase.json",
+  "target": "cabinet_1",
+  "corrections": {"size_m": [0.80, 0.30, 1.00], "mass_kg": 12.0},
+  "destination": {"center_m": [2.15, 0.6], "yaw_deg": 0.0},
+  "strategy": "auto"
+}

@@ -1,0 +1,26 @@
+{
+  "chat_model": "muse-spark-1.3",
+  "strategies": ["carry", "push", "needs_two_people", "infeasible"],
+  "carry": {
+    "size_m": [0.28, 0.30, 0.90],
+    "size_tolerance_m": 0.02,
+    "mass_kg": [2.0, 4.0],
+    "evidence": [
+      "Room carry policy (run 20261101T113949): 78.9% success over 256 random rooms (2-3 kg 88%, 3-4 kg 69%) vs 42.6% for scripted docking.",
+      "Lift probes (run 20261101T092539): 2 and 4 kg were lifted and carried; 6 kg sped up and fell; 8 and 10 kg did not leave the floor with the wrist pitch joints at their 5 Nm limit (static load 1.28 Nm per kg).",
+      "Static analysis: a centred grasp would cut the wrist load to 0.45 Nm per kg, but it puts a 0.9 m tall cabinet against the knees while walking."
+    ]
+  },
+  "push": {
+    "mass_kg": [5.0, 20.0],
+    "friction_max": 0.15,
+    "min_face_width_m": 0.36,
+    "push_height_m": 0.8,
+    "evidence": [
+      "Straight push policy (run 20261030T173207): 87.9% success vs 27.3% scripted, pushing a 0.7 x 0.8 x 1.0 m box 1 m on furniture sliders (friction 0.05-0.15), 5-20 kg.",
+      "The palms push 0.15 m left and right of the centre, so the pushed face must be at least about 0.36 m wide."
+    ]
+  },
+  "floor_friction": 0.5,
+  "slider_friction": 0.1
+}

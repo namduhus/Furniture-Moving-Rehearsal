@@ -2,7 +2,11 @@
 pose and sets it down, with GR00T Walk/Balance as the low-level controller.
 
 The room comes from a scene spec (scripts/scene_from_image.py: SAM 3.1 detections + Muse Spark layout) and a request
-naming the target, the user's corrections (size and mass) and the destination. Walls surround the spec's width x depth,
+naming the target, the user's corrections (size [width along its front, depth, height] and mass), the destination and
+the strategy: carry, push, or auto (walk up and try to lift it; if it does not leave the floor, set it down, let Muse
+Spark diagnose the attempt through scripts/rehearsal_advisor.py and push it if that is the decision). A push is a
+straight push along one side of the item on furniture sliders, with the push policy over GR00T driven through a
+course-frame adapter (the policy was trained pushing along +x from a standing start in front of the box). Walls surround the spec's width x depth,
 every other furniture item is a static axis-aligned box, and the target is the dynamic cabinet the room policies were
 trained with. Phases: approach (room approach checkpoint, or scripted docking: the zero residual) -> reach (arm IK to the grasp points) ->
 grasp (palm joints re-anchored to the current palm pose and enabled) -> lift -> hold -> carry (room carry checkpoint, or
@@ -26,6 +30,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import platform
+import shutil
 import sys
 import traceback
 
@@ -35,13 +40,15 @@ import isaac_g1_ppo as ppo
 import isaac_g1_ppo_eval as ppo_eval
 import isaac_g1_rl as rl
 import isaac_g1_room as room
+import meta_models
+import rehearsal_advisor as advisor
 import room_geometry as rg
 from isaac_g1_wbc import ROOT, trial_contract
 from isaac_preflight import check_versions, run_stage, write_json
 from isaac_video import encode_recording, require_ffmpeg
 
 DEFAULT_CONFIG = ROOT / "configs/isaac_g1_rehearsal.json"
-TIMELINE = ("reach", "grasp", "lift", "hold", "align", "lower", "release", "withdraw", "back_away")
+TIMELINE = ("reach", "grasp", "lift", "hold", "align", "lower", "release", "withdraw", "step_back", "back_away")
 
 
 def repo_path(value, prefix, suffix):
@@ -53,7 +60,7 @@ def repo_path(value, prefix, suffix):
 
 def load_config(path):
     config = json.loads(Path(path).read_text())
-    if set(config) != {"approach_training", "carry_training", "approach_checkpoint", "carry_checkpoint", "request",
+    if set(config) != {"approach_training", "carry_training", "approach_checkpoint", "carry_checkpoint", "push", "request",
                        "start_inside_door_m", "timeline_seconds", "back_away_mps", "camera", "stage_timeout_seconds", "scope"}:
         raise ValueError("Unreviewed rehearsal configuration keys")
 
@@ -71,6 +78,17 @@ def load_config(path):
     if (a["object"] != c["object"] or a["push_profile"] != c["push_profile"] or a["arm_lift_m"] != c["arm_lift_m"] or
             a["decision_control_steps"] != c["decision_control_steps"]):
         raise ValueError("Approach and carry must share the cabinet, profile, arm lift and decision rate")
+    push = config["push"]
+    if (set(push) != {"training", "checkpoint", "slider_friction", "gap_m", "distance_m", "face_alignment_deg"} or
+            not number(push["slider_friction"], 0.05, 0.15) or not number(push["gap_m"], 0.03, 0.15) or
+            not isinstance(push["distance_m"], list) or len(push["distance_m"]) != 2 or
+            not all(number(v, 0.2, 2.0) for v in push["distance_m"]) or not number(push["face_alignment_deg"], 1.0, 20.0)):
+        raise ValueError("Invalid push settings")
+    trainings["push"] = ppo.load_config(repo_path(push["training"], "configs/", ".json"))
+    if push["checkpoint"] is not None:
+        repo_path(push["checkpoint"], "outputs/isaac/", ".pt")
+    if trainings["push"][0]["push_profile"] != a["push_profile"]:
+        raise ValueError("The push policy must share the room tasks' profile")
     repo_path(config["request"], "configs/", ".json")
     t = config["timeline_seconds"]
     if set(t) != set(TIMELINE) or not all(number(v, 0.1, 5.0) for v in t.values()):
@@ -88,9 +106,11 @@ def load_config(path):
 
 def load_request(path):
     request = json.loads(Path(path).read_text())
-    if (set(request) != {"scene", "target", "corrections", "destination"} or not isinstance(request["target"], str) or
-            set(request["corrections"]) != {"size_m", "mass_kg"} or set(request["destination"]) != {"center_m", "yaw_deg"}):
-        raise ValueError("A request needs scene, target, corrections {size_m, mass_kg} and destination {center_m, yaw_deg}")
+    if (set(request) != {"scene", "target", "corrections", "destination", "strategy"} or not isinstance(request["target"], str) or
+            set(request["corrections"]) != {"size_m", "mass_kg"} or set(request["destination"]) != {"center_m", "yaw_deg"} or
+            request["strategy"] not in ("carry", "push", "auto")):
+        raise ValueError("A request needs scene, target, corrections {size_m, mass_kg}, destination {center_m, yaw_deg} "
+                         "and strategy carry, push or auto")
     scene = json.loads(repo_path(request["scene"], "configs/scenes/", ".json").read_text())
     return request, scene
 
@@ -103,23 +123,85 @@ def facing_yaw(yaw_deg):
     return float(np.arctan2(np.cos(theta), -np.sin(theta)))
 
 
-def rehearsal_layout(scene, request, trainings, inside_door, reach):
-    """Room, start pose, cabinet pose, goals and paths for one request (simulation frame, centred on the room).
+def sim_size(size_m):
+    """Spec size [width along its front, depth, height] -> simulation box size [x, y, z] in the object frame, whose x
+    axis points from the front into the item (depth) and y along the front (width)."""
+    return [float(size_m[1]), float(size_m[0]), float(size_m[2])]
 
-    Raises ValueError when the corrected target is outside the carry tier, the cabinet or its destination overlaps other
-    furniture, the door start is blocked, or no path exists.
+
+def push_geometry(layout_room, item, size, placed, push_settings, hand_reach, inflation, margin):
+    """Straight push of an item (x, y, yaw, box size [x, y, z]) to `placed`: push pose (palms gap_m from the pushed face,
+    hand_reach ahead of the root) and course. Raises ValueError unless the destination is the item moved 0.5-1.5 m
+    straight along one of its sides with the same heading, the pushed face is wide enough, the swept footprint is clear
+    and the robot's line behind it keeps `inflation` from obstacles."""
+    import numpy as np
+    p = push_settings
+    offset = np.asarray(placed[:2]) - item[:2]
+    distance = float(np.linalg.norm(offset))
+    tolerance = np.radians(p["face_alignment_deg"])
+    if not p["distance_m"][0] <= distance <= p["distance_m"][1]:
+        raise ValueError(f"A push moves the item {p['distance_m'][0]}-{p['distance_m'][1]} m, not {distance:.2f} m")
+    # Headings equal up to a quarter turn: a box turned by 90 degrees is the same box.
+    if abs(room.wrap(placed[2] - item[2] - round(float(room.wrap(placed[2] - item[2]))/(np.pi/2))*np.pi/2)) > tolerance:
+        raise ValueError("A push keeps the item's heading")
+    theta = float(np.arctan2(offset[1], offset[0]))
+    side = round(float(room.wrap(theta - item[2]))/(np.pi/2))
+    if abs(room.wrap(theta - item[2] - side*np.pi/2)) > tolerance:
+        raise ValueError("Push straight along one side of the item")
+    along, face = (size[0], size[1]) if side % 2 == 0 else (size[1], size[0])
+    if face < 0.36:
+        raise ValueError(f"The pushed face ({face} m) is narrower than the 0.36 m the palms need")
+    u = offset/distance
+    goal = np.r_[item[:2] - (along/2 + p["gap_m"] + hand_reach)*u, theta]
+    for t in np.linspace(0.0, distance, int(np.ceil(distance/0.05)) + 1):
+        if not room.footprint_clear(layout_room, item[:2] + t*u, item[2], size[:2], margin):
+            raise ValueError("The push path of the item is blocked")
+    behind = goal[:2] + np.linspace(0.0, distance, 20)[:, None]*u
+    if float(rg.obstacle_distance(behind, layout_room).min()) < inflation:
+        raise ValueError("No room for the robot to walk behind the item while pushing")
+    return goal, {"origin": item[:2].tolist(), "theta": theta, "distance_m": distance, "along_m": along, "face_m": face}
+
+
+def approach_path(layout_room, start, item, size, goal, settings):
+    """Staged approach path to `goal` around the item (room inflation), the last straight segment with the smaller
+    object inflation. A start inside the inflation (e.g. next to the item after a lift attempt) first steps to the
+    nearest free cell."""
+    import numpy as np
+    grids = [rg.occupancy(layout_room, settings["room"]["grid_m"], settings["room"]["inflation_m"],
+                          (item[:2], size[:2], item[2], inflation))
+             for inflation in (settings["room"]["inflation_m"], settings["goal"]["object_inflation_m"])]
+    entry = rg.nearest_free(grids[0], start[:2])
+    path = None if entry is None else rg.staged_path(grids[0], entry, goal, settings["goal"]["staging_m"], grids[1])
+    return path if path is None or np.allclose(entry, start[:2]) else np.vstack([np.asarray(start[:2], dtype=float), path])
+
+
+def rehearsal_layout(scene, request, trainings, inside_door, reach, push_settings, hand_reach=0.415):
+    """Room, start pose, item pose, goals and paths for one request (simulation frame, centred on the room).
+
+    carry: the approach goal is the pre-grasp pose (`reach`), the carry goal the destination's pre-grasp pose. push: the
+    approach goal is the push pose (see push_geometry). auto: the item must be grippable across one dimension (the
+    trained cabinet's width, from the end facing the shorter approach) and pushable to the destination; the approach goal
+    is the pre-grasp pose of that grip, and the push pose is planned too. The item is described as a box whose x axis
+    points away from the robot during the grip. Raises ValueError when the request does not fit the strategy, the item or
+    its destination overlaps other furniture, the door start is blocked, or no path exists.
     """
     import numpy as np
     a, c = trainings["approach"][0], trainings["carry"][0]
-    spec, o = scene["scene"], a["object"]
+    spec, o, fix = scene["scene"], a["object"], request["corrections"]
     width, depth = spec["room"]["width_m"], spec["room"]["depth_m"]
     items = {f["id"]: f for f in spec["furniture"]}
     if request["target"] not in items:
         raise ValueError(f"Unknown target {request['target']}; furniture: {sorted(items)}")
-    fix = request["corrections"]
-    if not np.allclose(fix["size_m"], o["size_m"], atol=0.02) or not c["mass_kg"][0] <= fix["mass_kg"] <= c["mass_kg"][1]:
-        raise ValueError(f"The carry tier covers a {o['size_m']} m cabinet of {c['mass_kg'][0]}-{c['mass_kg'][1]} kg; "
-                         "this target needs the push branch")
+    strategy, size = request["strategy"], sim_size(fix["size_m"])
+    if strategy == "carry":
+        if not np.allclose(size, o["size_m"], atol=0.02) or not c["mass_kg"][0] <= fix["mass_kg"] <= c["mass_kg"][1]:
+            raise ValueError(f"The carry tier covers a {o['size_m']} m cabinet of {c['mass_kg'][0]}-{c['mass_kg'][1]} kg; "
+                             "this target needs the push branch")
+        size = o["size_m"]
+    else:
+        masses = trainings["push"][0]["randomization"]["mass_kg"]
+        if not masses[0] <= fix["mass_kg"] <= masses[1] or size[2] < 0.9:
+            raise ValueError(f"The push tier covers {masses[0]}-{masses[1]} kg items at least 0.9 m tall (palm height)")
 
     def centred(xy):
         return np.array([xy[0] - width/2, depth/2 - xy[1]])
@@ -139,10 +221,9 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
     target = items[request["target"]]
     cabinet = np.r_[centred(target["center_m"]), facing_yaw(target["yaw_deg"])]
     placed = np.r_[centred(request["destination"]["center_m"]), facing_yaw(request["destination"]["yaw_deg"])]
-    size_xy = o["size_m"][:2]
-    if not room.footprint_clear(layout_room, cabinet[:2], cabinet[2], size_xy, 0.0):
+    if not room.footprint_clear(layout_room, cabinet[:2], cabinet[2], size[:2], 0.0):
         raise ValueError("The corrected cabinet overlaps a wall or other furniture; correct its position")
-    if not room.footprint_clear(layout_room, placed[:2], placed[2], size_xy, c["goal"]["object_margin_m"]):
+    if not room.footprint_clear(layout_room, placed[:2], placed[2], size[:2], c["goal"]["object_margin_m"]):
         raise ValueError("The destination overlaps a wall or other furniture")
     door = spec["door"]
     # Side-wall doors are measured from the back wall, back-wall doors from the left wall; the robot faces into the room.
@@ -150,24 +231,84 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach):
              "left": [-width/2 + inside_door, depth/2 - door["center_m"], 0.0],
              "back": [door["center_m"] - width/2, depth/2 - inside_door, -np.pi/2]}[door["wall"]]
     start = np.array(start, dtype=float)
-    approach_goal = rg.pregrasp_pose(cabinet[:2], cabinet[2], reach)
-    carry_goal = rg.pregrasp_pose(placed[:2], placed[2], reach)
-    for name, point, inflation in (("door start", start, a["room"]["start_clearance_m"]),
-                                   ("approach goal", approach_goal, a["room"]["inflation_m"]),
-                                   ("carry goal", carry_goal, c["room"]["inflation_m"])):
-        if float(rg.obstacle_distance(point[:2], layout_room)) < inflation:
+    if float(rg.obstacle_distance(start[:2], layout_room)) < a["room"]["start_clearance_m"]:
+        raise ValueError(f"The door start is within {a['room']['start_clearance_m']} m of a wall or furniture")
+    layout = {"strategy": strategy, "room": layout_room, "start": start, "placed": placed,
+              "spec_transform": {"x": [1.0, width/2], "y": [-1.0, depth/2]}}
+
+    def reachable(goal, inflation, name):
+        if float(rg.obstacle_distance(goal[:2], layout_room)) < inflation:
             raise ValueError(f"The {name} is within {inflation} m of a wall or furniture")
-    approach_grid, final_grid = (rg.occupancy(layout_room, a["room"]["grid_m"], a["room"]["inflation_m"],
-                                              (cabinet[:2], size_xy, cabinet[2], inflation))
-                                 for inflation in (a["room"]["inflation_m"], a["goal"]["object_inflation_m"]))
-    approach_path = rg.staged_path(approach_grid, start[:2], approach_goal, a["goal"]["staging_m"], final_grid)
-    carry_path = rg.staged_path(rg.occupancy(layout_room, c["room"]["grid_m"], c["room"]["inflation_m"]),
-                                approach_goal[:2], carry_goal, c["goal"]["staging_m"])
-    if approach_path is None or carry_path is None:
-        raise ValueError("No collision-free path for the approach or the carry")
-    return {"room": layout_room, "start": start, "cabinet": cabinet, "placed": placed, "approach_goal": approach_goal,
-            "approach_path": approach_path, "carry_goal": carry_goal, "carry_path": carry_path,
-            "spec_transform": {"x": [1.0, width/2], "y": [-1.0, depth/2]}}
+
+    if strategy == "auto":
+        # Grip across whichever horizontal dimension matches the trained cabinet's width; the box frame then points
+        # its x axis away from the robot (from an end of the item when gripping across its depth).
+        if abs(size[0] - o["size_m"][1]) <= 0.03:
+            size, yaws = [size[1], size[0], size[2]], [cabinet[2] + np.pi/2, cabinet[2] - np.pi/2]
+        elif abs(size[1] - o["size_m"][1]) <= 0.03:
+            yaws = [cabinet[2]]
+        else:
+            raise ValueError(f"Neither horizontal side of the item matches the {o['size_m'][1]} m grip")
+        grip = reach + (size[0] - o["size_m"][0])/2
+        options = []
+        for yaw in yaws:
+            item = np.r_[cabinet[:2], room.wrap(yaw)]
+            goal = rg.pregrasp_pose(item[:2], item[2], grip)
+            path = approach_path(layout_room, start, item, size, goal, a)
+            if float(rg.obstacle_distance(goal[:2], layout_room)) >= a["room"]["inflation_m"] and path is not None:
+                options.append((float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum()), item, goal, path))
+        if not options:
+            raise ValueError("No end of the item can be reached for the lift attempt")
+        _, cabinet, approach_goal, path = min(options, key=lambda option: option[0])
+        layout["grip_reach_m"] = grip
+        layout["push_goal"], layout["push"] = push_geometry(layout_room, cabinet, size, placed, push_settings, hand_reach,
+                                                            a["room"]["inflation_m"], c["goal"]["object_margin_m"])
+        reachable(layout["push_goal"], a["room"]["inflation_m"], "push pose")
+    elif strategy == "carry":
+        approach_goal = rg.pregrasp_pose(cabinet[:2], cabinet[2], reach)
+        layout["carry_goal"] = rg.pregrasp_pose(placed[:2], placed[2], reach)
+        reachable(layout["carry_goal"], c["room"]["inflation_m"], "carry goal")
+    else:
+        approach_goal, layout["push"] = push_geometry(layout_room, cabinet, size, placed, push_settings, hand_reach,
+                                                      a["room"]["inflation_m"], c["goal"]["object_margin_m"])
+    reachable(approach_goal, a["room"]["inflation_m"], "approach goal")
+    layout.update(size_m=list(size), cabinet=cabinet, approach_goal=approach_goal,
+                  approach_path=approach_path(layout_room, start, cabinet, size, approach_goal, a))
+    if strategy == "carry":
+        layout["carry_path"] = rg.staged_path(rg.occupancy(layout_room, c["room"]["grid_m"], c["room"]["inflation_m"]),
+                                              approach_goal[:2], layout["carry_goal"], c["goal"]["staging_m"])
+    if layout["approach_path"] is None or layout.get("carry_path", 0) is None:
+        raise ValueError(f"No collision-free path for the approach or the {strategy}")
+    return layout
+
+
+def turn_z(quat, angle):
+    """Quaternion [x, y, z, w] rotated by `angle` about the world z axis."""
+    import numpy as np
+    qx, qy, qz, qw = 0.0, 0.0, np.sin(angle/2), np.cos(angle/2)
+    x, y, z, w = quat
+    return np.array([qw*x + qx*w + qy*z - qz*y, qw*y - qx*z + qy*w + qz*x, qw*z + qx*y - qy*x + qz*w,
+                     qw*w - qx*x - qy*y - qz*z])
+
+
+def course_frame(pose, velocity, origin, theta):
+    """World pose [x, y, z, qx, qy, qz, qw] and velocity [linear, angular] (env-local) -> the push course frame, whose
+    origin is the item's start and whose x axis is the push direction (the frame the push policy was trained in)."""
+    import numpy as np
+    c, s = np.cos(theta), np.sin(theta)
+    rotate = np.array([[c, s], [-s, c]])
+    pose, velocity = np.asarray(pose, dtype=float), np.asarray(velocity, dtype=float)
+    moved = np.r_[rotate @ (pose[:2] - origin), pose[2], turn_z(pose[3:], -theta)]
+    turned = np.r_[rotate @ velocity[:2], velocity[2], rotate @ velocity[3:5], velocity[5]]
+    return moved, turned
+
+
+def square_yaw(pose):
+    """The pose turned about z by a multiple of 90 degrees so its yaw lies in [-45, 45): a box turned by 90 degrees
+    presents the same faces, and the push policy only saw boxes within a few degrees of its course. Tilt is kept."""
+    import numpy as np
+    yaw = float(ppo.yaw_of(np.asarray(pose)[None, 3:])[0])
+    return np.r_[pose[:3], turn_z(pose[3:], -round(yaw/(np.pi/2))*np.pi/2)]
 
 
 def to_spec(xy, transform):
@@ -235,6 +376,17 @@ class RehearsalEnv(room.RoomTaskEnv):
             yield flags
 
 
+class PolicyShape:
+    """Observation and action shapes of a policy's training environment, enough to rebuild the policy for inference."""
+
+    def __init__(self, observations, actions, device, cfg):
+        self.num_envs, self.num_actions, self.device, self.cfg, self.max_episode_length = 1, actions, device, cfg, 1
+        self.observations = observations
+
+    def get_observations(self):
+        return self.observations
+
+
 def run_worker(config, trainings, request, scene, model_paths, directory):
     import numpy as np
     import torch
@@ -243,41 +395,53 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
     from g1_wbc import finite, pose_matrix, quat_xyzw_matrices
 
     approach, profile, asset, runtime = trainings["approach"]
-    carry_config = trainings["carry"][0]
+    carry_config, push_config = trainings["carry"][0], trainings["push"][0]
+    pushing, auto = request["strategy"] == "push", request["strategy"] == "auto"
     contract, reference = trial_contract(profile)
     policy = ppo.gr00t_policy(contract, model_paths)
     encoder = require_ffmpeg(directory)
-    o, mass = approach["object"], float(request["corrections"]["mass_kg"])
+    mass = float(request["corrections"]["mass_kg"])
+    # The room depends on the reach only through goals and paths, so the walls are authored from a layout with the
+    # training defaults; the layout is re-checked with the measured reaches once the scene exists.
+    layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], 0.411, config["push"])
+    # A carried item is the trained cabinet; a pushed or auto item has its corrected size (in the grip frame for auto)
+    # and stands on furniture sliders (they do not change lifting).
+    o = approach["object"] if request["strategy"] == "carry" else {**approach["object"], "size_m": layout["size_m"]}
+    friction = o["friction"] if request["strategy"] == "carry" else config["push"]["slider_friction"]
     torch.manual_seed(approach["seed"])
     wp.config.enable_backward = False
     from isaaclab.app import launch_simulation
 
-    scene_profile, built = carry.carry_scene(approach, profile, asset, runtime, contract, reference, np.array([mass]),
-                                             num_envs=1, env_spacing=approach["env_spacing_m"], with_camera=True)
+    scene_profile, built = carry.carry_scene({**approach, "object": o}, profile, asset, runtime, contract, reference,
+                                             np.array([mass]), num_envs=1, env_spacing=approach["env_spacing_m"],
+                                             with_camera=True)
     base = lift.base_pose(reference, asset, contract)
-    frames = lift.attachment_frames(reference, base, o, contract["height_command"])
+    trained = lift.attachment_frames(reference, base, approach["object"], contract["height_command"])
+    frames = lift.attachment_frames(reference, base, o, contract["height_command"]) if auto else trained
     joints = [n for side in lift.SIDES for n in lift.arm_joints(reference, side)]
     angles = {name: {n: v for side in lift.SIDES for n, v in lift.arm_pose(reference, base, side, dz).items()}
               for name, dz in (("start", 0.0), ("lift", approach["arm_lift_m"]), ("place", -0.02))}
     arm = {name: np.array([[pose[n] for n in joints]]) for name, pose in angles.items()}
     evidence = directory / "rehearsal-worker.json"
-    result = {"status": "running", "request": request, "mass_kg": mass,
-              "checkpoints": {task: config[f"{task}_checkpoint"] for task in ("approach", "carry")}, "phases": {}}
+    result = {"status": "running", "request": request, "mass_kg": mass, "friction": friction,
+              "checkpoints": {"approach": config["approach_checkpoint"],
+                              **({} if pushing else {"carry": config["carry_checkpoint"]}),
+                              **({"push": config["push"]["checkpoint"]} if pushing or auto else {})},
+              "phases": {}}
     write_json(evidence, result)
     env_path = "/World/envs/env_0"
     with launch_simulation(built.cfg, {**rl.LAUNCH_SETTINGS, "enable_cameras": True, "device": runtime["device"]}):
         try:
             def edits(stage, robot, box, env):
-                lift.apply_hand_attachment(stage, robot, box, env, frames, False)
+                # Carrying filters hand collisions with the cabinet (the palms meet its sides); pushing needs them, so
+                # an auto item (grasped, then perhaps pushed) keeps them, its grip faces flush with the palms.
+                if not pushing:
+                    lift.apply_hand_attachment(stage, robot, box, env, frames, False, filter_hands=not auto)
                 result["walls"] = len(carry.apply_corridor(stage, env, rg.wall_boxes(
                     layout["room"], approach["room"]["wall_thickness_m"], approach["room"]["wall_height_m"])))
 
-            # The pre-grasp reach comes from the nominal grasp at the crouch start; it is known only after the scene
-            # exists, but the room (walls) must be authored before it. The room depends on the reach only through goals
-            # and paths, so the layout is built with the training default and re-checked below.
-            layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], 0.411)
             s = rl.prepare_push_scene(built, 1, scene_profile, asset, runtime, contract, reference, directory, result,
-                                      evidence, box_properties=(np.array([mass]), np.array([float(o["friction"])])),
+                                      evidence, box_properties=(np.array([mass]), np.array([float(friction)])),
                                       extra_edits=edits, check_box_start=False)
             palm_ids = {side: s.bodies.index(f"{side}_hand_palm_link") for side in lift.SIDES}
 
@@ -285,30 +449,55 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                 poses = finite(s.batch(s.robot.data.body_link_pose_w), (1, len(s.bodies), 7))
                 return {side: [pose_matrix(poses[0, k])] for side, k in palm_ids.items()}
 
-            # Cabinet pose both palm joints expect at the crouch start, relative to the root (defines the pre-grasp pose).
-            object_in_root = np.linalg.inv(pose_matrix(s.root[0])) @ palm_poses()["left"][0] @ frames["palm_object"]["left"]
+            # Trained cabinet pose both palm joints expect at the crouch start, relative to the root (pre-grasp reach).
+            object_in_root = np.linalg.inv(pose_matrix(s.root[0])) @ palm_poses()["left"][0] @ trained["palm_object"]["left"]
             reach = float(object_in_root[0, 3])
-            layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], reach)
-            result["layout"] = {"reach_m": reach, "room": {**layout["room"], "boxes": layout["room"]["boxes"].tolist()},
+            layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], reach, config["push"],
+                                      float(s.hand_reach))
+            result["layout"] = {"reach_m": reach, "hand_reach_m": float(s.hand_reach), "size_m": layout["size_m"],
+                                "room": {**layout["room"], "boxes": layout["room"]["boxes"].tolist()},
                                 **{k: np.asarray(layout[k]).tolist() for k in ("start", "cabinet", "placed", "approach_goal",
-                                                                               "carry_goal")},
-                                "spec_transform": layout["spec_transform"]}
+                                                                               "carry_goal") if k in layout},
+                                "push": layout.get("push"), "spec_transform": layout["spec_transform"]}
             write_json(evidence, result)
 
             from tensordict import TensorDict
             ids = [s.names.index(n) for n in joints]
-            room_config = {**approach, "num_envs": 1,
+            room_config = {**approach, "num_envs": 1, "object": o,
                            "room": {**approach["room"], "obstacles": [0, max(1, len(layout["room"]["boxes"]))]}}
             env = RehearsalEnv(layout, s, policy, contract, profile, asset, runtime, room_config, [layout["room"]],
                                np.array([mass]), object_in_root, (ids, arm["start"][0], arm["lift"][0]),
                                lambda groups: TensorDict(groups, batch_size=[1]))
             actors = {}
-            for task, training in (("approach", approach), ("carry", carry_config)):
+            for task, training in (("approach", approach),) + ((("carry", carry_config),) if not pushing else ()):
                 if config[f"{task}_checkpoint"] is None:
                     actors[task] = room.scripted_actor(training)
                 else:
                     actors[task], result["phases"][f"{task}_checkpoint_iteration"] = ppo_eval.load_policy(
                         env, training, ROOT / config[f"{task}_checkpoint"], runtime["device"])
+            if pushing or auto:
+                # The push policy's own observation (course frame) and critic (plus normalized mass and friction).
+                r = push_config["randomization"]
+                privileged = np.array([[(mass - r["mass_kg"][0])/(r["mass_kg"][1] - r["mass_kg"][0]),
+                                        (friction - r["friction"][0])/(r["friction"][1] - r["friction"][0])]])
+                identity = np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]])
+                size = len(ppo.task_observation(identity, np.zeros((1, 6)), identity, np.zeros((1, 6)), np.zeros((1, 3)),
+                                                np.zeros(1), np.zeros((1, 3)), np.zeros((1, 3)), np.zeros((1, 1)))[0])
+
+                def push_obs(task):
+                    return TensorDict({"policy": torch.as_tensor(task, dtype=torch.float32, device=runtime["device"]),
+                                       "critic": torch.as_tensor(np.c_[task, privileged], dtype=torch.float32,
+                                                                 device=runtime["device"])}, batch_size=[1])
+
+                if config["push"]["checkpoint"] is None:
+                    scripted = ppo.normalized_action([push_config["scripted_action"][k] for k in ppo.ACTION_KEYS],
+                                                     push_config["action_bounds"])
+                    actors["push"] = lambda obs: torch.as_tensor(scripted[None], dtype=torch.float32)
+                else:
+                    actors["push"], result["phases"]["push_checkpoint_iteration"] = ppo_eval.load_policy(
+                        PolicyShape(push_obs(np.zeros((1, size), dtype=np.float32)), len(ppo.ACTION_KEYS),
+                                    runtime["device"], push_config),
+                        push_config, ROOT / config["push"]["checkpoint"], runtime["device"])
 
             camera, (width, height) = s.scene["camera"], (profile["camera"]["width"], profile["camera"]["height"])
             cam, w, d = config["camera"], layout["room"]["width_m"], layout["room"]["depth_m"]
@@ -363,11 +552,114 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                 result["phases"][name] = flags
                 return not any(flags.values())
 
+            def push(course):
+                """Push policy decisions in the course frame until the push succeeds, fails or reaches its time limit."""
+                cfg = {**push_config, "goal_distance_m": course["distance_m"]}
+                origin, theta = np.asarray(course["origin"]), course["theta"]
+                limit = int(round(cfg["episode_seconds"]/env.decision_dt))
+                last, previous, zeros = np.zeros((1, len(ppo.ACTION_KEYS))), np.zeros(1), np.zeros((1, 3))
+
+                def state():
+                    robot = finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0]
+                    box = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                    robot_c, robot_v = course_frame(np.r_[robot[:3] - s.origins[0], robot[3:]],
+                                                    finite(s.batch(s.robot.data.root_link_vel_w), (1, 6))[0], origin, theta)
+                    box_c, box_v = course_frame(np.r_[box[:3] - s.origins[0], box[3:]],
+                                                finite(s.batch(s.box.data.root_link_vel_w), (1, 6))[0], origin, theta)
+                    return robot, robot_c[None], robot_v[None], square_yaw(box_c)[None], box_v[None]
+
+                for k in range(limit):
+                    robot, robot_c, robot_v, box_c, box_v = state()
+                    gravity = -(quat_xyzw_matrices(robot[None, 3:]) @ s.rotation)[:, 2, :]
+                    task = ppo.task_observation(robot_c, robot_v, box_c, box_v, zeros, np.array([cfg["goal_distance_m"]]),
+                                                gravity, last, np.array([[k/limit]]))
+                    action = np.clip(np.asarray(actors["push"](push_obs(task)).detach().cpu().numpy(), dtype=float), -1.0, 1.0)
+                    commands, rpys = ppo.action_commands(action, cfg["action_bounds"])
+                    low = {"invalid_action": np.zeros(1, dtype=bool), "fallen": np.zeros(1, dtype=bool)}
+                    for _ in range(cfg["decision_control_steps"]):
+                        _, _, invalid, fallen = env.control(commands, rpys)
+                        low["invalid_action"] |= invalid
+                        low["fallen"] |= fallen
+                    _, robot_c, _, box_c, _ = state()
+                    _, done, outcome, progress = ppo.task_step(box_c, robot_c, zeros, np.zeros(1), previous, action, last, low,
+                                                               cfg, env.decision_dt)
+                    previous, last = box_c[:, 0], action
+                    record("push", commands[0])
+                    if done[0]:
+                        return {"outcome": ppo.OUTCOMES[int(outcome[0])], "progress_m": float(progress[0]),
+                                "seconds": (k + 1)*env.decision_dt, "lateral_m": float(abs(box_c[0, 1]))}
+                return {"outcome": "time_out", "progress_m": float(previous[0]), "seconds": limit*env.decision_dt,
+                        "lateral_m": float(abs(box_c[0, 1]))}
+
+            def measure():
+                """Placement error of the item against the requested pose (carry tolerance)."""
+                item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                local = np.r_[item[:3] - s.origins[0], item[3:]]
+                error = placement_error(local, layout["placed"])
+                tolerance = carry_config["goal"]
+                result["placement"] = {
+                    **error, "cabinet_spec_xy_m": to_spec(local[:2], layout["spec_transform"]), "tilt_deg": lift.tilt_deg(item),
+                    "within_tolerance": bool(error["position_m"] <= tolerance["position_tolerance_m"] and
+                                             error["yaw_deg"] <= tolerance["yaw_tolerance_deg"])}
+
+            def diagnose():
+                """Muse Spark diagnoses the lift attempt from the measured outcome and the current frame; the capability
+                rules accept or override its strategy. Without the Meta Model API (no key or network) the rules decide,
+                and the error is recorded."""
+                settings = json.loads(advisor.DEFAULT_CONFIG.read_text())
+                phases = [frame["phase"] for frame in replay]
+                held = len(phases) - 1 - phases[::-1].index("hold")
+                frames = [case / "frames" / f"{k:06d}.png" for k in (held, count - 1)]     # end of the attempt, now
+                try:
+                    return advisor.advise(meta_models.MetaModels(), settings, request, scene,
+                                          {**result, "status": "lift_attempt"}, frames)
+                except Exception as error:
+                    return {"mode": "rules_only", "error": f"{type(error).__name__}: {error}",
+                            "decision": advisor.decide({"strategy": "push"}, request["corrections"]["size_m"], mass, settings)}
+
+            def reposition_and_push():
+                """Walk from where the lift attempt left the robot to the push pose of the item as it stands now, then
+                push it to the destination; returns the rehearsal status."""
+                robot = finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0]
+                item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                here = np.r_[item[:2] - s.origins[0, :2], ppo.yaw_of(item[None, 3:])[0]]
+                try:
+                    goal, course = push_geometry(layout["room"], here, layout["size_m"], layout["placed"], config["push"],
+                                                 float(s.hand_reach), approach["room"]["inflation_m"],
+                                                 carry_config["goal"]["object_margin_m"])
+                except ValueError as error:
+                    result["push_plan_error"] = str(error)
+                    return "failed_push_plan"
+                path = approach_path(layout["room"], robot[:2] - s.origins[0, :2], here, layout["size_m"], goal, approach)
+                if path is None:
+                    result["push_plan_error"] = "no collision-free path to the push pose"
+                    return "failed_push_plan"
+                result["layout"].update(push=course, push_goal=goal.tolist())
+                env.begin(room_config, goal, path, approach["lift_prefix_seconds"]["settle"])
+                result["phases"]["reposition"] = drive("reposition", actors["approach"])
+                write_json(evidence, result)
+                if result["phases"]["reposition"]["outcome"] != "success":
+                    return "failed_reposition"
+                result["phases"]["push"] = push(course)
+                if (result["phases"]["push"]["outcome"] != "fallen" and
+                        scripted("back_away", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))):
+                    measure()
+                return "completed_rehearsal" if result["phases"]["push"]["outcome"] == "success" else "failed_push"
+
             record("start")
             result["phases"]["approach"] = drive("approach", actors["approach"])
             write_json(evidence, result)
             status = "failed_approach"
-            if result["phases"]["approach"]["outcome"] == "success":
+            if result["phases"]["approach"]["outcome"] == "success" and pushing:
+                result["phases"]["push"] = push(layout["push"])
+                write_json(evidence, result)
+                status = "failed_push"
+                if (result["phases"]["push"]["outcome"] != "fallen" and
+                        scripted("back_away", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))):
+                    measure()
+                    if result["phases"]["push"]["outcome"] == "success":
+                        status = "completed_rehearsal"
+            elif result["phases"]["approach"]["outcome"] == "success":
                 # Reach: each palm to its grasp point on the cabinet where it stands; then grasp where the hands are.
                 pelvis = quat_xyzw_matrices(finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[:, 3:]) @ s.rotation
                 cabinet = pose_matrix(finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0])
@@ -384,8 +676,26 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                 result["grasp"]["object_shift_m"] = float(np.linalg.norm(
                     finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0, :3] - cabinet[:3, 3]))
                 ok = ok and scripted("lift", arm["reach"], arm["lift"]) and scripted("hold", arm["lift"], arm["lift"])
+                item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                bottom = lift.lowest_point_z(item, o["size_m"]) - s.origins[0, 2]
+                result["lift"] = {"lifted": bool(bottom >= carry_config["termination"]["object_floor_clearance_m"]),
+                                  "bottom_m": float(bottom), "mass_kg": mass}
+                in_tier = advisor.carry_rule(request["corrections"]["size_m"], mass,
+                                             json.loads(advisor.DEFAULT_CONFIG.read_text()))[0]
                 status = "failed_lift"
-                if ok:
+                if ok and auto and not (result["lift"]["lifted"] and in_tier):
+                    # The item did not leave the floor (or would leave the carry tier): set it down, let go, step back,
+                    # and let Meta diagnose the attempt.
+                    scripted("lower", arm["lift"], arm["place"])
+                    result["release_authored"] = lift.set_attachment(s.sim.stage, env_path, False)
+                    scripted("release", arm["place"], arm["place"])
+                    scripted("withdraw", arm["place"], arm["start"])
+                    scripted("step_back", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))
+                    result["advice"] = diagnose()
+                    write_json(evidence, result)
+                    strategy = result["advice"]["decision"]["strategy"]
+                    status = reposition_and_push() if strategy == "push" else f"advised_{strategy}"
+                elif ok and result["lift"]["lifted"]:
                     xy = finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0, :2] - s.origins[0, :2]
                     path = rg.staged_path(rg.occupancy(layout["room"], carry_config["room"]["grid_m"],
                                                        carry_config["room"]["inflation_m"]), xy, layout["carry_goal"],
@@ -414,19 +724,20 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                         if (scripted("release", arm["place"], arm["place"], dock=near) and
                                 scripted("withdraw", arm["place"], arm["start"]) and
                                 scripted("back_away", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))):
-                            cabinet = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
-                            local = np.r_[cabinet[:3] - s.origins[0], cabinet[3:]]
-                            error = placement_error(local, layout["placed"])
-                            tolerance = carry_config["goal"]
-                            result["placement"] = {
-                                **error, "cabinet_spec_xy_m": to_spec(local[:2], layout["spec_transform"]),
-                                "tilt_deg": lift.tilt_deg(cabinet),
-                                "within_tolerance": bool(error["position_m"] <= tolerance["position_tolerance_m"] and
-                                                         error["yaw_deg"] <= tolerance["yaw_tolerance_deg"])}
+                            measure()
                             if result["phases"]["carry"]["outcome"] == "success":
                                 status = "completed_rehearsal"
             result["video"] = encode_recording(case, binary=encoder, count=count, fps=1/Fraction(str(env.decision_dt)),
                                                width=width, height=height, require_motion=False)
+            # Key frames for the Meta model diagnosis (the frames folder is not downloaded): the end of each walking
+            # phase and the final scene.
+            phases = [frame["phase"] for frame in replay]
+            keys = sorted({len(phases) - 1 - phases[::-1].index(p) for p in ("approach", "hold", "carry", "push") if p in phases} |
+                          {len(phases) - 1})
+            (case / "key_frames").mkdir()
+            for k in keys:
+                shutil.copyfile(case / "frames" / f"{k:06d}.png", case / "key_frames" / f"{k:06d}_{phases[k]}.png")
+            result["key_frames"] = [f"{k:06d}_{phases[k]}.png" for k in keys]
             write_json(directory / "replay.json", {"bodies": list(s.bodies), "decision_dt": env.decision_dt,
                                                    "frame": "simulation room centred on the origin, x right, y toward the back wall; "
                                                             "spec = sign * sim + offset per axis (spec_transform)",
@@ -454,25 +765,32 @@ def main(argv=None):
     if args.request:
         config = {**config, "request": args.request}
     request, scene = load_request(repo_path(config["request"], "configs/", ".json"))
-    layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], 0.411)
+    layout = rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], 0.411, config["push"])
     if args.dry_run:
         import numpy as np
 
         def length(path):
             return float(np.linalg.norm(np.diff(path, axis=0), axis=1).sum())
 
-        print(json.dumps({"status": "local_plan_only", "target": request["target"], "mass_kg": request["corrections"]["mass_kg"],
+        pushing = request["strategy"] != "carry"
+        print(json.dumps({"status": "local_plan_only", "strategy": request["strategy"], "target": request["target"],
+                          "mass_kg": request["corrections"]["mass_kg"], "size_m": layout["size_m"],
                           "room_m": [layout["room"]["width_m"], layout["room"]["depth_m"]], "obstacles": len(layout["room"]["boxes"]),
-                          **{k: np.round(layout[k], 3).tolist() for k in ("start", "cabinet", "approach_goal", "placed", "carry_goal")},
-                          "approach_path_m": length(layout["approach_path"]), "carry_path_m": length(layout["carry_path"]),
-                          "checkpoints": {t: config[f"{t}_checkpoint"] or "scripted docking" for t in ("approach", "carry")}},
+                          **{k: np.round(layout[k], 3).tolist() for k in ("start", "cabinet", "approach_goal", "placed", "carry_goal",
+                                                                          "push_goal") if k in layout},
+                          "approach_path_m": length(layout["approach_path"]),
+                          **({"push": layout["push"]} if pushing else {"carry_path_m": length(layout["carry_path"])}),
+                          "checkpoints": {"approach": config["approach_checkpoint"] or "scripted docking",
+                                          **({"carry": config["carry_checkpoint"] or "scripted docking"}
+                                             if request["strategy"] != "push" else {}),
+                                          **({"push": config["push"]["checkpoint"] or "scripted push"} if pushing else {})}},
                          indent=2))
         return 0
     if platform.system() != "Linux" or platform.machine() != "x86_64":
         parser.error("Execute in the existing pinned Isaac image; use --dry-run on Mac")
-    for task in ("approach", "carry"):
-        if config[f"{task}_checkpoint"] is not None and not (ROOT / config[f"{task}_checkpoint"]).is_file():
-            parser.error(f"Missing checkpoint: {config[f'{task}_checkpoint']}")
+    for path in (config["approach_checkpoint"], config["carry_checkpoint"], config["push"]["checkpoint"]):
+        if path is not None and not (ROOT / path).is_file():
+            parser.error(f"Missing checkpoint: {path}")
     profile = trainings["approach"][1]
     contract, _ = trial_contract(profile)
     if args.worker:
@@ -491,8 +809,9 @@ def main(argv=None):
     path = directory / "rehearsal-worker.json"
     evidence = json.loads(path.read_text()) if path.exists() else {"status": "missing"}
     summary = {"status": evidence.get("status") if code == 0 else "failed", "exit_code": code, "run_dir": str(directory),
-               "approach": evidence.get("phases", {}).get("approach"), "grasp": evidence.get("grasp"),
-               "carry": evidence.get("phases", {}).get("carry"), "placement": evidence.get("placement"),
+               "strategy": request["strategy"], "approach": evidence.get("phases", {}).get("approach"),
+               "grasp": evidence.get("grasp"), "carry": evidence.get("phases", {}).get("carry"),
+               "push": evidence.get("phases", {}).get("push"), "placement": evidence.get("placement"),
                "video": (evidence.get("video") or {}).get("status"), "error": evidence.get("error")}
     write_json(directory / "summary.json", summary)
     print(json.dumps(summary), flush=True)
