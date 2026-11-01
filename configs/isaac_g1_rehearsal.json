@@ -8,7 +8,7 @@
            "slider_friction": 0.1, "gap_m": 0.09, "distance_m": [0.5, 1.5], "face_alignment_deg": 10.0},
   "request": "configs/rehearsal_living_room_pedestal.json",
   "start_inside_door_m": 0.6,
-  "timeline_seconds": {"reach": 1.0, "grasp": 0.5, "lift": 1.0, "hold": 0.5, "align": 4.0, "lower": 1.5, "release": 0.5, "withdraw": 1.0, "step_back": 1.0,
+  "timeline_seconds": {"reach": 1.0, "grasp": 0.5, "lift": 1.0, "hold": 0.5, "align": 4.0, "lower": 1.5, "release": 0.5, "withdraw": 1.0, "step_back": 4.0,
                        "back_away": 1.5},
   "back_away_mps": 0.1,
   "camera": {"eye_from_front_m": [0.0, 2.0, 5.5], "target_height_m": 0.0},

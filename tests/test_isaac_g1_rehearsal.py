@@ -308,6 +308,9 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertEqual((phases.count("approach"), phases.count("back_away")), (11, 15))
         self.assertEqual(phases.count("push"), len(observations))
         self.assertIn("push", result["key_frames"][-2])
+        # The camera looks at the middle of the push (item start (-0.1, 0) and destination (0.4, 0)) from the front.
+        np.testing.assert_allclose(fake.camera.targets[0], [0.15, 0.0, config["camera"]["target_height_m"]], atol=1e-9)
+        np.testing.assert_allclose(fake.camera.eyes[0][:2], [0.15, -2.0 - config["camera"]["eye_from_front_m"][1]], atol=1e-9)
 
 
     def test_worker_tries_to_lift_then_pushes(self):
@@ -337,7 +340,10 @@ class RehearsalWorkerTests(unittest.TestCase):
             fake.box.slide = lambda: np.zeros(1)
 
             def push_actor(obs):
-                fake.box.slide = slide
+                if fake.box.slide is not slide:
+                    # The double's slide grows with the steps since its last pose write; start it at zero here.
+                    fake.box.written[:] = fake.steps["count"] - 80
+                    fake.box.slide = slide
                 return Tensor(np.zeros((1, 3)))
 
             def load(env, training, path, device):
@@ -369,8 +375,9 @@ class RehearsalWorkerTests(unittest.TestCase):
         worker, frames = advise.call_args.args[4], advise.call_args.args[5]
         self.assertEqual((worker["status"], worker["lift"]["lifted"]), ("lift_attempt", False))
         # Frames: the end of the hold (frame 41) and the moment of the diagnosis, after lower 15, release 5, withdraw 10
-        # and step back 10 (frame 81).
-        self.assertEqual([f.name for f in frames], ["000041.png", "000081.png"])
+        # and the step back, which runs its full 4 s because the doubles do not move (frame 111).
+        self.assertEqual([f.name for f in frames], ["000041.png", "000111.png"])
+        self.assertLess(result["phases"]["step_back"]["clearance_m"], 0.5)
         self.assertEqual((result["advice"]["mode"], result["advice"]["decision"]["strategy"]), ("rules_only", "push"))
         self.assertIn("no META_API_KEY", result["advice"]["error"])
         self.assertEqual((result["phases"]["reposition"]["outcome"], result["phases"]["push"]["outcome"]), ("success", "success"))

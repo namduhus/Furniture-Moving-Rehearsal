@@ -501,9 +501,12 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
 
             camera, (width, height) = s.scene["camera"], (profile["camera"]["width"], profile["camera"]["height"])
             cam, w, d = config["camera"], layout["room"]["width_m"], layout["room"]["depth_m"]
-            # The camera stands in front of the room (the photo's side, sim -y) and looks toward the back wall.
-            eye = s.origins[0] + [cam["eye_from_front_m"][0], -d/2 - cam["eye_from_front_m"][1], cam["eye_from_front_m"][2]]
-            camera.set_world_poses_from_view(s.device(eye[None]), s.device((s.origins[0] + [0, 0, cam["target_height_m"]])[None]))
+            # The camera stands in front of the room (the photo's side, sim -y) and looks at the middle of the item's start
+            # and destination (the room centre left the bookcase at the top edge in the 5.8 m deep room of run 141513).
+            focus = (np.asarray(layout["cabinet"][:2]) + np.asarray(layout["placed"][:2]))/2
+            eye = s.origins[0] + [focus[0] + cam["eye_from_front_m"][0], -d/2 - cam["eye_from_front_m"][1], cam["eye_from_front_m"][2]]
+            target = s.origins[0] + [focus[0], focus[1], cam["target_height_m"]]
+            camera.set_world_poses_from_view(s.device(eye[None]), s.device(target[None]))
             case = directory / "rehearsal"
             (case / "frames").mkdir(parents=True)
             replay, count = [], 0
@@ -602,6 +605,24 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     "within_tolerance": bool(error["position_m"] <= tolerance["position_tolerance_m"] and
                                              error["yaw_deg"] <= tolerance["yaw_tolerance_deg"])}
 
+            def step_back():
+                """Walk backwards until the root keeps the room inflation plus 5 cm from the item (at most the step_back
+                time), so the robot can turn without sweeping it: run 20261101T141513 stepped back only 5 cm in 1 s and
+                its arms pushed the bookcase while turning toward the push pose."""
+                command = (-config["back_away_mps"], 0.0, 0.0)
+                flags, clearance = {"invalid_action": False, "fallen": False}, 0.0
+                for _ in range(int(round(config["timeline_seconds"]["step_back"]/env.decision_dt))):
+                    robot = finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[0]
+                    item = finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0]
+                    clearance = float(rg.rotated_distance(robot[:2] - s.origins[0, :2], item[:2] - s.origins[0, :2],
+                                                          layout["size_m"][:2], ppo.yaw_of(item[None, 3:])[0]))
+                    if clearance >= approach["room"]["inflation_m"] + 0.05:
+                        break
+                    for step in env.hold(arm["start"], arm["start"], 1, command):
+                        flags = {k: flags[k] or step[k] for k in flags}
+                    record("step_back", command)
+                result["phases"]["step_back"] = {**flags, "clearance_m": clearance}
+
             def diagnose():
                 """Muse Spark diagnoses the lift attempt from the measured outcome and the current frame; the capability
                 rules accept or override its strategy. Without the Meta Model API (no key or network) the rules decide,
@@ -690,7 +711,7 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     result["release_authored"] = lift.set_attachment(s.sim.stage, env_path, False)
                     scripted("release", arm["place"], arm["place"])
                     scripted("withdraw", arm["place"], arm["start"])
-                    scripted("step_back", arm["start"], arm["start"], (-config["back_away_mps"], 0.0, 0.0))
+                    step_back()
                     result["advice"] = diagnose()
                     write_json(evidence, result)
                     strategy = result["advice"]["decision"]["strategy"]
