@@ -431,7 +431,8 @@ class CarryTaskEnv:
         reward, terminated, outcome = task_step(state, self.previous_progress, prefix, action, self.last_action,
                                                 low_level, self.config, self.decision_dt)
         self.last_task = {"clearance_m": np.minimum(state["object_clearance_m"], state["robot_clearance_m"]),
-                          "tilt_rad": state["tilt_rad"], "active": ~prefix}
+                          "tilt_rad": state["tilt_rad"], "active": ~prefix,
+                          "speed_mps": np.linalg.norm(finite(s.batch(s.robot.data.root_link_vel_w), (n, 6))[:, :2], axis=1)}
         self.previous_progress = state["progress_m"].copy()
         self.last_action = action
         self.length += 1
@@ -460,13 +461,14 @@ class CarryTaskEnv:
 def evaluate(env, act, seed):
     """One episode per environment from seeded starts; outcomes are also grouped by corridor width, turn and mass.
 
-    Commands are sampled once per decision after the lift prefix until each environment's episode ends.
+    Commands and the robot's planar root speed are sampled once per decision after the lift prefix until each
+    environment's episode ends.
     """
     import numpy as np
     n = env.num_envs
     env.reset_envs(np.arange(n), np.random.default_rng(seed))
     env.obs = env.observe()
-    first, commands = {}, [[] for _ in range(n)]
+    first, commands, speeds = {}, [[] for _ in range(n)], [[] for _ in range(n)]
     clearance, tilt = np.full(n, np.inf), np.zeros(n)
     for _ in range(env.max_episode_length):
         active = [i for i in range(n) if i not in first]
@@ -476,6 +478,7 @@ def evaluate(env, act, seed):
             tilt[i] = max(tilt[i], env.last_task["tilt_rad"][i])
             if env.last_task["active"][i]:
                 commands[i].append(env.last_command[i])
+                speeds[i].append(env.last_task["speed_mps"][i])
         for i, record in env.last_completed.items():
             first.setdefault(i, record)
         if len(first) == n:
@@ -488,6 +491,7 @@ def evaluate(env, act, seed):
                         "turn": "left" if env.corridors["turn"][i] > 0 else "right", "mass_kg": float(env.masses[i]),
                         **first[i], "min_wall_clearance_m": float(clearance[i]),
                         "max_object_tilt_deg": float(np.degrees(tilt[i])),
+                        "speed_mps": {"mean": float(np.mean(speeds[i])), "max": float(np.max(speeds[i]))} if speeds[i] else None,
                         "commands": {"decisions": len(c),
                                      "forward_mean_mps": float(c[:, 0].mean()) if len(c) else None,
                                      "forward_max_mps": float(c[:, 0].max()) if len(c) else None,
@@ -497,19 +501,89 @@ def evaluate(env, act, seed):
     groups = {"narrow": [r for r in records if r["width_m"] < width], "wide": [r for r in records if r["width_m"] >= width],
               "left": [r for r in records if r["turn"] == "left"], "right": [r for r in records if r["turn"] == "right"],
               "light": [r for r in records if r["mass_kg"] < mass], "heavy": [r for r in records if r["mass_kg"] >= mass]}
-    return {**ppo.episode_summary(records, OUTCOMES), "seed": seed,
+    samples = np.concatenate([np.asarray(v, dtype=float) for v in speeds if v]) if any(speeds) else np.zeros(0)
+    walking = {"mean": float(samples.mean()), "p95": float(np.percentile(samples, 95)), "max": float(samples.max())} if len(samples) else None
+    return {**ppo.episode_summary(records, OUTCOMES), "seed": seed, "walking_speed_mps": walking,
             "groups": {k: ppo.episode_summary(v, OUTCOMES) for k, v in groups.items()}, "per_env": records}
+
+
+def carry_scene(config, profile, asset, runtime, contract, reference, masses, *, num_envs, env_spacing, with_camera):
+    """Scene configuration in which the cabinet replaces the push box (each environment authors its own mass)."""
+    o = config["object"]
+    scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": float(masses[0]), "friction": o["friction"],
+                                                "gap_m": profile["push_object"]["gap_m"]}}
+    return scene_profile, rl.scene_config(scene_profile, asset, runtime, contract, reference, with_camera=with_camera,
+                                          num_envs=num_envs, env_spacing=env_spacing, replicate_physics=False)
+
+
+def prepare_carry_env(built, scene_profile, config, profile, asset, runtime, contract, reference, policy, corridors, masses,
+                      directory, result, evidence):
+    """Instantiate the scene with palm attachments and corridor walls, check the held start pose and the spawn wall
+    clearance in every environment, and return the task environment."""
+    import numpy as np
+    from g1_wbc import finite, matrix_quat_xyzw, pose_matrix
+    count, o = len(masses), config["object"]
+    base = lift.base_pose(reference, asset, contract)
+    frames = lift.attachment_frames(reference, base, o, contract["height_command"])
+    joints = [n for side in lift.SIDES for n in lift.arm_joints(reference, side)]
+    lifted = {n: v for side in lift.SIDES for n, v in lift.arm_pose(reference, base, side, config["arm_lift_m"]).items()}
+    result["arm_lift_rad"] = lifted
+    attachments, walls = {}, {}
+
+    def edits(stage, robot, box, env):
+        i = int(env.rsplit("_", 1)[1])
+        attachments[env] = lift.apply_hand_attachment(stage, robot, box, env, frames)
+        walls[env] = apply_corridor(stage, env, corridor_walls(corridors["width_m"][i], corridors["corner_m"][i],
+                                                               corridors["turn"][i], config["corridor"]))
+
+    s = rl.prepare_push_scene(built, count, scene_profile, asset, runtime, contract, reference, directory, result,
+                              evidence, box_properties=(masses, np.full(count, float(o["friction"]))),
+                              extra_edits=edits, check_box_start=False)
+    result["authored"] = {"attachment_env0": attachments["/World/envs/env_0"],
+                          "environments": sorted(set(attachments) & set(walls), key=lambda e: int(e.rsplit("_", 1)[1])),
+                          "walls_per_environment": len(walls["/World/envs/env_0"])}
+    # Cabinet pose that both palm joints expect at the crouch start, relative to the robot root.
+    palm_ids = {side: s.bodies.index(f"{side}_hand_palm_link") for side in lift.SIDES}
+    poses = finite(s.batch(s.robot.data.body_link_pose_w), (count, len(s.bodies), 7))
+    relative, mismatch, bottoms = [], [], []
+    for i in range(count):
+        held = {side: pose_matrix(poses[i, k]) @ frames["palm_object"][side] for side, k in palm_ids.items()}
+        mismatch.append(float(np.linalg.norm(held["left"][:3, 3] - held["right"][:3, 3])))
+        relative.append(np.linalg.inv(pose_matrix(s.root[i])) @ held["left"])
+        bottoms.append(lift.lowest_point_z(np.r_[held["left"][:3, 3], matrix_quat_xyzw(held["left"][:3, :3])], o["size_m"]))
+    spread = float(max(np.abs(r - relative[0]).max() for r in relative))
+    expected = o["start_clearance_m"] + result["initialization"]["lift_m"]
+    result["start"] = {"palm_frame_mismatch_max_m": max(mismatch), "relative_pose_spread": spread,
+                       "object_bottom_m": [min(bottoms), max(bottoms)], "expected_bottom_m": expected,
+                       "object_in_root": relative[0].tolist()}
+    write_json(evidence, result)
+    if max(mismatch) > 0.002 or spread > 0.001 or max(abs(b - expected) for b in bottoms) > 0.01:
+        raise RuntimeError("Attached cabinet start pose is inconsistent with the palms or the standing height")
+
+    from tensordict import TensorDict
+    arms = ([s.names.index(n) for n in joints], np.zeros(len(joints)), np.array([lifted[n] for n in joints]))
+    env = CarryTaskEnv(s, policy, contract, profile, asset, runtime, config, corridors, masses, relative[0], arms,
+                       lambda groups: TensorDict(groups, batch_size=[count]))
+    # Body poses refresh only through the simulation, so update kinematics before the spawn check.
+    s.sim.forward()
+    s.scene.update(0.0)
+    state = env.task_state()[2]
+    clearance = np.minimum(state["object_clearance_m"], state["robot_clearance_m"])
+    result["start"]["wall_clearance_min_m"] = float(clearance.min())
+    write_json(evidence, result)
+    if clearance.min() <= config["termination"]["wall_contact_m"]:
+        raise RuntimeError("A robot or cabinet starts in contact with its corridor walls")
+    return env
 
 
 def run_worker(config, profile, asset, runtime, model_paths, directory):
     import numpy as np
     import torch
     import warp as wp
-    from g1_wbc import finite, matrix_quat_xyzw, pose_matrix
 
     contract, reference = trial_contract(profile)
     policy = ppo.gr00t_policy(contract, model_paths)
-    count, o = config["num_envs"], config["object"]
+    count = config["num_envs"]
     torch.manual_seed(config["seed"])
     wp.config.enable_backward = False
     rng = np.random.default_rng(config["seed"])
@@ -517,67 +591,16 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     masses = rng.uniform(*config["mass_kg"], count)
     from isaaclab.app import launch_simulation
 
-    # The cabinet replaces the push box in the shared scene; each environment authors its own mass.
-    scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": float(masses[0]), "friction": o["friction"],
-                                                "gap_m": profile["push_object"]["gap_m"]}}
-    built = rl.scene_config(scene_profile, asset, runtime, contract, reference, with_camera=False, num_envs=count,
-                            env_spacing=config["env_spacing_m"], replicate_physics=False)
-    base = lift.base_pose(reference, asset, contract)
-    frames = lift.attachment_frames(reference, base, o, contract["height_command"])
-    joints = [n for side in lift.SIDES for n in lift.arm_joints(reference, side)]
-    lifted = {n: v for side in lift.SIDES for n, v in lift.arm_pose(reference, base, side, config["arm_lift_m"]).items()}
+    scene_profile, built = carry_scene(config, profile, asset, runtime, contract, reference, masses, num_envs=count,
+                                       env_spacing=config["env_spacing_m"], with_camera=False)
     evidence = directory / "carry-worker.json"
     result = {"status": "running", "num_envs": count, "masses_kg": masses.tolist(),
-              "corridors": {k: v.tolist() for k, v in corridors.items()}, "arm_lift_rad": lifted}
+              "corridors": {k: v.tolist() for k, v in corridors.items()}}
     write_json(evidence, result)
     with launch_simulation(built.cfg, {**rl.LAUNCH_SETTINGS, "device": runtime["device"]}):
         try:
-            attachments, walls = {}, {}
-
-            def edits(stage, robot, box, env):
-                i = int(env.rsplit("_", 1)[1])
-                attachments[env] = lift.apply_hand_attachment(stage, robot, box, env, frames)
-                walls[env] = apply_corridor(stage, env, corridor_walls(corridors["width_m"][i], corridors["corner_m"][i],
-                                                                       corridors["turn"][i], config["corridor"]))
-
-            s = rl.prepare_push_scene(built, count, scene_profile, asset, runtime, contract, reference, directory, result,
-                                      evidence, box_properties=(masses, np.full(count, float(o["friction"]))),
-                                      extra_edits=edits, check_box_start=False)
-            result["authored"] = {"attachment_env0": attachments["/World/envs/env_0"],
-                                  "environments": sorted(set(attachments) & set(walls), key=lambda e: int(e.rsplit("_", 1)[1])),
-                                  "walls_per_environment": len(walls["/World/envs/env_0"])}
-            # Cabinet pose that both palm joints expect at the crouch start, relative to the robot root.
-            palm_ids = {side: s.bodies.index(f"{side}_hand_palm_link") for side in lift.SIDES}
-            poses = finite(s.batch(s.robot.data.body_link_pose_w), (count, len(s.bodies), 7))
-            relative, mismatch, bottoms = [], [], []
-            for i in range(count):
-                held = {side: pose_matrix(poses[i, k]) @ frames["palm_object"][side] for side, k in palm_ids.items()}
-                mismatch.append(float(np.linalg.norm(held["left"][:3, 3] - held["right"][:3, 3])))
-                relative.append(np.linalg.inv(pose_matrix(s.root[i])) @ held["left"])
-                bottoms.append(lift.lowest_point_z(np.r_[held["left"][:3, 3], matrix_quat_xyzw(held["left"][:3, :3])], o["size_m"]))
-            spread = float(max(np.abs(r - relative[0]).max() for r in relative))
-            expected = o["start_clearance_m"] + result["initialization"]["lift_m"]
-            result["start"] = {"palm_frame_mismatch_max_m": max(mismatch), "relative_pose_spread": spread,
-                               "object_bottom_m": [min(bottoms), max(bottoms)], "expected_bottom_m": expected,
-                               "object_in_root": relative[0].tolist()}
-            write_json(evidence, result)
-            if max(mismatch) > 0.002 or spread > 0.001 or max(abs(b - expected) for b in bottoms) > 0.01:
-                raise RuntimeError("Attached cabinet start pose is inconsistent with the palms or the standing height")
-
-            from tensordict import TensorDict
-            arms = ([s.names.index(n) for n in joints], np.zeros(len(joints)), np.array([lifted[n] for n in joints]))
-            env = CarryTaskEnv(s, policy, contract, profile, asset, runtime, config, corridors, masses, relative[0], arms,
-                               lambda groups: TensorDict(groups, batch_size=[count]))
-            # Body poses refresh only through the simulation, so update kinematics before the spawn check.
-            s.sim.forward()
-            s.scene.update(0.0)
-            state = env.task_state()[2]
-            clearance = np.minimum(state["object_clearance_m"], state["robot_clearance_m"])
-            result["start"]["wall_clearance_min_m"] = float(clearance.min())
-            write_json(evidence, result)
-            if clearance.min() <= config["termination"]["wall_contact_m"]:
-                raise RuntimeError("A robot or cabinet starts in contact with its corridor walls")
-
+            env = prepare_carry_env(built, scene_profile, config, profile, asset, runtime, contract, reference, policy,
+                                    corridors, masses, directory, result, evidence)
             result["scripted_eval"] = evaluate(
                 env, lambda obs: torch.as_tensor(pursuit_actions(obs["policy"].detach().cpu().numpy(), config),
                                                  dtype=torch.float32), config["seed"] + 1)
