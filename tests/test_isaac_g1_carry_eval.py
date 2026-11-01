@@ -110,7 +110,7 @@ class CarryEvaluationWorkerTests(unittest.TestCase):
             e = result[name]
             self.assertEqual((e["episodes"], e["seed"]), (3, config["held_out"]["start_seed"]))
             # The robot double never moves, so the logged walking speed is zero.
-            self.assertEqual(e["walking_speed_mps"], {"mean": 0.0, "p95": 0.0, "max": 0.0})
+            self.assertEqual(e["walking_speed_mps"], {"mean": 0.0, "p95": 0.0, "max": 0.0, "fraction_above_limit": 0.0})
             self.assertTrue(all(r["commands"]["forward_max_mps"] == forward for r in e["per_env"]))
 
     def test_showcase_stage_records_pursuit_and_learned_runs_of_each_corridor(self):

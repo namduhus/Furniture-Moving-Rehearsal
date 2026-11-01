@@ -96,8 +96,9 @@ def load_config(path):
             not number(term["object_tilt_rad"], 0.05, 1.0) or not number(term["object_floor_clearance_m"], 0.0, 0.05)):
         raise ValueError("Invalid termination limits")
     w = config["reward"]
-    if (set(w) != {"progress", "wall", "safe_clearance_m", "action_rate", "failure", "success"} or
-            not all(number(v, 0.0, 100.0) for v in w.values()) or not number(w["safe_clearance_m"], 0.01, 0.5)):
+    if (set(w) != {"progress", "wall", "safe_clearance_m", "action_rate", "speed_limit_mps", "overspeed", "failure", "success"} or
+            not all(number(v, 0.0, 100.0) for v in w.values()) or not number(w["safe_clearance_m"], 0.01, 0.5) or
+            not number(w["speed_limit_mps"], 0.1, 1.0)):
         raise ValueError("Invalid reward weights")
     sc = config["scripted"]
     if set(sc) != {"forward_mps", "yaw_gain"} or not number(sc["forward_mps"], *b["forward_mps"]) or not number(sc["yaw_gain"], 0.0, 5.0):
@@ -238,7 +239,8 @@ def task_step(state, previous_progress, prefix, actions, last_actions, low_level
     """Reward, termination and outcome index (into OUTCOMES, -1 while running) for one high-level decision.
 
     During the lift prefix the policy has no control: failures still end the episode, the shaping terms are zero and
-    the cabinet may rest on the floor.
+    the cabinet may rest on the floor. state["speed_mps"] is the robot's mean planar walking speed over the decision;
+    the part above speed_limit_mps is penalized.
     """
     import numpy as np
     t, w = config["termination"], config["reward"]
@@ -251,7 +253,8 @@ def task_step(state, previous_progress, prefix, actions, last_actions, low_level
     outcome = np.where(failed, np.argmax(flags, axis=0), np.where(success, OUTCOMES.index("success"), -1))
     shaping = (w["progress"]*(state["progress_m"] - previous_progress)/decision_dt
                - w["wall"]*np.clip(1.0 - clearance/w["safe_clearance_m"], 0.0, 1.0)
-               - w["action_rate"]*np.sum((actions - last_actions)**2, axis=1))
+               - w["action_rate"]*np.sum((actions - last_actions)**2, axis=1)
+               - w["overspeed"]*np.maximum(state["speed_mps"] - w["speed_limit_mps"], 0.0))
     reward = np.where(prefix, 0.0, shaping) - w["failure"]*failed + w["success"]*success
     return reward, failed | success, outcome
 
@@ -408,15 +411,18 @@ class CarryTaskEnv:
         rpys = np.zeros((n, 3))
         low_level = {"invalid_action": np.zeros(n, dtype=bool), "fallen": np.zeros(n, dtype=bool)}
         steps = self.config["decision_control_steps"]
+        speed = np.zeros(n)
         for k in range(steps):
             for _ in range(self.asset["control_decimation"]):
                 s.scene.write_data_to_sim()
                 s.sim.step(render=False)
                 s.scene.update(self.asset["physics_dt"])
             pose = finite(s.batch(s.robot.data.root_link_pose_w), (n, 7))
+            velocity = finite(s.batch(s.robot.data.root_link_vel_w), (n, 6))
+            speed += np.linalg.norm(velocity[:, :2], axis=1)/steps
             observation = self.history.observe(s.batch(s.robot.data.joint_pos)[:, s.indices],
                                                s.batch(s.robot.data.joint_vel)[:, s.indices], pose[:, 3:],
-                                               s.batch(s.robot.data.root_link_vel_w)[:, 3:], s.rotation, commands, rpys)
+                                               velocity[:, 3:], s.rotation, commands, rpys)
             lower_targets, _, invalid = self.history.targets(self.policy.batch(observation, commands), s.limits)
             self.targets[:, s.lower_indices] = lower_targets
             # Arms hold the start pose while settling, then ramp to the lift pose over the lift interval.
@@ -427,12 +433,11 @@ class CarryTaskEnv:
             low_level["invalid_action"] |= invalid
             low_level["fallen"] |= ((pose[:, 2] < profile["minimum_base_height_m"]) |
                                     (np.arccos(np.clip(-gravity[:, 2], -1, 1)) > profile["maximum_tilt_rad"]))
-        state = self.task_state()[2]
+        state = {**self.task_state()[2], "speed_mps": speed}
         reward, terminated, outcome = task_step(state, self.previous_progress, prefix, action, self.last_action,
                                                 low_level, self.config, self.decision_dt)
         self.last_task = {"clearance_m": np.minimum(state["object_clearance_m"], state["robot_clearance_m"]),
-                          "tilt_rad": state["tilt_rad"], "active": ~prefix,
-                          "speed_mps": np.linalg.norm(finite(s.batch(s.robot.data.root_link_vel_w), (n, 6))[:, :2], axis=1)}
+                          "tilt_rad": state["tilt_rad"], "active": ~prefix, "speed_mps": speed}
         self.previous_progress = state["progress_m"].copy()
         self.last_action = action
         self.length += 1
@@ -461,7 +466,7 @@ class CarryTaskEnv:
 def evaluate(env, act, seed):
     """One episode per environment from seeded starts; outcomes are also grouped by corridor width, turn and mass.
 
-    Commands and the robot's planar root speed are sampled once per decision after the lift prefix until each
+    Commands and the robot's mean planar walking speed are sampled once per decision after the lift prefix until each
     environment's episode ends.
     """
     import numpy as np
@@ -502,7 +507,9 @@ def evaluate(env, act, seed):
               "left": [r for r in records if r["turn"] == "left"], "right": [r for r in records if r["turn"] == "right"],
               "light": [r for r in records if r["mass_kg"] < mass], "heavy": [r for r in records if r["mass_kg"] >= mass]}
     samples = np.concatenate([np.asarray(v, dtype=float) for v in speeds if v]) if any(speeds) else np.zeros(0)
-    walking = {"mean": float(samples.mean()), "p95": float(np.percentile(samples, 95)), "max": float(samples.max())} if len(samples) else None
+    limit = env.config["reward"]["speed_limit_mps"]
+    walking = {"mean": float(samples.mean()), "p95": float(np.percentile(samples, 95)), "max": float(samples.max()),
+               "fraction_above_limit": float((samples > limit).mean())} if len(samples) else None
     return {**ppo.episode_summary(records, OUTCOMES), "seed": seed, "walking_speed_mps": walking,
             "groups": {k: ppo.episode_summary(v, OUTCOMES) for k, v in groups.items()}, "per_env": records}
 

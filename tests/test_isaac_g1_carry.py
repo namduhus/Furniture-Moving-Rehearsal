@@ -83,7 +83,8 @@ class TaskStepTests(unittest.TestCase):
         config = carry.load_config(carry.DEFAULT_CONFIG)[0]
         n = 7
         state = {"progress_m": np.full(n, 1.0), "goal_m": np.full(n, 2.2), "object_clearance_m": np.full(n, 0.3),
-                 "robot_clearance_m": np.full(n, 0.3), "bottom_m": np.full(n, 0.05), "tilt_rad": np.full(n, 0.1)}
+                 "robot_clearance_m": np.full(n, 0.3), "bottom_m": np.full(n, 0.05), "tilt_rad": np.full(n, 0.1),
+                 "speed_mps": np.full(n, 0.2)}
         state["progress_m"][1] = 2.25                     # success
         state["object_clearance_m"][2] = 0.005            # cabinet within the 1 cm contact distance
         state["tilt_rad"][3] = 0.4                        # tipped
@@ -103,6 +104,12 @@ class TaskStepTests(unittest.TestCase):
         # Inside the safe clearance the wall term grows linearly; contact also costs the failure penalty.
         self.assertAlmostEqual(reward[2], w["progress"]*0.01/0.1 - w["wall"]*0.95 - w["failure"], places=9)
         self.assertEqual(reward[5], 0.0)
+        # With the speed-limited weights, only walking above 0.3 m/s costs reward.
+        limited = carry.load_config(ROOT / "configs/isaac_g1_carry_speed.json")[0]
+        self.assertEqual(limited["reward"]["speed_limit_mps"], 0.3)
+        fast = {**state, "speed_mps": np.r_[0.5, np.full(n - 1, 0.25)]}
+        slowed = carry.task_step(fast, np.full(n, 0.99), prefix, actions, last, low, limited, 0.1)[0]
+        np.testing.assert_allclose(slowed - reward, np.r_[-limited["reward"]["overspeed"]*0.2, np.zeros(n - 1)], atol=1e-12)
 
     def test_configuration_rejects_unreviewed_masses_commands_and_overlap(self):
         raw = json.loads(carry.DEFAULT_CONFIG.read_text())
@@ -113,6 +120,7 @@ class TaskStepTests(unittest.TestCase):
                  {**raw, "scripted": {**raw["scripted"], "forward_mps": 0.5}},
                  {**raw, "corridor": {**raw["corridor"], "leg_two_m": 1.2}},
                  {**raw, "ppo": {**raw["ppo"], "hidden_dims": []}},
+                 {**raw, "reward": {**raw["reward"], "speed_limit_mps": 0.05}},
                  {**raw, "push_profile": "configs/isaac_g1_crouch_start_forward.json"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "carry.json"

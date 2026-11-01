@@ -70,6 +70,8 @@
     "wall": 1.0,
     "safe_clearance_m": 0.1,
     "action_rate": 0.1,
+    "speed_limit_mps": 0.3,
+    "overspeed": 0.0,
     "failure": 10.0,
     "success": 20.0
   },
