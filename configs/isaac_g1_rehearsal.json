@@ -5,7 +5,7 @@
   "carry_checkpoint": "outputs/isaac/20261101T113949.346965Z-room-carry/train/model_299.pt",
   "push": {"training": "configs/isaac_g1_ppo_push.json",
            "checkpoint": "outputs/isaac/20261030T173207.162496Z-ppo/train/model_99.pt",
-           "slider_friction": 0.1, "gap_m": 0.09, "distance_m": [0.5, 1.5], "face_alignment_deg": 10.0},
+           "slider_friction": 0.1, "gap_m": 0.09, "distance_m": [0.3, 1.5], "face_alignment_deg": 10.0},
   "request": "configs/rehearsal_living_room_pedestal.json",
   "start_inside_door_m": 0.6,
   "timeline_seconds": {"reach": 1.0, "grasp": 0.5, "lift": 1.0, "hold": 0.5, "align": 4.0, "lower": 1.5, "release": 0.5, "withdraw": 1.0, "step_back": 4.0,

@@ -131,7 +131,7 @@ def sim_size(size_m):
 
 def push_geometry(layout_room, item, size, placed, push_settings, hand_reach, inflation, margin):
     """Straight push of an item (x, y, yaw, box size [x, y, z]) to `placed`: push pose (palms gap_m from the pushed face,
-    hand_reach ahead of the root) and course. Raises ValueError unless the destination is the item moved 0.5-1.5 m
+    hand_reach ahead of the root) and course. Raises ValueError unless the destination is the item moved distance_m
     straight along one of its sides with the same heading, the pushed face is wide enough, the swept footprint is clear
     and the robot's line behind it keeps `inflation` from obstacles."""
     import numpy as np
