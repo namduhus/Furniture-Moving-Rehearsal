@@ -38,14 +38,14 @@ class LiftGeometryTests(unittest.TestCase):
 
     def test_arm_ik_moves_each_palm_without_rotating_it(self):
         start = self.reference.forward(self.base)
-        for dx, dz in ((0.0, 0.06), (0.0, -0.02), (0.08, 0.10), (0.08, -0.02)):
+        for dx, dy, dz in ((0.0, 0.0, 0.06), (0.0, 0.0, -0.02), (0.08, 0.0, 0.10), (0.08, 0.0, -0.02), (0.08, -0.05, 0.0)):
             q = dict(self.base)
             for side in ("left", "right"):
-                q.update(lift.arm_pose(self.reference, self.base, side, dz, dx))
+                q.update(lift.arm_pose(self.reference, self.base, side, dz, dx, dy))
             moved = self.reference.forward(q)
             for side in ("left", "right"):
                 palm = f"{side}_hand_palm_link"
-                np.testing.assert_allclose(moved[palm][:3, 3] - start[palm][:3, 3], [dx, 0, dz], atol=1e-7)
+                np.testing.assert_allclose(moved[palm][:3, 3] - start[palm][:3, 3], [dx, dy, dz], atol=1e-7)
                 np.testing.assert_allclose(moved[palm][:3, :3], start[palm][:3, :3], atol=1e-7)
             # Only arm joints move.
             self.assertEqual({n for n in q if q[n] != self.base[n]} - set(lift.arm_joints(self.reference, "left")) -
@@ -53,6 +53,33 @@ class LiftGeometryTests(unittest.TestCase):
         # 16 cm forward at the start height cannot keep the palm orientation (the reach checked before choosing 8 cm).
         with self.assertRaises(RuntimeError):
             lift.arm_pose(self.reference, self.base, "left", 0.0, 0.16)
+
+    def test_reach_moves_each_palm_to_its_grasp_point(self):
+        frames = lift.attachment_frames(self.reference, self.base, self.config["object"], self.contract["height_command"])
+        joints = [n for side in lift.SIDES for n in lift.arm_joints(self.reference, side)]
+        fk = self.reference.forward(self.base)
+        palms = {side: [fk[f"{side}_hand_palm_link"]]*2 for side in lift.SIDES}
+        yaw = np.radians(30.0)
+        pelvis = np.array([[np.cos(yaw), -np.sin(yaw), 0.0], [np.sin(yaw), np.cos(yaw), 0.0], [0.0, 0.0, 1.0]])
+        world = np.eye(4)
+        world[:3, :3] = pelvis
+        palms = {side: [world @ fk[f"{side}_hand_palm_link"]]*2 for side in lift.SIDES}
+        # Case 0: the object sits 3 cm further forward and 2 cm further left in the pelvis frame; case 1: 20 cm forward.
+        objects = []
+        for offset in ([0.03, 0.02, 0.0], [0.20, 0.0, 0.0]):
+            obj = world @ frames["pelvis_object"]
+            obj[:3, 3] += pelvis @ offset
+            objects.append(obj)
+        targets, report = lift.reach_plan(self.reference, self.base, 0.0, joints, frames["object_palm"], palms, objects,
+                                          [pelvis]*2)
+        q = {**self.base, **dict(zip(joints, targets[0]))}
+        for side in lift.SIDES:
+            np.testing.assert_allclose(report[0]["offset_m"][side], [0.03, 0.02, 0.0], atol=1e-9)
+            np.testing.assert_allclose(world @ self.reference.forward(q)[f"{side}_hand_palm_link"],
+                                       objects[0] @ frames["object_palm"][side], atol=1e-6)
+        self.assertIsNone(report[0]["error"])
+        # Offsets beyond the reach limit are clipped to it.
+        self.assertEqual(report[1]["applied_m"]["left"][0], lift.REACH_LIMIT_M[0])
 
     def test_both_palm_joints_imply_the_same_side_grasp_pose(self):
         o, height = self.config["object"], self.contract["height_command"]
@@ -125,15 +152,15 @@ class LiftGeometryTests(unittest.TestCase):
 
     def test_schedule_and_functional_checks(self):
         steps = lift.schedule(self.config["timeline"], 0.02)
-        self.assertEqual(len(steps), 625)
-        self.assertEqual(([s["phase"] for s in steps if s["grasp"]], [s["phase"] for s in steps if s["release"]]),
-                         (["grasp"], ["release"]))
+        self.assertEqual(len(steps), 675)
+        self.assertEqual(([s["phase"] for s in steps if s["reach"]], [s["phase"] for s in steps if s["grasp"]],
+                          [s["phase"] for s in steps if s["release"]]), (["reach"], ["grasp"], ["release"]))
         lift_steps = [s for s in steps if s["phase"] == "lift"]
-        self.assertEqual((lift_steps[0]["arms"], lift_steps[-1]["fraction"]), (["start", "lift"], 1.0))
+        self.assertEqual((lift_steps[0]["arms"], lift_steps[-1]["fraction"]), (["reach", "lift"], 1.0))
 
-        def record(phase, released, bottom, x, palm, error=0.001):
+        def record(phase, released, bottom, x, palm, error=0.001, gap=0.0):
             return {"phase": phase, "attached": not released, "released": released, "object_bottom_m": bottom, "object_xyz": [x, 0, 0.5],
-                    "attachment_error_m": error, "fallen": False, "object_tilt_deg": 1.0,
+                    "attachment_error_m": error, "palm_gap_m": gap, "fallen": False, "object_tilt_deg": 1.0,
                     "palm_z": {"left": palm, "right": palm}}
 
         records = ([record("hold", False, 0.08, 0.6, 0.94), record("carry", False, 0.07, 0.6, 0.94),
@@ -153,10 +180,13 @@ class LiftGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(bounded["palm_rise_m"], 0.10)
         self.assertEqual(bounded["held_tilt_max_deg"], 1.0)
         self.assertEqual((bounded["status"], bounded["checks"]["actions_in_bound"]), ("failed_lift_probe", False))
-        # A runtime grasp reports the palm-object error just before enabling and how far the object jumped.
-        loose = {**record("settle", True, 0.0, 0.6, 0.84, error=0.012), "released": False}
-        grasped = lift.lift_summary([loose, record("grasp", False, 0.0, 0.603, 0.84, error=0.0004)] + records +
+        # A runtime grasp reports the palm gap when the reach starts and ends, the palm-object error just before
+        # enabling and how far the object jumped.
+        reaching = {**record("reach", True, 0.0, 0.6, 0.84, error=0.05, gap=0.04), "released": False}
+        loose = {**record("reach", True, 0.0, 0.6, 0.84, error=0.012, gap=0.006), "released": False}
+        grasped = lift.lift_summary([reaching, loose, record("grasp", False, 0.0, 0.603, 0.84, error=0.0004)] + records +
                                     [record("withdraw", True, 0.001, 1.2, 0.88)], self.config["checks"])
+        self.assertEqual((grasped["grasp"]["palm_gap_reach_start_m"], grasped["grasp"]["palm_gap_at_grasp_m"]), (0.04, 0.006))
         self.assertEqual(grasped["grasp"]["error_before_m"], 0.012)
         self.assertAlmostEqual(grasped["grasp"]["object_shift_m"], 0.003)
         self.assertEqual(grasped["checks"]["attachment_held"], True)
@@ -176,7 +206,11 @@ class LiftGeometryTests(unittest.TestCase):
                  {**raw, "arm_offsets_m": {"lift": 0.1, "place": -0.02}}, {**raw, "extra": 1},
                  {**raw, "timeline": timeline + [{**timeline[1], "name": "grasp_again"}]},
                  {**raw, "timeline": [{**p, "grasp": True} if p["name"] == "hold" else p for p in timeline]},
-                 {**raw, "timeline": [{**p, "command": [0.2, 0, 0]} if p["name"] == "grasp" else p for p in timeline]}]
+                 {**raw, "timeline": [{**p, "command": [0.2, 0, 0]} if p["name"] == "grasp" else p for p in timeline]},
+                 {**raw, "object": {**raw["object"], "approach_error_m": [0.1, 0.0]}},
+                 {**raw, "timeline": [{**p, "reach": True} if p["name"] == "settle" else p for p in timeline]},
+                 {**raw, "timeline": [{**p, "arms": "reach"} if p["name"] == "settle" else p for p in timeline]},
+                 {**raw, "timeline": [{**p, "command": [0.2, 0, 0]} if p["name"] == "reach" else p for p in timeline]}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "lift.json"
             for data in cases:
@@ -206,7 +240,8 @@ class LiftWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, parallel_isaac(2, scene_profile, asset) as fake, \
                 mock.patch.dict(sys.modules, modules), \
                 mock.patch.object(lift, "apply_hand_attachment", side_effect=attach), \
-                mock.patch.object(lift, "set_attachment", side_effect=lambda stage, env, on: toggles.append((env, on)) or True), \
+                mock.patch.object(lift, "set_attachment",
+                                  side_effect=lambda stage, env, on, held=None: toggles.append((env, on, held)) or True), \
                 mock.patch.object(lift, "require_ffmpeg", return_value="ffmpeg"), \
                 mock.patch.object(lift, "encode_recording", return_value={"status": "passed_video_decode"}) as encode:
             fake.box.slide = lambda: np.zeros(2)
@@ -223,27 +258,39 @@ class LiftWorkerTests(unittest.TestCase):
         envs = ["/World/envs/env_0", "/World/envs/env_1"]
         # The config grasps at runtime: joints are authored disabled, enabled at the grasp and disabled at the release.
         self.assertEqual(attached, [(env, False) for env in envs])
-        self.assertEqual(toggles, [(env, True) for env in envs] + [(env, False) for env in envs])
+        self.assertEqual([(env, on, held is None) for env, on, held in toggles],
+                         [(env, True, False) for env in envs] + [(env, False, True) for env in envs])
+        # The reach moved each cabinet onto the floor 3 cm ahead and 2 cm left of the settled grasp pose (the doubles
+        # do not settle, so 5 cm below it). The forward grasp plus that offset is beyond the IK reach, so the arms keep
+        # the start pose and the grasp re-authors the joints to the offset palms instead.
+        drop = o["start_clearance_m"] + result["initialization"]["lift_m"]
+        for reach, frames in zip(result["reach"], result["grasp_frames"]):
+            np.testing.assert_allclose(reach["offset_m"]["left"], [0.03, 0.02, -drop], atol=1e-9)
+            self.assertIn("did not converge", reach["error"])
+            for side in ("left", "right"):
+                self.assertAlmostEqual(frames[side]["shift_m"], float(np.linalg.norm([0.03, 0.02, drop])), places=9)
+                self.assertAlmostEqual(frames[side]["rotation_deg"], 0.0, places=6)
         self.assertEqual((result["grasp_phase"], result["grasp_authored"], result["release_authored"]), (True, True, True))
         np.testing.assert_allclose(fake.box_mass, [2.0, 5.0])
         start = result["start"]
         self.assertLess(max(start["palm_frame_mismatch_m"]), 1e-6)
         self.assertAlmostEqual(start["after_reset_offset_m"][1][2], o["size_m"][2]/2 + 0.3)
         np.testing.assert_allclose(start["object_bottom_m"], o["start_clearance_m"] + result["initialization"]["lift_m"])
-        self.assertEqual([len(case) for case in lines], [625, 625])
+        self.assertEqual([len(case) for case in lines], [675, 675])
         flags = [json.loads(line)["attached"] for line in lines[0]]
-        self.assertEqual((flags[49], flags[50], flags[549], flags[550]), (False, True, True, False))   # grasp at step 50, release at 550
+        self.assertEqual((flags[99], flags[100], flags[599], flags[600]), (False, True, True, False))   # grasp at step 100, release at 600
+        np.testing.assert_allclose(targets[2 + 110][:, arm_ids], np.tile([result["arm_angles_rad"]["start"][n] for n in joints], (2, 1)))
         self.assertEqual(result["results"][0]["summary"]["grasp"]["object_shift_m"], 0.0)
         self.assertEqual(json.loads(lines[1][0])["root_xyz"][:2], [0.0, 0.0])
         # One frame every two control steps per case, none before the first step.
-        self.assertEqual([call.kwargs["count"] for call in encode.call_args_list], [312, 312])
+        self.assertEqual([call.kwargs["count"] for call in encode.call_args_list], [337, 337])
         # After the crouch-start defaults, the grasp start pose (palms forward) is commanded before the first step.
         start_angles = [result["arm_angles_rad"]["start"][n] for n in joints]
         self.assertGreater(np.abs(start_angles).max(), 0.1)
         np.testing.assert_allclose(targets[0][:, arm_ids], 0.0)
         np.testing.assert_allclose(targets[1][:, arm_ids], np.tile(start_angles, (2, 1)))
-        # During hold (control steps 125-174, targets[2 + step]) only the feedforward case carries the load offsets.
-        hold = targets[152][:, arm_ids]
+        # During hold (control steps 175-224, targets[2 + step]) only the feedforward case carries the load offsets.
+        hold = targets[202][:, arm_ids]
         np.testing.assert_allclose(hold[0], [result["arm_angles_rad"]["lift"][n] for n in joints])
         np.testing.assert_allclose(hold[1], result["lift_targets_rad"][1])
         self.assertGreater(np.abs(hold[1] - hold[0]).max(), 0.05)
@@ -254,7 +301,7 @@ class LiftWorkerTests(unittest.TestCase):
         self.assertEqual(result["heaviest_passed_kg"], {"uncompensated": None, "feedforward": None})
         # The doubles keep the arms at the start pose, so the hold error is the lift-start difference and the logged
         # torque is kp times it; drives beyond their effort limit are reported as saturated.
-        record = json.loads(lines[0][150])
+        record = json.loads(lines[0][200])
         error = np.subtract(hold[0], start_angles)
         np.testing.assert_allclose(record["arm_error_rad"], error, atol=1e-9)
         np.testing.assert_allclose(record["arm_pd_torque_nm"], 100.0*error, atol=1e-7)

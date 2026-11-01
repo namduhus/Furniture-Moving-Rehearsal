@@ -6,7 +6,10 @@ and hand/wrist collisions with the object are filtered. The object's weight and 
 joints. Arm targets for lifting and lowering come from position-and-orientation IK on the pinned reference model;
 GR00T Balance/Walk drive the lower body on the source schedule (Balance whenever the command norm is at most 0.05).
 Enabling the joints at runtime (grasp, when a timeline phase asks for it; the joints then start disabled and the
-object rests on the floor) and disabling them (release) are attempted and measured, not assumed. Cases sweep the object mass, with and
+object rests on the floor) and disabling them (release) are attempted and measured, not assumed. A grasp re-authors
+each joint's object frame to the current palm pose first, so enabling should not move the object; an optional reach
+phase before it places the cabinet on the floor at the settled grasp pose plus object.approach_error_m (the approach
+stop error) and moves each palm to its grasp point on the object by IK. Cases sweep the object mass, with and
 without static load feedforward on the arm targets, to measure where lifting fails; arm tracking, the implied PD torque
 and the object's contact with the legs and torso are logged to show what limits it.
 """
@@ -33,6 +36,7 @@ DEFAULT_CONFIG = ROOT / "configs/isaac_g1_lift.json"
 ARM_POSES = ("start", "lift", "place")
 SIDES = ("left", "right")
 GRAVITY = 9.81
+REACH_LIMIT_M = (0.08, 0.05, 0.05)   # palm reach offsets (forward, left, up) that keep the start-height IK converging
 
 
 def load_config(path):
@@ -48,10 +52,11 @@ def load_config(path):
         return type(value) in (int, float) and low <= value <= high
 
     o = config["object"]
-    if (set(o) != {"size_m", "friction", "start_clearance_m", "near_face_ahead_of_palm_m"} or
+    if (set(o) != {"size_m", "friction", "start_clearance_m", "near_face_ahead_of_palm_m", "approach_error_m"} or
             not isinstance(o["size_m"], list) or len(o["size_m"]) != 3 or not all(number(v, 0.1, 1.5) for v in o["size_m"]) or
             not number(o["friction"], 0.05, 1.5) or not number(o["start_clearance_m"], 0.0, 0.02) or
-            not number(o["near_face_ahead_of_palm_m"], -0.3, 0.1)):
+            not number(o["near_face_ahead_of_palm_m"], -0.3, 0.1) or not isinstance(o["approach_error_m"], list) or
+            len(o["approach_error_m"]) != 2 or not all(number(v, -0.06, 0.06) for v in o["approach_error_m"])):
         raise ValueError("Invalid lift object")
     cases = config["cases"]
     if (not isinstance(cases, list) or not 1 <= len(cases) <= 8 or
@@ -65,13 +70,14 @@ def load_config(path):
         raise ValueError("Invalid palm offsets")
     def arms_valid(arms):
         if isinstance(arms, str):
-            return arms in ARM_POSES
-        return isinstance(arms, list) and len(arms) == 2 and all(a in ARM_POSES for a in arms)
+            return arms in ARM_POSES + ("reach",)
+        return isinstance(arms, list) and len(arms) == 2 and all(a in ARM_POSES + ("reach",) for a in arms)
 
     for phase in config["timeline"]:
-        if (set(phase) - {"release", "grasp"} != {"name", "seconds", "command", "arms"} or not number(phase["seconds"], 0.1, 20.0) or
-                not arms_valid(phase["arms"]) or phase["command"] not in ([0, 0, 0], [0.2, 0, 0]) or
-                phase.get("release", False) not in (True, False) or phase.get("grasp", False) not in (True, False)):
+        if (set(phase) - {"release", "grasp", "reach"} != {"name", "seconds", "command", "arms"} or
+                not number(phase["seconds"], 0.1, 20.0) or not arms_valid(phase["arms"]) or
+                phase["command"] not in ([0, 0, 0], [0.2, 0, 0]) or
+                any(phase.get(flag, False) not in (True, False) for flag in ("release", "grasp", "reach"))):
             raise ValueError("Timeline phases need a reviewed command (stand or 0.2 m/s forward) and arm poses")
     names = [p["name"] for p in config["timeline"]]
     if len(set(names)) != len(names) or not {"carry", "lower", "release", "withdraw"} <= set(names):
@@ -80,6 +86,11 @@ def load_config(path):
     if grasps and (len(grasps) > 1 or "lift" not in names or grasps[0] > names.index("lift") or
                    config["timeline"][grasps[0]]["command"] != [0, 0, 0]):
         raise ValueError("At most one standing grasp phase, before the lift")
+    reaches = [i for i, p in enumerate(config["timeline"]) if p.get("reach")]
+    uses = [i for i, p in enumerate(config["timeline"]) if "reach" in (p["arms"] if isinstance(p["arms"], list) else [p["arms"]])]
+    if ((reaches and (len(reaches) > 1 or not grasps or reaches[0] != grasps[0] - 1 or
+                      config["timeline"][reaches[0]]["command"] != [0, 0, 0])) or (uses and (not reaches or uses[0] < reaches[0]))):
+        raise ValueError("At most one standing reach phase, right before the grasp; the reach pose only from it on")
     c = config["checks"]
     if set(c) != {"attachment_error_m", "carry_clearance_m", "carry_distance_m", "placed_clearance_m", "object_tilt_deg"}:
         raise ValueError("Invalid lift checks")
@@ -122,12 +133,13 @@ def palm_jacobian(reference, q, side):
     return current, jacobian
 
 
-def arm_pose(reference, base, side, dz, dx=0.0, iterations=50):
-    """Damped least-squares IK: move one palm by (dx, 0, dz) (pelvis frame) keeping its orientation; returns arm angles."""
+def arm_pose(reference, base, side, dz, dx=0.0, dy=0.0, iterations=50):
+    """Damped least-squares IK: move one palm by (dx, dy, dz) (pelvis frame) keeping its orientation; returns arm angles."""
     import numpy as np
     joints = arm_joints(reference, side)
     target = reference.forward(base)[f"{side}_hand_palm_link"].copy()
     target[0, 3] += dx
+    target[1, 3] += dy
     target[2, 3] += dz
     q = dict(base)
     for _ in range(iterations):
@@ -138,7 +150,7 @@ def arm_pose(reference, base, side, dz, dx=0.0, iterations=50):
         step = jacobian.T @ np.linalg.solve(jacobian @ jacobian.T + 1e-3*np.eye(6), error)
         q.update({name: q[name] + step[j] for j, name in enumerate(joints)})
     if np.linalg.norm(error) > 1e-6:
-        raise RuntimeError(f"Arm IK did not converge for {side} palm offset ({dx}, {dz})")
+        raise RuntimeError(f"Arm IK did not converge for {side} palm offset ({dx}, {dy}, {dz})")
     for name in joints:
         if not reference.limits[name]["lower"] <= q[name] <= reference.limits[name]["upper"]:
             raise RuntimeError(f"Arm IK left the joint range: {name}")
@@ -218,6 +230,31 @@ def arm_plan(reference, base, config, frames, contract):
     return joints, angles, targets, loads
 
 
+def reach_plan(reference, base, forward, joints, object_palm, palms, objects, pelvis):
+    """Per-case arm targets that move each palm to its grasp point on the object (palms: side -> world palm poses,
+    objects: world object poses, pelvis: world pelvis rotations).
+
+    Each palm's offset to its grasp point is measured in the pelvis frame, clipped to REACH_LIMIT_M and added to the
+    start pose by IK; this is first order (the model palm is assumed to move like the simulated one). A case whose IK
+    fails keeps the start pose and reports the error.
+    """
+    import numpy as np
+    limit = np.asarray(REACH_LIMIT_M)
+    targets, report = [], []
+    for i, obj in enumerate(objects):
+        offsets = {side: pelvis[i].T @ ((obj @ object_palm[side])[:3, 3] - palms[side][i][:3, 3]) for side in SIDES}
+        applied = {side: np.clip(offset, -limit, limit) for side, offset in offsets.items()}
+        try:
+            angles, error = {n: v for side in SIDES for n, v in arm_pose(reference, base, side, applied[side][2],
+                                                                         forward + applied[side][0], applied[side][1]).items()}, None
+        except RuntimeError as failure:
+            angles, error = {n: v for side in SIDES for n, v in arm_pose(reference, base, side, 0.0, forward).items()}, str(failure)
+        targets.append([angles[n] for n in joints])
+        report.append({"offset_m": {side: offset.tolist() for side, offset in offsets.items()},
+                       "applied_m": None if error else {side: value.tolist() for side, value in applied.items()}, "error": error})
+    return np.array(targets), report
+
+
 def lowest_point_z(pose_xyzw, size):
     """Lowest box corner height for a box pose [x, y, z, qx, qy, qz, qw]."""
     import numpy as np
@@ -270,23 +307,33 @@ def apply_hand_attachment(stage, robot, box, env, frames, enabled=True):
     return report
 
 
-def set_attachment(stage, env, enabled):
-    """Enable (grasp) or disable (release) both palm joints at runtime."""
-    from pxr import Usd, UsdPhysics
+def set_attachment(stage, env, enabled, object_palm=None):
+    """Enable (grasp) or disable (release) both palm joints at runtime; object_palm (side -> palm pose in object
+    coordinates) first re-authors each joint's object frame so the joint holds the current relative pose."""
+    from pxr import Gf, Usd, UsdPhysics
+    from g1_wbc import matrix_quat_xyzw
+    done = []
     with Usd.EditContext(stage, stage.GetSessionLayer()):
-        return all(UsdPhysics.Joint(stage.GetPrimAtPath(f"{env}/HandAttachment/{side}")).GetJointEnabledAttr().Set(bool(enabled))
-                   for side in ("left", "right"))
+        for side in ("left", "right"):
+            joint = UsdPhysics.Joint(stage.GetPrimAtPath(f"{env}/HandAttachment/{side}"))
+            if object_palm is not None:
+                quat = matrix_quat_xyzw(object_palm[side][:3, :3])
+                joint.GetLocalPos1Attr().Set(Gf.Vec3f(*map(float, object_palm[side][:3, 3])))
+                joint.GetLocalRot1Attr().Set(Gf.Quatf(float(quat[3]), Gf.Vec3f(*map(float, quat[:3]))))
+            done.append(joint.GetJointEnabledAttr().Set(bool(enabled)))
+    return all(done)
 
 
 def schedule(timeline, control_dt):
-    """Per-control-step phase name, command, arm blend (from, to, fraction) and grasp/release flags."""
+    """Per-control-step phase name, command, arm blend (from, to, fraction) and reach/grasp/release flags."""
     steps = []
     for phase in timeline:
         count = int(round(phase["seconds"]/control_dt))
         arms = phase["arms"] if isinstance(phase["arms"], list) else [phase["arms"]]*2
         for k in range(count):
             steps.append({"phase": phase["name"], "command": phase["command"], "arms": arms, "fraction": (k + 1)/count,
-                          "grasp": bool(phase.get("grasp")) and k == 0, "release": bool(phase.get("release")) and k == 0})
+                          "reach": bool(phase.get("reach")) and k == 0, "grasp": bool(phase.get("grasp")) and k == 0,
+                          "release": bool(phase.get("release")) and k == 0})
     return steps
 
 
@@ -324,8 +371,10 @@ def lift_summary(records, checks):
         "object_upright": result["placed_tilt_deg"] is not None and result["placed_tilt_deg"] <= checks["object_tilt_deg"]}
     grasp = phase("grasp")
     if grasp:
-        before = records[records.index(grasp[0]) - 1]
-        result["grasp"] = {"error_before_m": before["attachment_error_m"], "error_after_m": grasp[-1]["attachment_error_m"],
+        before, reach = records[records.index(grasp[0]) - 1], phase("reach")
+        result["grasp"] = {"palm_gap_reach_start_m": reach[0]["palm_gap_m"] if reach else None,
+                           "palm_gap_at_grasp_m": before["palm_gap_m"],
+                           "error_before_m": before["attachment_error_m"], "error_after_m": grasp[-1]["attachment_error_m"],
                            "object_shift_m": float(np.linalg.norm(np.subtract(grasp[0]["object_xyz"], before["object_xyz"])))}
     if withdraw and placed:
         palm_rise = float(np.mean([withdraw[-1]["palm_z"][s] - placed["palm_z"][s] for s in SIDES]))
@@ -455,6 +504,8 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             for case in directories:
                 (case / "frames").mkdir(parents=True)
             frame_count, attached, released, records = 0, not grasping, False, [[] for _ in range(count)]
+            # Left palm -> object transform each case's attachment error is measured against (re-authored at the grasp).
+            palm_object = [frames["palm_object"]["left"]]*count
             width, height = profile["camera"]["width"], profile["camera"]["height"]
 
             def capture():
@@ -473,9 +524,35 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             logs = [(case / "trajectory.jsonl").open("w") for case in directories]
             try:
                 for k, step in enumerate(steps):
+                    if step["reach"]:
+                        # Probe set-up: the settle drifts the robot, so the cabinet is moved on the floor to the settled
+                        # grasp pose plus the approach error (pelvis heading frame) before the palms reach for it.
+                        palms = palm_poses()
+                        pelvis = quat_xyzw_matrices(finite(batch(robot.data.root_link_pose_w), (count, 7))[:, 3:]) @ s.rotation
+                        placed = []
+                        for i in range(count):
+                            yaw = np.arctan2(pelvis[i][1, 0], pelvis[i][0, 0])
+                            heading = np.array([[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]])
+                            xy = (palms["left"][i] @ frames["palm_object"]["left"])[:2, 3] + heading @ o["approach_error_m"]
+                            placed.append([*xy, s.origins[i, 2] + o["size_m"][2]/2, 0.0, 0.0, np.sin(yaw/2), np.cos(yaw/2)])
+                        placed = np.array(placed)
+                        box.write_root_pose_to_sim_index(root_pose=device(placed))
+                        box.write_root_velocity_to_sim_index(root_velocity=device(np.zeros((count, 6))))
+                        plan["reach"], result["reach"] = reach_plan(reference, base, config["arm_offsets_m"]["forward"], joints,
+                                                                   frames["object_palm"], palms, [pose_matrix(p) for p in placed], pelvis)
                     if step["grasp"]:
-                        result["grasp_authored"] = all([set_attachment(s.sim.stage, f"/World/envs/env_{i}", True)
+                        # Grasp where the hands are: each joint takes the current palm pose in object coordinates.
+                        palms = palm_poses()
+                        objects = [pose_matrix(p) for p in finite(batch(box.data.root_link_pose_w), (count, 7))]
+                        held = [{side: np.linalg.inv(objects[i]) @ palms[side][i] for side in SIDES} for i in range(count)]
+                        result["grasp_authored"] = all([set_attachment(s.sim.stage, f"/World/envs/env_{i}", True, held[i])
                                                         for i in range(count)])
+                        result["grasp_frames"] = [
+                            {side: {"shift_m": float(np.linalg.norm(h[side][:3, 3] - frames["object_palm"][side][:3, 3])),
+                                    "rotation_deg": float(np.degrees(np.linalg.norm(
+                                        rotation_vector(h[side][:3, :3] @ frames["object_palm"][side][:3, :3].T))))}
+                             for side in SIDES} for h in held]
+                        palm_object = [np.linalg.inv(h["left"]) for h in held]
                         attached = True
                     if step["release"]:
                         result["release_authored"] = all([set_attachment(s.sim.stage, f"/World/envs/env_{i}", False)
@@ -505,7 +582,8 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                     obj = finite(batch(box.data.root_link_pose_w), (count, 7))
                     palms = palm_poses()
                     for i in range(count):
-                        predicted = (palms["left"][i] @ frames["palm_object"]["left"])[:3, 3]
+                        predicted = (palms["left"][i] @ palm_object[i])[:3, 3]
+                        grasp_points = {side: (pose_matrix(obj[i]) @ frames["object_palm"][side])[:3, 3] for side in SIDES}
                         record = {"time_s": (k + 1)*control_dt, "phase": step["phase"], "command": step["command"],
                                   "attached": attached, "released": released, "root_xyz": (pose[i, :3] - s.origins[i]).tolist(),
                                   "robot_tilt_deg": float(np.degrees(tilt[i])),
@@ -514,6 +592,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                                   "object_xyz": (obj[i, :3] - s.origins[i]).tolist(), "object_bottom_m": lowest_point_z(obj[i], o["size_m"]),
                                   "object_tilt_deg": tilt_deg(obj[i]),
                                   "attachment_error_m": float(np.linalg.norm(predicted - obj[i, :3])),
+                                  "palm_gap_m": max(float(np.linalg.norm(grasp_points[side] - palms[side][i][:3, 3])) for side in SIDES),
                                   "palm_z": {side: float(palms[side][i][2, 3]) for side in SIDES},
                                   "arm_error_rad": arm_error[i].tolist(), "arm_pd_torque_nm": arm_torque[i].tolist(),
                                   "body_contact_n": float(contact[i].sum()),

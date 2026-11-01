@@ -294,7 +294,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Lift and carry light furniture
 
-[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime. One environment per case sweeps the cabinet mass (optionally with static load feedforward on the arm targets) and logs arm tracking, the implied drive torque and the cabinet's contact on the legs and torso to show what limits lifting.
+[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), can start with the joints disabled and grasp at runtime (an IK reach moves the palms to the cabinet's grasp points, then the joints are re-anchored to the current palm pose and enabled), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime. One environment per case sweeps the cabinet mass (optionally with static load feedforward on the arm targets) and logs arm tracking, the implied drive torque and the cabinet's contact on the legs and torso to show what limits lifting.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_lift.py --config configs/isaac_g1_lift.json
@@ -312,6 +312,15 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry_eval.py --config configs/isaac_g1_carry_speed_eval.json
+```
+
+#### Room approach and goal-pose carry
+
+[`scripts/isaac_g1_room.py`](scripts/isaac_g1_room.py) trains PPO policies in random furnished rooms ([`room_geometry.py`](scripts/room_geometry.py): rooms, obstacle distances, A* paths) that set the GR00T forward, lateral and yaw-rate command from the goal pose and path look-ahead points: [approach](configs/isaac_g1_room_approach.json) walks to the pre-grasp pose of a cabinet on the floor, [carry](configs/isaac_g1_room_carry.json) brings a held cabinet to a target pose. A scripted pursuit-and-docking controller is evaluated on the same seeded layouts.
+
+```sh
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_room.py --config configs/isaac_g1_room_approach.json
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_room.py --config configs/isaac_g1_room_carry.json
 ```
 
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
@@ -447,7 +456,7 @@ Update this table in the same commit as each new module or third-party addition.
 | Built during the hackathon | Third-party (imported) |
 | --- | --- |
 | [Modal launcher](scripts/modal_dev.py), Isaac [preflight](scripts/isaac_preflight.py)/[recording](scripts/isaac_video.py)/[observer](scripts/isaac_observe.py)/[G1 asset inventory](scripts/isaac_g1_asset.py) | Isaac Sim, Isaac Lab, RSL-RL, PyTorch, G1 USD assets |
-| GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py)/[evaluation](scripts/isaac_g1_ppo_eval.py), [lift probe](scripts/isaac_g1_lift.py), [corridor carry training](scripts/isaac_g1_carry.py)/[evaluation](scripts/isaac_g1_carry_eval.py), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
+| GR00T-to-Isaac controller transfer: [adapter](scripts/g1_wbc.py), [runner](scripts/isaac_g1_wbc.py), [parallel environments](scripts/isaac_g1_rl.py), [PPO push training](scripts/isaac_g1_ppo.py)/[evaluation](scripts/isaac_g1_ppo_eval.py), [lift probe](scripts/isaac_g1_lift.py), [corridor carry training](scripts/isaac_g1_carry.py)/[evaluation](scripts/isaac_g1_carry_eval.py), [room approach/carry](scripts/isaac_g1_room.py) with [room geometry](scripts/room_geometry.py), [profiles](configs/) | GR00T-WBC Balance/Walk checkpoints, [G1 URDF](assets/references/g1_wbc.urdf) |
 | Contact/dynamics diagnostics and CPU analysis | Derived GR00T deployment/dynamics/contact [reference data](assets/references/) |
 | [Meta model client](scripts/meta_models.py) (Muse Spark chat, SAM 3.1 segmentation, Muse Image generation, response cache), [interior prompts](configs/home_images.json) | Meta Model API (Muse Spark, SAM 3.1, Muse Image), meta-sam-parser, [three.js](web/vendor/three/) |
 | [Tests](tests/), README, [AGENTS.md](AGENTS.md) | NumPy, FFmpeg/libx264, Modal SDK, Ubuntu/libXt, OpenSSH, Git, uv |

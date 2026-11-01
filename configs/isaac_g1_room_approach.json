@@ -1,0 +1,124 @@
+{
+  "push_profile": "configs/isaac_g1_push_sliders.json",
+  "task": "approach",
+  "object": {
+    "size_m": [
+      0.3,
+      0.28,
+      0.9
+    ],
+    "friction": 0.5,
+    "start_clearance_m": 0.005,
+    "near_face_ahead_of_palm_m": 0.02
+  },
+  "mass_kg": [
+    2.0,
+    4.0
+  ],
+  "arm_lift_m": 0.1,
+  "lift_prefix_seconds": {
+    "settle": 1.0,
+    "lift": 1.0,
+    "hold": 0.5
+  },
+  "room": {
+    "width_m": [
+      3.0,
+      5.0
+    ],
+    "depth_m": [
+      3.0,
+      5.0
+    ],
+    "obstacles": [
+      1,
+      3
+    ],
+    "obstacle_size_m": [
+      [
+        0.4,
+        1.6
+      ],
+      [
+        0.4,
+        0.9
+      ],
+      [
+        0.4,
+        0.9
+      ]
+    ],
+    "obstacle_gap_m": 0.8,
+    "grid_m": 0.1,
+    "inflation_m": 0.35,
+    "wall_thickness_m": 0.1,
+    "wall_height_m": 1.2
+  },
+  "goal": {
+    "min_distance_m": 1.0,
+    "max_distance_m": 3.5,
+    "position_tolerance_m": 0.04,
+    "yaw_tolerance_deg": 6.0,
+    "stop_speed_mps": 0.05,
+    "object_inflation_m": 0.1,
+    "object_margin_m": 0.05
+  },
+  "num_envs": 256,
+  "env_spacing_m": 7.0,
+  "decision_control_steps": 5,
+  "episode_seconds": 30.0,
+  "action_bounds": {
+    "forward_mps": [
+      -0.15,
+      0.3
+    ],
+    "lateral_mps": [
+      -0.15,
+      0.15
+    ],
+    "yaw_rate_rps": [
+      -0.3,
+      0.3
+    ]
+  },
+  "termination": {
+    "robot_link_radius_m": 0.08,
+    "wall_contact_m": 0.01,
+    "object_tilt_rad": 0.3,
+    "object_floor_clearance_m": 0.01,
+    "object_push_m": 0.03
+  },
+  "reward": {
+    "progress": 2.0,
+    "pose": 1.0,
+    "wall": 1.0,
+    "safe_clearance_m": 0.1,
+    "action_rate": 0.1,
+    "speed_limit_mps": 0.3,
+    "overspeed": 5.0,
+    "time": 0.02,
+    "failure": 10.0,
+    "success": 20.0
+  },
+  "ppo": {
+    "num_steps_per_env": 24,
+    "max_iterations": 300,
+    "save_interval": 50,
+    "hidden_dims": [
+      128,
+      128
+    ],
+    "init_std": 0.5,
+    "learning_rate": 0.0003,
+    "entropy_coef": 0.005,
+    "num_learning_epochs": 5,
+    "num_mini_batches": 4,
+    "gamma": 0.99,
+    "lam": 0.95,
+    "desired_kl": 0.01,
+    "clip_param": 0.2
+  },
+  "seed": 0,
+  "stage_timeout_seconds": 4800,
+  "scope": "Room approach, first training run: 256 environments, each a random 3-5 m room with 1-3 furniture boxes; per episode a 0.30 x 0.28 x 0.90 m cabinet (2-4 kg) stands on the floor at a random free pose and the robot starts 1-3.5 m away at a random heading, without load. Every 0.1 s PPO sets the GR00T walk forward speed (-0.15-0.3 m/s), lateral speed (+-0.15 m/s) and yaw rate (+-0.3 rad/s) from the goal pose and A* look-ahead points in its heading frame plus local obstacle distances. Success: the robot root within 4 cm and 6 degrees of the pre-grasp pose (cabinet centre straight ahead at the grasp reach) at under 0.05 m/s, without pushing the cabinet more than 3 cm; walking above 0.3 m/s is penalized. A scripted pursuit-and-docking controller is evaluated on the same seeded starts. Lateral and backward GR00T walking are untested outside this training."
+}
