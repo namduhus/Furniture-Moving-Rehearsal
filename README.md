@@ -40,7 +40,7 @@ python3 scripts/modal_dev.py plan --config configs/modal_isaac.json
 python3 scripts/isaac_preflight.py --dry-run
 ```
 
-The Isaac profile requests **one L40S, four physical CPU cores and 32 GiB RAM**, with requests equal to limits, for a maximum 30-minute session including SSH setup. At the reviewed prices this is approximately **$1.20** for 30 minutes of compute, or an illustrative **$1.36** including startup/cleanup/scale-down allowances. Image builds, storage, network and other jobs are additional; neither figure is a hard account cap or a measured training requirement.
+The Isaac profile requests **one L40S, four physical CPU cores and 32 GiB RAM**, with requests equal to limits, for a maximum 60-minute session including SSH setup, long enough for the corridor carry training (~43 min). At the reviewed prices this is approximately **$2.40** for 60 minutes of compute, or an illustrative **$2.56** including startup/cleanup/scale-down allowances. Image builds, storage, network and other jobs are additional; neither figure is a hard account cap or a measured training requirement.
 
 After reviewing NVIDIA's [Omniverse EULA](https://docs.isaacsim.omniverse.nvidia.com/latest/common/NVIDIA_Omniverse_License_Agreement.html) and the cost plan, start this specific profile from the local repository root if you accept the terms:
 
@@ -294,7 +294,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 #### Lift and carry light furniture
 
-[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime. One environment per case sweeps the cabinet mass with and without static load feedforward on the arm targets to measure where lifting fails.
+[`scripts/isaac_g1_lift.py`](scripts/isaac_g1_lift.py) attaches a light [cabinet](configs/isaac_g1_lift.json) by its side faces to both palms with fixed joints (a grasp abstraction; hand collisions with it are filtered), raises it from the floor with arm IK under GR00T Balance, carries it with GR00T Walk, sets it down and tests releasing the joints at runtime. One environment per case sweeps the cabinet mass (optionally with static load feedforward on the arm targets) and logs arm tracking, the implied drive torque and the cabinet's contact on the legs and torso to show what limits lifting.
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_lift.py --config configs/isaac_g1_lift.json
@@ -341,7 +341,7 @@ scp -F outputs/modal/ssh_config -r fmr-modal:/workspace/repo/Furniture-Moving-Re
 open outputs/isaac/RUN_ID/rollout.mp4
 ```
 
-Save the remote workspace before stopping it. The existing 30-minute Isaac resource profile and cost estimate apply; the 10-second video duration is simulated time and does not set the GPU session length. A live browser camera viewer is a later step.
+Save the remote workspace before stopping it. The existing 60-minute Isaac resource profile and cost estimate apply; the 10-second video duration is simulated time and does not set the GPU session length. A live browser camera viewer is a later step.
 
 ### Viewing remote simulation from a Mac
 

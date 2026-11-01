@@ -179,6 +179,9 @@ def parallel_isaac(count, profile, asset):
 
     # Each of two hand links feels 3 N from the box along -x, i.e. a 6 N push.
     hand = SimpleNamespace(data=SimpleNamespace(force_matrix_w=Tensor(np.tile([-3.0, 0.0, 0.0], (count, 2, 1, 1)))))
+    # Leg/torso links touching the box: none by default.
+    body = SimpleNamespace(body_names=["left_knee_link", "torso_link"],
+                           data=SimpleNamespace(force_matrix_w=Tensor(np.zeros((count, 2, 1, 3)))))
 
     class Scene(dict):
         env_origins = Tensor(origins)
@@ -225,7 +228,8 @@ def parallel_isaac(count, profile, asset):
     modules["isaaclab.app"].launch_simulation = lambda *args: nullcontext()
     modules["isaaclab.sim"].SimulationContext = Simulation
     camera = Camera()
-    modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box, hand_contact=hand, camera=camera)
+    modules["isaaclab.utils"].instantiate = lambda cfg: Scene(robot=robot, furniture=box, hand_contact=hand, body_contact=body,
+                                                              camera=camera)
     authored = []
     with ExitStack() as stack:
         for patch in (mock.patch.dict(sys.modules, modules), mock.patch.object(wbc, "BalancePolicy", Policy),
@@ -240,7 +244,7 @@ def parallel_isaac(count, profile, asset):
         scene_config = stack.enter_context(mock.patch.object(rl, "scene_config", return_value=built))
         yield SimpleNamespace(robot=robot, box=box, steps=steps, authored=authored, scene_config=scene_config,
                               origins=origins, box_mass=box_mass, box_friction=box_friction, camera=camera, hand=hand,
-                              policy_calls=policy_calls)
+                              body=body, policy_calls=policy_calls)
 
 
 class ParallelWorkerTests(unittest.TestCase):

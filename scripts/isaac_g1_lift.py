@@ -1,11 +1,13 @@
 """G1 lifts, carries and sets down light furniture held by hand-object attachment (one environment per mass case).
 
 Grasp abstraction: two fixed joints, authored before reset, attach the palms to the object's side faces at the
-default arm pose (the palms face each other), and hand/wrist collisions with the object are filtered. The object's weight and contacts reach the robot through the
+grasp start pose (the default arms with both palms moved forward by arm_offsets_m.forward; the palms face each other),
+and hand/wrist collisions with the object are filtered. The object's weight and contacts reach the robot through the
 joints. Arm targets for lifting and lowering come from position-and-orientation IK on the pinned reference model;
 GR00T Balance/Walk drive the lower body on the source schedule (Balance whenever the command norm is at most 0.05).
 Disabling the joints at runtime (release) is attempted and measured, not assumed. Cases sweep the object mass, with and
-without static load feedforward on the arm targets, to measure where lifting fails.
+without static load feedforward on the arm targets, to measure where lifting fails; arm tracking, the implied PD torque
+and the object's contact with the legs and torso are logged to show what limits it.
 """
 
 from __future__ import annotations
@@ -48,17 +50,18 @@ def load_config(path):
     if (set(o) != {"size_m", "friction", "start_clearance_m", "near_face_ahead_of_palm_m"} or
             not isinstance(o["size_m"], list) or len(o["size_m"]) != 3 or not all(number(v, 0.1, 1.5) for v in o["size_m"]) or
             not number(o["friction"], 0.05, 1.5) or not number(o["start_clearance_m"], 0.0, 0.02) or
-            not number(o["near_face_ahead_of_palm_m"], 0.0, 0.1)):
+            not number(o["near_face_ahead_of_palm_m"], -0.3, 0.1)):
         raise ValueError("Invalid lift object")
     cases = config["cases"]
     if (not isinstance(cases, list) or not 1 <= len(cases) <= 8 or
-            any(set(c) != {"mass_kg", "feedforward"} or not number(c["mass_kg"], 0.1, 8.0) or
+            any(set(c) != {"mass_kg", "feedforward"} or not number(c["mass_kg"], 0.1, 12.0) or
                 c["feedforward"] not in (True, False) for c in cases) or
             len({(c["mass_kg"], c["feedforward"]) for c in cases}) != len(cases)):
-        raise ValueError("Lift cases need 1-8 unique (mass 0.1-8 kg, feedforward) pairs")
+        raise ValueError("Lift cases need 1-8 unique (mass 0.1-12 kg, feedforward) pairs")
     a = config["arm_offsets_m"]
-    if set(a) != {"lift", "place"} or not number(a["lift"], 0.0, 0.12) or not number(a["place"], -0.05, 0.0):
-        raise ValueError("Invalid vertical palm offsets")
+    if (set(a) != {"forward", "lift", "place"} or not number(a["forward"], 0.0, 0.2) or not number(a["lift"], 0.0, 0.12) or
+            not number(a["place"], -0.05, 0.0)):
+        raise ValueError("Invalid palm offsets")
     def arms_valid(arms):
         if isinstance(arms, str):
             return arms in ARM_POSES
@@ -114,11 +117,12 @@ def palm_jacobian(reference, q, side):
     return current, jacobian
 
 
-def arm_pose(reference, base, side, dz, iterations=50):
-    """Damped least-squares IK: move one palm by dz (pelvis frame) keeping its orientation; returns arm angles."""
+def arm_pose(reference, base, side, dz, dx=0.0, iterations=50):
+    """Damped least-squares IK: move one palm by (dx, 0, dz) (pelvis frame) keeping its orientation; returns arm angles."""
     import numpy as np
     joints = arm_joints(reference, side)
     target = reference.forward(base)[f"{side}_hand_palm_link"].copy()
+    target[0, 3] += dx
     target[2, 3] += dz
     q = dict(base)
     for _ in range(iterations):
@@ -129,11 +133,16 @@ def arm_pose(reference, base, side, dz, iterations=50):
         step = jacobian.T @ np.linalg.solve(jacobian @ jacobian.T + 1e-3*np.eye(6), error)
         q.update({name: q[name] + step[j] for j, name in enumerate(joints)})
     if np.linalg.norm(error) > 1e-6:
-        raise RuntimeError(f"Arm IK did not converge for {side} palm offset {dz}")
+        raise RuntimeError(f"Arm IK did not converge for {side} palm offset ({dx}, {dz})")
     for name in joints:
         if not reference.limits[name]["lower"] <= q[name] <= reference.limits[name]["upper"]:
             raise RuntimeError(f"Arm IK left the joint range: {name}")
     return {name: float(q[name]) for name in joints}
+
+
+def start_pose(reference, base, offsets):
+    """Whole-body pose with both palms moved forward by offsets["forward"] (the grasp start pose)."""
+    return {**base, **{n: v for side in SIDES for n, v in arm_pose(reference, base, side, 0.0, offsets["forward"]).items()}}
 
 
 def attachment_frames(reference, base, settings, height):
@@ -181,15 +190,15 @@ def load_feedforward(reference, q, side, frames, mass, kp, efforts):
 def arm_plan(reference, base, config, frames, contract):
     """Arm joint order, per-case target arrays for each arm pose and per-case load evidence.
 
-    Feedforward cases add the load offsets to the lift pose only, so they ramp in while lifting and out while lowering
-    to the floor-supported place pose.
+    All three poses keep the palms offsets["forward"] ahead of the default arms. Feedforward cases add the load offsets
+    to the lift pose only, so they ramp in while lifting and out while lowering to the floor-supported place pose.
     """
     import numpy as np
     from g1_wbc import actuator_limits
     joints = [n for side in SIDES for n in arm_joints(reference, side)]
-    angles = {"start": dict.fromkeys(joints, 0.0)}
-    for pose in ("lift", "place"):
-        angles[pose] = {n: v for side in SIDES for n, v in arm_pose(reference, base, side, config["arm_offsets_m"][pose]).items()}
+    a = config["arm_offsets_m"]
+    angles = {pose: {n: v for side in SIDES for n, v in arm_pose(reference, base, side, dz, a["forward"]).items()}
+              for pose, dz in (("start", 0.0), ("lift", a["lift"]), ("place", a["place"]))}
     lifted = {**base, **angles["lift"]}
     efforts = {n: v["effort"] for n, v in actuator_limits(contract, reference).items()}
     cases = config["cases"]
@@ -315,12 +324,37 @@ def lift_summary(records, checks):
     return result
 
 
+def diagnostics_summary(records, joints, efforts):
+    """What limits the lift: arm tracking error and implied PD torque during hold, drive saturation while held, and the
+    object's contact force on the legs and torso.
+
+    The torque is the implicit drive law kp (target - q) - kd qd on logged states and the targets applied over the
+    preceding interval; a magnitude at or above the effort limit means the drive saturates. Joint friction is excluded.
+    """
+    import numpy as np
+    held = [r for r in records if r["phase"] in ("hold", "carry", "stop")]
+    hold = [r for r in records if r["phase"] == "hold"]
+    limit = np.asarray(efforts, dtype=float)
+    held_ratio = np.abs([r["arm_pd_torque_nm"] for r in held])/limit
+    hold_ratio = np.abs([r["arm_pd_torque_nm"] for r in hold])/limit
+    error = np.array([r["arm_error_rad"] for r in hold])
+    contact = np.array([r["body_contact_n"] for r in held])
+    bodies = [r["body_contact_body"] for r in held if r["body_contact_body"]]
+    short = [n.removesuffix("_joint") for n in joints]
+    return {"hold_left_arm": {short[j].removeprefix("left_"): {"error_rad": float(error[:, j].mean()),
+                                                              "torque_ratio": float(hold_ratio[:, j].mean())}
+                              for j, n in enumerate(joints) if n.startswith("left")},
+            "saturated_joints": [short[j] for j in range(len(joints)) if (held_ratio[:, j] >= 1.0).mean() > 0.5],
+            "body_contact": {"held_max_n": float(contact.max()), "held_fraction": float((contact > 1.0).mean()),
+                             "most_frequent_body": max(sorted(set(bodies)), key=bodies.count) if bodies else None}}
+
+
 def run_worker(config, profile, asset, runtime, model_paths, directory):
     import numpy as np
     import torch
     import warp as wp
     from PIL import Image
-    from g1_wbc import BatchHistory, finite, matrix_quat_xyzw, pose_matrix, quat_xyzw_matrices
+    from g1_wbc import BatchHistory, actuator_limits, finite, matrix_quat_xyzw, pose_matrix, quat_xyzw_matrices
 
     contract, reference = trial_contract(profile)
     policy = ppo.gr00t_policy(contract, model_paths)
@@ -337,12 +371,15 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
     scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": float(masses[0]), "friction": o["friction"],
                                                 "gap_m": profile["push_object"]["gap_m"]}}
     built = rl.scene_config(scene_profile, asset, runtime, contract, reference, with_camera=True, num_envs=count,
-                            env_spacing=cam["env_spacing_m"], replicate_physics=False)
+                            env_spacing=cam["env_spacing_m"], replicate_physics=False, with_body_contact=True)
     base = base_pose(reference, asset, contract)
-    frames = attachment_frames(reference, base, o, contract["height_command"])
+    frames = attachment_frames(reference, start_pose(reference, base, config["arm_offsets_m"]), o, contract["height_command"])
     joints, angles, plan, loads = arm_plan(reference, base, config, frames, contract)
+    efforts = [actuator_limits(contract, reference)[n]["effort"] for n in joints]
+    kp, kd = contract["upper_hold_kp"], contract["upper_hold_kd"]
     evidence = directory / "lift-worker.json"
-    result = {"status": "running", "object": o, "cases": cases, "arm_angles_rad": angles,
+    result = {"status": "running", "object": o, "cases": cases, "arm_joints": joints, "arm_effort_nm": efforts,
+              "arm_angles_rad": angles,
               "lift_targets_rad": plan["lift"].tolist(), "loads": loads, "pelvis_object": frames["pelvis_object"].tolist(),
               "grasp": {k: frames[k] for k in ("palm_inset_m", "grasp_below_top_m")}}
     write_json(evidence, result)
@@ -359,6 +396,16 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             robot, box, batch, device = s.robot, s.box, s.batch, s.device
             palm_ids = {side: s.bodies.index(f"{side}_hand_palm_link") for side in SIDES}
             arm_ids = [s.names.index(name) for name in joints]
+            # The arms take the grasp start pose (palms moved forward) before the object is placed at the palms.
+            start = np.tile(s.defaults, (count, 1))
+            start[:, arm_ids] = plan["start"]
+            robot.write_joint_position_to_sim_index(position=device(start))
+            robot.write_joint_velocity_to_sim_index(velocity=device(np.zeros((count, 29))))
+            robot.set_joint_position_target_index(target=device(start))
+            s.sim.forward()
+            s.scene.update(0.0)
+            sensor = s.scene["body_contact"]
+            contact_bodies = list(sensor.body_names)
 
             def palm_poses():
                 poses = finite(batch(robot.data.body_link_pose_w), (count, len(s.bodies), 7))
@@ -385,7 +432,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
             control_dt = asset["physics_dt"]*asset["control_decimation"]
             steps = schedule(config["timeline"], control_dt)
             history = BatchHistory(contract, count)
-            targets = np.tile(s.defaults, (count, 1))
+            targets = start.copy()
             camera = s.scene["camera"]
             camera.set_world_poses_from_view(device(s.origins + cam["eye_offset_m"]), device(s.origins + cam["target_offset_m"]))
             directories = [directory / f"case_{i}" for i in range(count)]
@@ -419,6 +466,10 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                         s.sim.step(render=False)
                         s.scene.update(asset["physics_dt"])
                     pose = finite(batch(robot.data.root_link_pose_w), (count, 7))
+                    # Arm tracking against the targets applied over the interval just simulated.
+                    arm_error = targets[:, arm_ids] - batch(robot.data.joint_pos)[:, arm_ids]
+                    arm_torque = kp*arm_error - kd*batch(robot.data.joint_vel)[:, arm_ids]
+                    contact = np.linalg.norm(batch(sensor.data.force_matrix_w), axis=-1).sum(axis=-1)
                     command = np.tile(np.asarray(step["command"], dtype=float), (count, 1))
                     observation = history.observe(batch(robot.data.joint_pos)[:, s.indices], batch(robot.data.joint_vel)[:, s.indices],
                                                   pose[:, 3:], batch(robot.data.root_link_vel_w)[:, 3:], s.rotation, command,
@@ -443,7 +494,10 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                                   "object_xyz": (obj[i, :3] - s.origins[i]).tolist(), "object_bottom_m": lowest_point_z(obj[i], o["size_m"]),
                                   "object_tilt_deg": tilt_deg(obj[i]),
                                   "attachment_error_m": float(np.linalg.norm(predicted - obj[i, :3])),
-                                  "palm_z": {side: float(palms[side][i][2, 3]) for side in SIDES}}
+                                  "palm_z": {side: float(palms[side][i][2, 3]) for side in SIDES},
+                                  "arm_error_rad": arm_error[i].tolist(), "arm_pd_torque_nm": arm_torque[i].tolist(),
+                                  "body_contact_n": float(contact[i].sum()),
+                                  "body_contact_body": contact_bodies[int(np.argmax(contact[i]))] if contact[i].sum() > 1.0 else None}
                         logs[i].write(json.dumps(record) + "\n")
                         records[i].append(record)
                     if (k + 1) % cam["capture_every_control_steps"] == 0:
@@ -457,7 +511,7 @@ def run_worker(config, profile, asset, runtime, model_paths, directory):
                                          fps=1/(Fraction(str(control_dt))*cam["capture_every_control_steps"]),
                                          width=width, height=height, require_motion=False)
                 result["results"].append({"case": directories[i].name, **case, "summary": lift_summary(records[i], config["checks"]),
-                                          "video": video})
+                                          "diagnostics": diagnostics_summary(records[i], joints, efforts), "video": video})
             result["heaviest_passed_kg"] = {
                 label: max((r["mass_kg"] for r in result["results"] if r["feedforward"] == flag and
                             r["summary"]["status"] == "passed_lift_probe"), default=None)
@@ -482,9 +536,10 @@ def main(argv=None):
     config, profile, asset, runtime = load_config(args.config)
     contract, reference = trial_contract(profile)
     if args.dry_run:
-        base = base_pose(reference, asset, contract)
-        poses = {pose: arm_pose(reference, base, "left", config["arm_offsets_m"][pose]) for pose in ("lift", "place")}
-        frames = attachment_frames(reference, base, config["object"], contract["height_command"])
+        base, offsets = base_pose(reference, asset, contract), config["arm_offsets_m"]
+        poses = {pose: arm_pose(reference, base, "left", dz, offsets["forward"])
+                 for pose, dz in (("start", 0.0), ("lift", offsets["lift"]), ("place", offsets["place"]))}
+        frames = attachment_frames(reference, start_pose(reference, base, offsets), config["object"], contract["height_command"])
         *_, loads = arm_plan(reference, base, config, frames, contract)
         print(json.dumps({"status": "local_plan_only", "object": config["object"], "left_arm_rad": poses,
                           "grasp": {k: frames[k] for k in ("palm_inset_m", "grasp_below_top_m")},
@@ -511,7 +566,9 @@ def main(argv=None):
     evidence = json.loads(path.read_text()) if path.exists() else {"status": "missing"}
     cases = [{k: r[k] for k in ("case", "mass_kg", "feedforward")} |
              {"status": r["summary"]["status"], "failed_checks": [c for c, ok in r["summary"]["checks"].items() if not ok]} |
-             {k: r["summary"][k] for k in ("palm_rise_m", "carry_clearance_min_m", "held_tilt_max_deg", "carry_distance_m")}
+             {k: r["summary"][k] for k in ("palm_rise_m", "carry_clearance_min_m", "held_tilt_max_deg", "carry_distance_m")} |
+             {"saturated_joints": r["diagnostics"]["saturated_joints"],
+              "body_contact_max_n": r["diagnostics"]["body_contact"]["held_max_n"]}
              for r in evidence.get("results", [])]
     summary = {"status": evidence.get("status") if code == 0 else "failed", "exit_code": code, "run_dir": str(directory),
                "heaviest_passed_kg": evidence.get("heaviest_passed_kg"), "cases": cases, "error": evidence.get("error")}

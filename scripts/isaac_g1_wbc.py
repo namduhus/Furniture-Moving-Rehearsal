@@ -800,8 +800,11 @@ def policy_check(contract, model_path):
 
 
 def scene_config(profile, asset, runtime, contract, reference, *, with_camera=True, num_envs=1, env_spacing=3.0,
-                 replicate_physics=True):
-    """Build the qualified actuator, material, object and sensor configuration shared by trials and training."""
+                 replicate_physics=True, with_body_contact=False):
+    """Build the qualified actuator, material, object and sensor configuration shared by trials and training.
+
+    with_body_contact: with a push object, also sense its contact forces on the leg links and the torso.
+    """
     from types import SimpleNamespace
     from g1_wbc import actuator_limits
     from isaaclab.actuators import IdealPDActuatorCfg, ImplicitActuatorCfg
@@ -810,7 +813,7 @@ def scene_config(profile, asset, runtime, contract, reference, *, with_camera=Tr
     from isaaclab.sensors import CameraCfg
     deployment = bool(profile.get("deployment"))
     diagnostics = profile.get("diagnostics")
-    if diagnostics:
+    if diagnostics or with_body_contact:
         from isaaclab.sensors import ContactSensorCfg
     import isaaclab.sim as sim_utils
     from isaaclab.utils import configclass, replace
@@ -894,6 +897,10 @@ def scene_config(profile, asset, runtime, contract, reference, *, with_camera=Tr
             hand_contact = ContactSensorCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/.*_hand/.*_hand_.*_link", update_period=0.0, history_length=1,
                 filter_prim_paths_expr=["{ENV_REGEX_NS}/Furniture"], debug_vis=False)
+        if push and with_body_contact:
+            body_contact = ContactSensorCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/(torso|.*_(hip_pitch|hip_roll|hip_yaw|knee|ankle_pitch|ankle_roll))_link",
+                update_period=0.0, history_length=1, filter_prim_paths_expr=["{ENV_REGEX_NS}/Furniture"], debug_vis=False)
 
     @configclass
     class LaunchCfg:

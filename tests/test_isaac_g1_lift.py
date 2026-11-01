@@ -30,30 +30,38 @@ class LiftGeometryTests(unittest.TestCase):
         self.contract, self.reference = lift.trial_contract(self.profile)
         self.base = lift.base_pose(self.reference, self.asset, self.contract)
 
-    def test_arm_ik_moves_each_palm_vertically_without_rotating_it(self):
+    def test_arm_ik_moves_each_palm_without_rotating_it(self):
         start = self.reference.forward(self.base)
-        for dz in (0.06, -0.02):
+        for dx, dz in ((0.0, 0.06), (0.0, -0.02), (0.08, 0.10), (0.08, -0.02)):
             q = dict(self.base)
             for side in ("left", "right"):
-                q.update(lift.arm_pose(self.reference, self.base, side, dz))
+                q.update(lift.arm_pose(self.reference, self.base, side, dz, dx))
             moved = self.reference.forward(q)
             for side in ("left", "right"):
                 palm = f"{side}_hand_palm_link"
-                np.testing.assert_allclose(moved[palm][:3, 3] - start[palm][:3, 3], [0, 0, dz], atol=1e-7)
+                np.testing.assert_allclose(moved[palm][:3, 3] - start[palm][:3, 3], [dx, 0, dz], atol=1e-7)
                 np.testing.assert_allclose(moved[palm][:3, :3], start[palm][:3, :3], atol=1e-7)
             # Only arm joints move.
             self.assertEqual({n for n in q if q[n] != self.base[n]} - set(lift.arm_joints(self.reference, "left")) -
                              set(lift.arm_joints(self.reference, "right")), set())
+        # 16 cm forward at the start height cannot keep the palm orientation (the reach checked before choosing 8 cm).
+        with self.assertRaises(RuntimeError):
+            lift.arm_pose(self.reference, self.base, "left", 0.0, 0.16)
 
     def test_both_palm_joints_imply_the_same_side_grasp_pose(self):
         o, height = self.config["object"], self.contract["height_command"]
-        frames = lift.attachment_frames(self.reference, self.base, o, height)
-        fk = self.reference.forward(self.base)
+        start = lift.start_pose(self.reference, self.base, self.config["arm_offsets_m"])
+        frames = lift.attachment_frames(self.reference, start, o, height)
+        fk = self.reference.forward(start)
         for side in ("left", "right"):
             np.testing.assert_allclose(fk[f"{side}_hand_palm_link"] @ frames["palm_object"][side], frames["pelvis_object"], atol=1e-12)
         obj, size = frames["pelvis_object"], o["size_m"]
         palm = fk["left_hand_palm_link"][:3, 3]
         self.assertAlmostEqual(obj[0, 3] - size[0]/2, palm[0] + o["near_face_ahead_of_palm_m"])
+        # The palms moved forward along the side faces; the cabinet stays where the front-edge grasp held it.
+        default = self.reference.forward(self.base)["left_hand_palm_link"][:3, 3]
+        self.assertAlmostEqual(palm[0] - default[0], self.config["arm_offsets_m"]["forward"])
+        self.assertAlmostEqual(obj[0, 3] - size[0]/2, default[0] + 0.02)
         # Standing clearance is set at the policy height, not at the raised crouch start (run 013531).
         self.assertAlmostEqual(height + obj[2, 3] - size[2]/2, o["start_clearance_m"])
         self.assertAlmostEqual(frames["palm_inset_m"], abs(palm[1] - obj[1, 3]) - size[1]/2)
@@ -66,8 +74,11 @@ class LiftGeometryTests(unittest.TestCase):
         self.assertLess(lift.lowest_point_z(pose, [0.4, 0.4, 0.4]), 0.5 - 0.2)
 
     def test_feedforward_torque_is_the_gradient_of_the_held_weight(self):
-        frames = lift.attachment_frames(self.reference, self.base, self.config["object"], self.contract["height_command"])
-        joints, angles, plan, loads = lift.arm_plan(self.reference, self.base, self.config, frames, self.contract)
+        config = {**self.config, "cases": [{"mass_kg": 2.0, "feedforward": False}, {"mass_kg": 4.0, "feedforward": True},
+                                           {"mass_kg": 6.0, "feedforward": False}]}
+        start = lift.start_pose(self.reference, self.base, config["arm_offsets_m"])
+        frames = lift.attachment_frames(self.reference, start, config["object"], self.contract["height_command"])
+        joints, angles, plan, loads = lift.arm_plan(self.reference, self.base, config, frames, self.contract)
         q = {**self.base, **angles["lift"]}
         mass, kp = 3.0, self.contract["upper_hold_kp"]
         efforts = {n: self.reference.limits[n]["effort"] for n in joints}
@@ -82,13 +93,21 @@ class LiftGeometryTests(unittest.TestCase):
                 gradient = mass*lift.GRAVITY/2*(centre_z({**q, name: q[name] + 1e-5}) - centre_z({**q, name: q[name] - 1e-5}))/2e-5
                 self.assertAlmostEqual(load["torque_nm"][name], gradient, places=3)
                 self.assertAlmostEqual(load["offset_rad"][name], gradient/kp, places=5)
-        wrist = {(c["mass_kg"], c["feedforward"]): "left_wrist_pitch_joint" in l["left"]["over_limit"]
-                 for c, l in zip(self.config["cases"], loads)}
-        self.assertEqual((wrist[(3.0, True)], wrist[(4.0, True)]), (False, True))
-        # Feedforward changes only the lift pose of its own cases.
+        # Holding 8 cm further back on the side faces moves the first wrist pitch limit from 3.9 kg to between 4 and 6 kg.
+        self.assertEqual(["left_wrist_pitch_joint" in l["left"]["over_limit"] for l in loads], [False, False, True])
+        front = {**config, "object": {**config["object"], "near_face_ahead_of_palm_m": 0.02},
+                 "arm_offsets_m": {**config["arm_offsets_m"], "forward": 0.0}}
+        front_frames = lift.attachment_frames(self.reference, self.base, front["object"], self.contract["height_command"])
+        front_loads = lift.arm_plan(self.reference, self.base, front, front_frames, self.contract)[3]
+        np.testing.assert_allclose(front_frames["pelvis_object"], frames["pelvis_object"], atol=1e-9)
+        wrist = [abs(l["left"]["torque_nm"]["left_wrist_pitch_joint"])/c["mass_kg"] for l, c in ((front_loads[0], config["cases"][0]),
+                                                                                                (loads[0], config["cases"][0]))]
+        self.assertAlmostEqual(wrist[0], 1.28, places=2)
+        self.assertAlmostEqual(wrist[1], 0.89, places=2)
+        # Feedforward changes only the lift pose of its own cases; every pose keeps the palms forward.
         lift_angles = [angles["lift"][n] for n in joints]
-        for i, case in enumerate(self.config["cases"]):
-            np.testing.assert_allclose(plan["start"][i], 0.0)
+        for i, case in enumerate(config["cases"]):
+            np.testing.assert_allclose(plan["start"][i], [angles["start"][n] for n in joints])
             np.testing.assert_allclose(plan["place"][i], [angles["place"][n] for n in joints])
             offsets = [loads[i]["left" if n.startswith("left") else "right"]["offset_rad"][n] for n in joints]
             np.testing.assert_allclose(plan["lift"][i], np.add(lift_angles, offsets) if case["feedforward"] else lift_angles)
@@ -127,13 +146,15 @@ class LiftGeometryTests(unittest.TestCase):
         raw = json.loads(lift.DEFAULT_CONFIG.read_text())
         timeline = raw["timeline"]
         cases = [{**raw, "object": {**raw["object"], "mass_kg": 2.0}},
-                 {**raw, "cases": [{"mass_kg": 9.0, "feedforward": False}]},
+                 {**raw, "cases": [{"mass_kg": 13.0, "feedforward": False}]},
                  {**raw, "cases": [{"mass_kg": 2.0, "feedforward": True}]*2},
                  {**raw, "camera": {**raw["camera"], "env_spacing_m": 4.0}},
                  {**raw, "object": {**raw["object"], "start_clearance_m": 0.05}},
                  {**raw, "timeline": [{**p, "command": [0.4, 0, 0]} if p["name"] == "carry" else p for p in timeline]},
                  {**raw, "timeline": [p for p in timeline if p["name"] != "withdraw"]},
-                 {**raw, "arm_offsets_m": {"lift": 0.2, "place": -0.02}}, {**raw, "extra": 1}]
+                 {**raw, "arm_offsets_m": {"forward": 0.08, "lift": 0.2, "place": -0.02}},
+                 {**raw, "arm_offsets_m": {"forward": 0.3, "lift": 0.1, "place": -0.02}},
+                 {**raw, "arm_offsets_m": {"lift": 0.1, "place": -0.02}}, {**raw, "extra": 1}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "lift.json"
             for data in cases:
@@ -166,6 +187,8 @@ class LiftWorkerTests(unittest.TestCase):
                 mock.patch.object(lift, "require_ffmpeg", return_value="ffmpeg"), \
                 mock.patch.object(lift, "encode_recording", return_value={"status": "passed_video_decode"}) as encode:
             fake.box.slide = lambda: np.zeros(2)
+            # The second cabinet presses 5 N on the left knee throughout.
+            fake.body.data.force_matrix_w.value[1, 0, 0] = [3.0, 0.0, 4.0]
             setter = fake.robot.set_joint_position_target_index
             fake.robot.set_joint_position_target_index = lambda *, target: targets.append(target.value.copy()) or setter(target=target)
             directory = Path(tmp)
@@ -185,6 +208,11 @@ class LiftWorkerTests(unittest.TestCase):
         self.assertEqual(json.loads(lines[1][0])["root_xyz"][:2], [0.0, 0.0])
         # One frame every two control steps per case, none before the first step.
         self.assertEqual([call.kwargs["count"] for call in encode.call_args_list], [300, 300])
+        # After the crouch-start defaults, the grasp start pose (palms forward) is commanded before the first step.
+        start_angles = [result["arm_angles_rad"]["start"][n] for n in joints]
+        self.assertGreater(np.abs(start_angles).max(), 0.1)
+        np.testing.assert_allclose(targets[0][:, arm_ids], 0.0)
+        np.testing.assert_allclose(targets[1][:, arm_ids], np.tile(start_angles, (2, 1)))
         # During hold (control steps 100-149) only the feedforward case carries the load offsets.
         hold = targets[120][:, arm_ids]
         np.testing.assert_allclose(hold[0], [result["arm_angles_rad"]["lift"][n] for n in joints])
@@ -195,6 +223,18 @@ class LiftWorkerTests(unittest.TestCase):
             checks = case["summary"]["checks"]
             self.assertEqual((checks["attachment_held"], checks["carried_forward"], checks["actions_in_bound"]), (True, False, True))
         self.assertEqual(result["heaviest_passed_kg"], {"uncompensated": None, "feedforward": None})
+        # The doubles keep the arms at the start pose, so the hold error is the lift-start difference and the logged
+        # torque is kp times it; drives beyond their effort limit are reported as saturated.
+        record = json.loads(lines[0][120])
+        error = np.subtract(hold[0], start_angles)
+        np.testing.assert_allclose(record["arm_error_rad"], error, atol=1e-9)
+        np.testing.assert_allclose(record["arm_pd_torque_nm"], 100.0*error, atol=1e-7)
+        diagnostics = [case["diagnostics"] for case in result["results"]]
+        over = [n.removesuffix("_joint") for n, e, limit in zip(joints, error, result["arm_effort_nm"]) if abs(100.0*e) >= limit]
+        self.assertEqual(diagnostics[0]["saturated_joints"], over)
+        self.assertAlmostEqual(diagnostics[0]["hold_left_arm"]["wrist_pitch"]["error_rad"], error[joints.index("left_wrist_pitch_joint")])
+        self.assertEqual(diagnostics[0]["body_contact"], {"held_max_n": 0.0, "held_fraction": 0.0, "most_frequent_body": None})
+        self.assertEqual(diagnostics[1]["body_contact"], {"held_max_n": 5.0, "held_fraction": 1.0, "most_frequent_body": "left_knee_link"})
         self.assertEqual(result["status"], "completed_lift_sweep")
         self.assertEqual({role for role, _ in fake.policy_calls}, {"walk", "balance"})
 
