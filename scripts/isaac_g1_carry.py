@@ -3,7 +3,7 @@
 Each environment has its own corridor (width, corner distance, left or right turn), authored as static collider walls
 before reset, and its own cabinet mass. Every episode starts from the crouch start with the cabinet attached to the
 palms (the lift probe's grasp abstraction); GR00T Balance settles, arm IK lifts the cabinet, and then every 0.1 s the
-policy chooses the walk forward speed and yaw rate. An episode succeeds when the cabinet centre crosses the goal line
+policy chooses the walk forward speed and yaw rate, plus a torso lean pitch command when the configuration bounds one. An episode succeeds when the cabinet centre crosses the goal line
 in the second leg. It fails on a fall, a GR00T action beyond the transfer bound, wall contact (a cabinet corner, or a
 robot link origin inflated by a radius, within wall_contact_m of a wall; the walls are colliders, so physical contact
 holds that distance near zero), a tipped cabinet or a cabinet back on the floor. A pure-pursuit scripted command is
@@ -29,11 +29,20 @@ from isaac_preflight import check_versions, run_stage, write_json
 
 
 DEFAULT_CONFIG = ROOT / "configs/isaac_g1_carry.json"
-ACTION_KEYS = ("forward_mps", "yaw_rate_rps")
+ACTION_KEYS = ("forward_mps", "yaw_rate_rps", "lean_pitch_rad")
 FAILURES = ("invalid_action", "fallen", "wall_contact", "object_tipped", "object_grounded")
 OUTCOMES = (*FAILURES, "success", "time_out")
 LOOKAHEAD_M = (0.5, 1.0, 1.5)
-OBSERVATIONS = 25
+
+
+def action_keys(bounds):
+    """Walk forward speed and yaw rate, plus the torso lean pitch when its bound is configured."""
+    return tuple(k for k in ACTION_KEYS if k in bounds)
+
+
+def observation_count(bounds):
+    """Policy input size: 23 task values plus the previous action."""
+    return 23 + len(action_keys(bounds))
 
 
 def load_config(path):
@@ -88,8 +97,12 @@ def load_config(path):
     if set(s) != {"lateral_m", "yaw_rad"} or not interval(s["lateral_m"], -0.3, 0.3) or not interval(s["yaw_rad"], -0.5, 0.5):
         raise ValueError("Invalid start randomization")
     b = config["action_bounds"]
-    # Zero speed is allowed: a command norm of at most 0.05 hands the robot to GR00T Balance (source rule).
-    if set(b) != set(ACTION_KEYS) or not interval(b["forward_mps"], 0.0, 0.4) or not interval(b["yaw_rate_rps"], -0.4, 0.4):
+    # Zero speed is allowed: a command norm of at most 0.05 hands the robot to GR00T Balance (source rule). The optional
+    # lean is the GR00T pitch command; only forward lean up to 0.3 rad was reviewed (push), backward lean is untested.
+    if (set(b) not in (set(ACTION_KEYS[:2]), set(ACTION_KEYS)) or not interval(b["forward_mps"], 0.0, 0.4) or
+            not interval(b["yaw_rate_rps"], -0.4, 0.4) or
+            ("lean_pitch_rad" in b and (not interval(b["lean_pitch_rad"], -0.3, 0.3) or
+                                        not b["lean_pitch_rad"][0] <= 0.0 <= b["lean_pitch_rad"][1]))):
         raise ValueError("Invalid action bounds")
     term = config["termination"]
     if (set(term) != {"robot_link_radius_m", "wall_contact_m", "object_tilt_rad", "object_floor_clearance_m"} or
@@ -262,15 +275,17 @@ def task_step(state, previous_progress, prefix, actions, last_actions, low_level
 
 def bound_arrays(bounds):
     import numpy as np
-    return tuple(np.array([bounds[k][i] for k in ACTION_KEYS], dtype=float) for i in (0, 1))
+    return tuple(np.array([bounds[k][i] for k in action_keys(bounds)], dtype=float) for i in (0, 1))
 
 
 def action_commands(actions, bounds):
-    """Map normalized actions in [-1, 1] to GR00T commands [vx, 0, yaw rate]."""
+    """Map normalized actions in [-1, 1] to GR00T commands [vx, 0, yaw rate] and rpy commands [0, lean pitch, 0]."""
     import numpy as np
     low, high = bound_arrays(bounds)
     values = low + (np.clip(np.asarray(actions, dtype=float), -1.0, 1.0) + 1.0)/2*(high - low)
-    return np.c_[values[:, 0], np.zeros(len(values)), values[:, 1]]
+    zeros = np.zeros(len(values))
+    lean = values[:, 2] if values.shape[1] > 2 else zeros
+    return np.c_[values[:, 0], zeros, values[:, 1]], np.c_[zeros, lean, zeros]
 
 
 def normalized_action(values, bounds):
@@ -280,11 +295,13 @@ def normalized_action(values, bounds):
 
 
 def pursuit_actions(policy_obs, config):
-    """Scripted baseline: constant forward speed, yaw rate proportional to the bearing of the 1.0 m look-ahead point."""
+    """Scripted baseline: constant forward speed, yaw rate proportional to the bearing of the 1.0 m look-ahead point,
+    no lean."""
     import numpy as np
     s, b = config["scripted"], config["action_bounds"]
     yaw = np.clip(s["yaw_gain"]*np.arctan2(policy_obs[:, 3], policy_obs[:, 2]), *b["yaw_rate_rps"])
-    return normalized_action(np.c_[np.full(len(yaw), s["forward_mps"]), yaw], b)
+    values = np.c_[np.full(len(yaw), s["forward_mps"]), yaw, np.zeros(len(yaw))]
+    return normalized_action(values[:, :len(action_keys(b))], b)
 
 
 class CarryTaskEnv:
@@ -301,7 +318,8 @@ class CarryTaskEnv:
         self.s, self.policy, self.profile, self.asset, self.config = scene, policy, profile, asset, config
         self.corridors, self.masses, self.object_start, self.observations = corridors, np.asarray(masses), object_start, observations
         self.arm_ids, self.arm_start, self.arm_lift = arms
-        self.num_envs, self.num_actions, self.device, self.cfg = len(scene.origins), len(ACTION_KEYS), runtime["device"], config
+        self.action_keys = action_keys(config["action_bounds"])
+        self.num_envs, self.num_actions, self.device, self.cfg = len(scene.origins), len(self.action_keys), runtime["device"], config
         control_dt = asset["control_decimation"]*asset["physics_dt"]
         self.decision_dt = config["decision_control_steps"]*control_dt
         self.max_episode_length = int(round(config["episode_seconds"]/self.decision_dt))
@@ -405,11 +423,11 @@ class CarryTaskEnv:
         s, n, profile = self.s, self.num_envs, self.profile
         action = np.clip(np.asarray(actions.detach().cpu().numpy(), dtype=float), -1.0, 1.0)
         prefix = self.since_reset < self.prefix_decisions
-        commands = action_commands(action, self.config["action_bounds"])
-        # Zero command during the lift prefix, which hands the robot to GR00T Balance under the source rule.
+        commands, rpys = action_commands(action, self.config["action_bounds"])
+        # Zero command and lean during the lift prefix; the command hands the robot to GR00T Balance (source rule).
         commands[prefix] = 0.0
-        self.last_command = commands[:, [0, 2]]
-        rpys = np.zeros((n, 3))
+        rpys[prefix] = 0.0
+        self.last_command = np.c_[commands[:, 0], commands[:, 2], rpys[:, 1]][:, :self.num_actions]
         low_level = {"invalid_action": np.zeros(n, dtype=bool), "fallen": np.zeros(n, dtype=bool)}
         steps = self.config["decision_control_steps"]
         speed = np.zeros(n)
@@ -491,8 +509,9 @@ def evaluate(env, act, seed):
             break
     records = []
     for i in range(n):
-        c = np.asarray(commands[i], dtype=float).reshape(-1, 2)
+        c = np.asarray(commands[i], dtype=float).reshape(-1, env.num_actions)
         balance = np.hypot(c[:, 0], c[:, 1]) <= 0.05
+        lean = {"lean_mean_rad": float(c[:, 2].mean()) if len(c) else None} if env.num_actions > 2 else {}
         records.append({"width_m": float(env.corridors["width_m"][i]), "corner_m": float(env.corridors["corner_m"][i]),
                         "turn": "left" if env.corridors["turn"][i] > 0 else "right", "mass_kg": float(env.masses[i]),
                         **first[i], "min_wall_clearance_m": float(clearance[i]),
@@ -502,7 +521,7 @@ def evaluate(env, act, seed):
                                      "forward_mean_mps": float(c[:, 0].mean()) if len(c) else None,
                                      "forward_max_mps": float(c[:, 0].max()) if len(c) else None,
                                      "yaw_rate_abs_mean_rps": float(np.abs(c[:, 1]).mean()) if len(c) else None,
-                                     "balance_fraction": float(balance.mean()) if len(c) else None}})
+                                     "balance_fraction": float(balance.mean()) if len(c) else None, **lean}})
     width, mass = sum(env.config["corridor"]["width_m"])/2, sum(env.config["mass_kg"])/2
     groups = {"narrow": [r for r in records if r["width_m"] < width], "wide": [r for r in records if r["width_m"] >= width],
               "left": [r for r in records if r["turn"] == "left"], "right": [r for r in records if r["turn"] == "right"],

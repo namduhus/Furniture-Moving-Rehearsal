@@ -23,7 +23,7 @@ class LoadedRunner:
     loaded = []
 
     def __init__(self, env, cfg, log_dir, device):
-        assert log_dir is None and env.get_observations()["policy"].value.shape == (env.num_envs, carry.OBSERVATIONS)
+        assert log_dir is None and env.get_observations()["policy"].value.shape == (env.num_envs, 23 + env.num_actions)
 
     def load(self, path, map_location):
         LoadedRunner.loaded.append(path)
@@ -60,6 +60,9 @@ class CarryEvaluationConfigTests(unittest.TestCase):
         self.assertEqual(training["reward"]["overspeed"], 5.0)
         self.assertNotEqual(speed["checkpoint"], base["checkpoint"])
         self.assertEqual((speed["held_out"], speed["showcase"]), (base["held_out"], base["showcase"]))
+        heavy, heavy_training, *_ = ev.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_eval.json")
+        self.assertEqual((heavy_training["mass_kg"], heavy["held_out"]), ([2.0, 6.0], base["held_out"]))
+        self.assertEqual(max(c["mass_kg"] for c in heavy["showcase"]["cases"]), 5.8)
 
     def test_showcase_pairs_each_corridor_and_frames_it_from_its_corner(self):
         cases = [{"width_m": 1.2, "corner_m": 1.5, "turn": "left", "mass_kg": 3.0},

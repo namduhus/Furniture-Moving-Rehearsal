@@ -131,7 +131,7 @@ def record_showcase(env, act, learned, settings, profile, asset, directory):
                     speeds[i].append(task["speed_mps"][i])
                 traces[i].write(json.dumps({
                     "time_s": float(env.length[i]*env.decision_dt), "lift_prefix": not bool(task["active"][i]),
-                    "command": dict(zip(carry.ACTION_KEYS, map(float, env.last_command[i]))),
+                    "command": dict(zip(env.action_keys, map(float, env.last_command[i]))),
                     "speed_mps": float(task["speed_mps"][i]), "wall_clearance_m": float(task["clearance_m"][i]),
                     "cabinet_tilt_deg": float(np.degrees(task["tilt_rad"][i])),
                     "progress_m": float(env.previous_progress[i] - env.start_progress[i]),
@@ -149,14 +149,16 @@ def record_showcase(env, act, learned, settings, profile, asset, directory):
     for i, case in enumerate(cases):
         video = encode_recording(case, binary=encoder, count=int(frames[i]), fps=1/Fraction(str(env.decision_dt)),
                                  width=width, height=height, require_motion=False)
-        c = np.asarray(commands[i], dtype=float).reshape(-1, 2)
+        c = np.asarray(commands[i], dtype=float).reshape(-1, env.num_actions)
         results.append({"case": case.name, "policy": "learned" if learned[i] else "pursuit",
                         "width_m": float(env.corridors["width_m"][i]), "corner_m": float(env.corridors["corner_m"][i]),
                         "turn": "left" if env.corridors["turn"][i] > 0 else "right", "mass_kg": float(env.masses[i]),
                         **done[i], "min_wall_clearance_m": float(clearance[i]),
                         "speed_mps": {"mean": float(np.mean(speeds[i])), "max": float(np.max(speeds[i]))} if speeds[i] else None,
                         "commands": {"forward_mean_mps": float(c[:, 0].mean()) if len(c) else None,
-                                     "yaw_rate_abs_mean_rps": float(np.abs(c[:, 1]).mean()) if len(c) else None},
+                                     "yaw_rate_abs_mean_rps": float(np.abs(c[:, 1]).mean()) if len(c) else None,
+                                     **({"lean_mean_rad": float(c[:, 2].mean()) if len(c) else None}
+                                        if env.num_actions > 2 else {})},
                         "frames": int(frames[i]), "video": {k: video.get(k) for k in ("status", "decoded_frames", "sha256")}})
     return results
 

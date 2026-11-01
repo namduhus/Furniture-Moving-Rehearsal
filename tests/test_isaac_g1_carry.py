@@ -72,10 +72,19 @@ class CorridorGeometryTests(unittest.TestCase):
         np.testing.assert_allclose(state["goal_m"] - state["progress_m"], [0.2, 0.2])
 
     def test_pursuit_steers_toward_the_look_ahead_point(self):
-        obs = np.zeros((3, carry.OBSERVATIONS))
+        obs = np.zeros((3, carry.observation_count(self.config["action_bounds"])))
         obs[:, 2:4] = [[1.0, 0.0], [1.0, 1.0], [0.0, -1.0]]
-        commands = carry.action_commands(carry.pursuit_actions(obs, self.config), self.config["action_bounds"])
+        commands, rpys = carry.action_commands(carry.pursuit_actions(obs, self.config), self.config["action_bounds"])
         np.testing.assert_allclose(commands, [[0.2, 0, 0.0], [0.2, 0, 0.3], [0.2, 0, -0.3]], atol=1e-12)
+        np.testing.assert_allclose(rpys, 0.0)
+        # With a lean bound the policy has a third action, the GR00T pitch command; pursuit keeps it at zero.
+        lean = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_lean.json")[0]
+        bounds = lean["action_bounds"]
+        self.assertEqual((carry.action_keys(bounds), carry.observation_count(bounds)), (carry.ACTION_KEYS, 26))
+        commands, rpys = carry.action_commands([[-1.0, 0.0, -1.0], [1.0, 0.0, 1.0]], bounds)
+        np.testing.assert_allclose(rpys, [[0, -0.3, 0], [0, 0.3, 0]], atol=1e-12)
+        actions = carry.pursuit_actions(np.zeros((1, 26)), lean)
+        np.testing.assert_allclose(carry.action_commands(actions, bounds)[1], [[0, 0, 0]], atol=1e-12)
 
 
 class TaskStepTests(unittest.TestCase):
@@ -121,6 +130,8 @@ class TaskStepTests(unittest.TestCase):
                  {**raw, "corridor": {**raw["corridor"], "leg_two_m": 1.2}},
                  {**raw, "ppo": {**raw["ppo"], "hidden_dims": []}},
                  {**raw, "reward": {**raw["reward"], "speed_limit_mps": 0.05}},
+                 {**raw, "action_bounds": {**raw["action_bounds"], "lean_pitch_rad": [-0.5, 0.3]}},
+                 {**raw, "action_bounds": {**raw["action_bounds"], "lean_pitch_rad": [0.1, 0.3]}},
                  {**raw, "push_profile": "configs/isaac_g1_crouch_start_forward.json"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "carry.json"
@@ -146,19 +157,53 @@ class TaskStepTests(unittest.TestCase):
 class FakeRunner:
     def __init__(self, env, cfg, log_dir, device):
         self.env, self.cfg = env, cfg
-        assert env.get_observations()["critic"].value.shape == (env.num_envs, carry.OBSERVATIONS + 1)
+        assert env.get_observations()["critic"].value.shape == (env.num_envs, 23 + env.num_actions + 1)
 
     def learn(self, num_learning_iterations, init_at_random_ep_len):
         self.env.episode_length_buf = Tensor(np.arange(self.env.num_envs) % 3 + self.env.max_episode_length - 3)
         for _ in range(num_learning_iterations*self.cfg["num_steps_per_env"]):
-            _, reward, dones, extras = self.env.step(Tensor(np.zeros((self.env.num_envs, 2))))
+            _, reward, dones, extras = self.env.step(Tensor(np.zeros((self.env.num_envs, self.env.num_actions))))
             assert reward.value.shape == dones.value.shape == extras["time_outs"].value.shape == (self.env.num_envs,)
 
     def get_inference_policy(self, device):
-        return lambda obs: Tensor(np.ones((len(obs["policy"].value), 2)))
+        return lambda obs: Tensor(np.ones((len(obs["policy"].value), self.env.num_actions)))
 
 
 class CarryWorkerTests(unittest.TestCase):
+    def test_lean_action_reaches_gr00t_only_after_the_lift_prefix(self):
+        config, profile, asset, runtime = carry.load_config(ROOT / "configs/isaac_g1_carry_speed_6kg_lean.json")
+        count = 2
+        config = {**config, "num_envs": count, "episode_seconds": 5.0,
+                  "ppo": {**config["ppo"], "max_iterations": 1, "num_steps_per_env": 2}}
+        o = config["object"]
+        scene_profile = {**profile, "push_object": {"size_m": o["size_m"], "mass_kg": 2.0, "friction": o["friction"],
+                                                    "gap_m": profile["push_object"]["gap_m"]}}
+        modules = {"tensordict": ModuleType("tensordict"), "rsl_rl": ModuleType("rsl_rl"),
+                   "rsl_rl.runners": ModuleType("rsl_rl.runners")}
+        modules["tensordict"].TensorDict = lambda groups, batch_size: groups
+        modules["rsl_rl.runners"].OnPolicyRunner = FakeRunner
+        observe, rpys = wbc.BatchHistory.observe, []
+
+        def record(history, *args):
+            rpys.append(np.array(args[6]))
+            return observe(history, *args)
+
+        with tempfile.TemporaryDirectory() as tmp, parallel_isaac(count, scene_profile, asset), \
+                mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(lift, "apply_hand_attachment", return_value={}), \
+                mock.patch.object(carry, "apply_corridor", side_effect=lambda stage, env, w: ["wall"]*len(w)), \
+                mock.patch.object(wbc.BatchHistory, "observe", record):
+            sys.modules["torch"].__dict__.update(long=np.int64, inference_mode=nullcontext)
+            carry.run_worker(config, profile, asset, runtime, (Path("walk.onnx"), Path("balance.onnx")), Path(tmp))
+            result = json.loads((Path(tmp) / "carry-worker.json").read_text())
+        self.assertTrue(all(r["commands"]["lean_mean_rad"] == 0.0 for r in result["scripted_eval"]["per_env"]))
+        self.assertTrue(all(r["commands"]["lean_mean_rad"] == 0.3 for r in result["learned_eval"]["per_env"]))
+        # The learned evaluation runs last: 25 prefix decisions (5 control steps each) at zero lean, then 0.3 rad.
+        last = np.array(rpys[-250:])
+        np.testing.assert_allclose(last[:125, :, 1], 0.0)
+        np.testing.assert_allclose(last[125:, :, 1], 0.3)
+        np.testing.assert_allclose(last[:, :, [0, 2]], 0.0)
+
     def test_worker_builds_corridors_lifts_and_evaluates_both_policies(self):
         config, profile, asset, runtime = carry.load_config(carry.DEFAULT_CONFIG)
         count = 4
