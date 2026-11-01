@@ -1,0 +1,23 @@
+{
+  "training_config": "configs/isaac_g1_carry_speed.json",
+  "checkpoint": "outputs/isaac/20261101T024024.136630Z-carry/train/model_299.pt",
+  "held_out": {
+    "num_envs": 256,
+    "corridor_seed": 201,
+    "start_seed": 202
+  },
+  "showcase": {
+    "cases": [
+      {"width_m": 1.15, "corner_m": 1.6, "turn": "left", "mass_kg": 3.9},
+      {"width_m": 1.2, "corner_m": 1.4, "turn": "right", "mass_kg": 3.5},
+      {"width_m": 1.45, "corner_m": 1.8, "turn": "left", "mass_kg": 2.2},
+      {"width_m": 1.3, "corner_m": 2.0, "turn": "right", "mass_kg": 3.0}
+    ],
+    "start_seed": 203,
+    "env_spacing_m": 12.0,
+    "eye_from_corner_m": [-2.0, -4.0, 5.5],
+    "target_from_corner_m": [-0.8, 0.6, 0.3]
+  },
+  "stage_timeout_seconds": 1800,
+  "scope": "Evidence for the speed-limited corridor carry checkpoint (20261101T024024, iteration 299; walking above 0.3 m/s penalized): the same 256 held-out corridors and masses (seeds 201/202) and the same four showcase corridors (seed 203) and camera as the unlimited checkpoint's evaluation (20261101T022430), so the two policies compare directly. Walking speed is the mean planar root speed per 0.1 s decision."
+}

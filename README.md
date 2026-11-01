@@ -314,6 +314,7 @@ The [slider profile](configs/isaac_g1_push_sliders.json) is identical except for
 
 ```sh
 /opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry_eval.py --config configs/isaac_g1_carry_eval.json
+/opt/isaaclab/.venv/bin/python scripts/isaac_g1_carry_eval.py --config configs/isaac_g1_carry_speed_eval.json
 ```
 
 `deployment-joints.json`, `deployment-runtime.json` and `deployment-audit.json` retain authored topology and actual control properties. The effective 29-joint asset/controller snapshots, recorded policy phase/applied action and functional checks are replayed by the existing `--analyze-run` command. Actual GPU topology/control application and functional performance require validation on the selected worker; local doubles and USD composition checks do not establish those outcomes. Contact/solver semantics, collider/body decomposition and the retained experiment velocity safety caps remain explicit residual differences. Do not claim engine or training equivalence. The same single-worker session deadlines/billing apply, and `fmr-stop` releases the session when finished.
