@@ -61,6 +61,12 @@ class ServerCheckTests(unittest.TestCase):
         checked = server.check({**move("cabinet"), "destination": {"center_m": point["center_m"], "yaw_deg": point["yaw_deg"]}},
                                CONFIG, TRAININGS)
         self.assertEqual(checked["strategy"], "push")
+        # With Meta's estimate (8 kg side table) nothing passes, and the reasons say why.
+        estimate = server.feasible({"scene": "living_room_pedestal_three", "target": "side_table_1",
+                                    "corrections": {"size_m": [0.32, 0.32, 0.9], "mass_kg": 8.0}}, CONFIG, TRAININGS)
+        self.assertEqual(estimate["points"], [])
+        self.assertIn("carry tier", estimate["reasons"]["carry"])
+        self.assertEqual(pedestal["reasons"], {})
 
     def test_queued_moves_and_same_size_items_shape_the_next_move(self):
         # Edited pedestal room: the inner side table is boxed in until the outer one has been moved.

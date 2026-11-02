@@ -179,12 +179,14 @@ def feasible(body, config, trainings, step=0.15):
             for d in np.arange(low, high + 1e-9, 0.1):
                 sim = start + d*u
                 candidates.append(([float(sim[0] + width/2), float(depth/2 - sim[1])], float(item["yaw_deg"])))
-    points = []
+    points, reasons = [], {}
     for centre, yaw_deg in candidates:
-        strategy, _ = choose_strategy({**base, "destination": {"center_m": centre, "yaw_deg": yaw_deg}}, scene, config, trainings)
+        strategy, why = choose_strategy({**base, "destination": {"center_m": centre, "yaw_deg": yaw_deg}}, scene, config, trainings)
         if strategy:
             points.append({"center_m": centre, "yaw_deg": yaw_deg, "strategy": strategy})
-    return {"points": points, "candidates": len(candidates)}
+        elif not reasons:
+            reasons = why                          # why the first candidate failed, shown when none passes
+    return {"points": points, "candidates": len(candidates), "reasons": {} if points else reasons}
 
 
 def check(body, config, trainings, models=None):

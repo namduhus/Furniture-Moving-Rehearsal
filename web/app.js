@@ -638,9 +638,11 @@ async function showFeasible() {
   plan.feasible.forEach((p, i) => dots.setMatrixAt(i, new THREE.Matrix4().makeTranslation(p.sim[0], p.sim[1], 0.004)));
   plan.dots = dots;
   world.add(dots);
+  // With no destination, say why (the rehearsal rules' reasons for the carry, lift-then-push and push strategies).
+  const why = Object.entries(result.reasons ?? {}).map(([strategy, reason]) => `${strategy}: ${reason}`).join("; ");
   $("dest-hint").textContent = plan.feasible.length
     ? `Green dots: where it can go (${inCarryTier() ? "carried" : "lifted if it can be, else pushed on sliders"}). Click near one.`
-    : "No reachable destination for this item with this correction.";
+    : `No reachable destination with this correction (${why || "no candidate"}).${inCarryTier() ? "" : " Try “Use carry size”."}`;
 }
 
 function placeGhost(point) {
@@ -733,6 +735,13 @@ $("rot-r").addEventListener("click", () => { if (plan.pose) { plan.turned = true
 $("check").addEventListener("click", () => checkMove().catch((error) => { $("plan-result").innerHTML = `<p class="bad-text">${error.message}</p>`; }));
 $("rehearse").addEventListener("click", () => rehearseMove().catch((error) => { $("progress").hidden = false; $("progress").textContent = error.message; }));
 $("undo").addEventListener("click", undoMove);
+$("fix-carry").addEventListener("click", () => {
+  // The trained carry tier: the cabinet size (spec order) and a mass inside its range.
+  const tier = plan.view.carry_tier;
+  ["fix-w", "fix-d", "fix-h"].forEach((id, i) => { $(id).value = tier.size_m[i]; });
+  $("fix-m").value = 3;
+  $("fix-m").dispatchEvent(new Event("change"));
+});
 
 let scenes = [];
 // Scenes kept out of the Try it tabs (their demos and requests still use them).
