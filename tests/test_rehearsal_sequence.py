@@ -39,8 +39,7 @@ class SequenceTests(unittest.TestCase):
     def test_the_trio_sequence_plans_every_move_within_the_trained_distances(self):
         config, trainings = rehearsal.load_config(rehearsal.DEFAULT_CONFIG)
         seq = sequence.load_sequence(TRIO)
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sequence, "ROOT", Path(tmp)):
-            layouts = sequence.plan(seq, config, trainings)
+        layouts, (moved, start) = sequence.plan(seq, config, trainings)
         self.assertEqual([m["target"] for m in seq["moves"]], ["pedestal_3", "pedestal_2", "pedestal_1"])
         for layout in layouts:
             # The pedestals' spec fronts face the wall, so they are gripped from the room side.
@@ -50,6 +49,9 @@ class SequenceTests(unittest.TestCase):
         # Later moves start behind the item set down before, with the moved items as obstacles.
         np.testing.assert_allclose(layouts[1]["start"], [-1.2, -0.8 - 0.15 - 0.5, np.pi/2], atol=1e-9)
         self.assertEqual(len(layouts[2]["room"]["boxes"]), 4)
+        # After the last move every item stands on its destination and the robot is expected 0.5 m behind the last one.
+        self.assertEqual(moved, {m["target"]: m["destination"] for m in seq["moves"]})
+        np.testing.assert_allclose(start, [0.5, -1.45, np.pi/2], atol=1e-9)
 
     def test_requests_carry_the_corrected_sizes_the_moved_poses_and_the_start(self):
         seq = sequence.load_sequence(TRIO)

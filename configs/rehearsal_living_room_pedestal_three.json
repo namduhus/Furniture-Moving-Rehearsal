@@ -1,0 +1,12 @@
+{
+  "scene": "configs/scenes/living_room_pedestal_three.json",
+  "moves": [
+    {"target": "side_table_1", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [2.175, 0.825], "yaw_deg": -90.0}, "strategy": "carry"},
+    {"target": "side_table_0", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [1.575, 3.225], "yaw_deg": 90.0}, "strategy": "carry"},
+    {"target": "cabinet_0", "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+     "destination": {"center_m": [0.375, 2.325], "yaw_deg": 90.0}, "strategy": "carry"}
+  ],
+  "scope": "Three moves in living_room_pedestal_three: the pedestal room photo edited with Muse Image to hold two more pedestals against the left wall (SAM 3.1 + Muse Spark spec; Spark called them side tables, 0.32 x 0.32 x 0.9 m, and the original pedestal a 0.85 m cabinet). All three are corrected to the carry tier (0.28 x 0.30 x 0.90 m, 3 kg). The outer side table goes next to the TV bench, the inner one (reachable only once the outer one is gone) to the front of the room, and the original pedestal into the corner the two left. Destinations come from the viewer's feasibility grid with each earlier move applied; every approach and carry is 1.0-3.5 m, the range the policies were trained on (the second carry and third approach sit at 1.0 m)."
+}

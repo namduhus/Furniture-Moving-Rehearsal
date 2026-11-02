@@ -47,6 +47,7 @@
     .tabs .try { border-style: dashed; }
     #plan-panel label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin: 3px 0; }
     #plan-panel input { font: inherit; width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; }
+    #plan-panel label.check { display: flex; gap: 6px; } #plan-panel label.check input { width: auto; }
     #plan-panel .row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
     #plan-panel button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
     #plan-panel button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -71,6 +72,13 @@
     <div id="plan-panel" hidden>
       <h2>Your move</h2>
       <p class="hint" id="plan-hint">Click the furniture you want to move.</p>
+      <div id="queue-box" hidden>
+        <h2>Moves</h2>
+        <ol class="phases" id="queue"></ol>
+        <p class="hint" id="queue-meta" hidden></p>
+        <div class="row"><button id="undo" type="button">Undo last</button>
+          <button id="rehearse" class="primary" type="button">Rehearse all</button></div>
+      </div>
       <div id="plan-item" hidden>
         <div class="kv" id="plan-meta"></div>
         <h2>Your correction</h2>
@@ -78,11 +86,11 @@
         <label>Depth (m)<input id="fix-d" type="number" step="0.01" min="0.05"></label>
         <label>Height (m)<input id="fix-h" type="number" step="0.01" min="0.05"></label>
         <label>Mass (kg)<input id="fix-m" type="number" step="0.5" min="0.5"></label>
+        <label class="check" id="alike-row" hidden><input id="fix-alike" type="checkbox" checked><span id="alike-text"></span></label>
         <h2>Destination</h2>
         <p class="hint" id="dest-hint">Click the floor where it should go.</p>
         <div class="row"><button id="rot-l" type="button">⟲ 15°</button><button id="rot-r" type="button">⟳ 15°</button></div>
-        <div class="row"><button id="check" type="button" disabled>Check with Meta</button>
-          <button id="rehearse" class="primary" type="button" disabled>Rehearse</button></div>
+        <div class="row"><button id="check" type="button" disabled>Check with Meta and add</button></div>
         <div id="plan-result"></div>
       </div>
     </div>

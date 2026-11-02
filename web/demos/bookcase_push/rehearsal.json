@@ -1,5 +1,5 @@
 {
- "run": "20261101T145650.307033Z-rehearsal",
+ "run": "20261101T180806.222811Z-rehearsal",
  "status": "completed_rehearsal",
  "request": {
   "scene": "configs/scenes/living_room_bookcase.json",
@@ -34,10 +34,10 @@
   "push_checkpoint_iteration": 99,
   "approach": {
    "outcome": "success",
-   "progress_m": 3.3251925102027045,
-   "seconds": 19.200000000000003,
-   "position_error_m": 0.047148170763035964,
-   "yaw_error_deg": 0.32001260624948785
+   "progress_m": 3.316434859350501,
+   "seconds": 20.900000000000002,
+   "position_error_m": 0.059649262704837024,
+   "yaw_error_deg": 4.005556228548048
   },
   "reach": {
    "invalid_action": false,
@@ -70,20 +70,21 @@
   "step_back": {
    "invalid_action": false,
    "fallen": false,
-   "clearance_m": 0.5025330527814235
+   "clearance_m": 0.5001206338661918
   },
   "reposition": {
    "outcome": "success",
-   "progress_m": 1.9178487651536023,
-   "seconds": 12.8,
-   "position_error_m": 0.053741349828385764,
-   "yaw_error_deg": 7.97103296624793
+   "progress_m": 1.92995330720724,
+   "seconds": 12.9,
+   "position_error_m": 0.04209665022854469,
+   "yaw_error_deg": 5.860667903270108
   },
   "push": {
    "outcome": "success",
-   "progress_m": 0.5127458016779626,
-   "seconds": 3.5,
-   "lateral_m": 0.007905636842062955
+   "progress_m": 0.4674703122089243,
+   "coast_m": 0.039777698648978385,
+   "seconds": 3.2,
+   "lateral_m": 0.0111473513260656
   },
   "back_away": {
    "invalid_action": false,
@@ -91,34 +92,34 @@
   }
  },
  "grasp": {
-  "palm_gap_m": 0.06709409245594081,
+  "palm_gap_m": 0.07083750035855062,
   "authored": true,
-  "object_shift_m": 0.001939450404992695
+  "object_shift_m": 0.00037796100598472905
  },
  "lift": {
   "lifted": false,
-  "bottom_m": -2.8998985612815886e-07,
+  "bottom_m": -5.331959869181446e-07,
   "mass_kg": 12.0
  },
  "advice": {
   "mode": "diagnose",
   "model": "muse-spark-1.3",
   "frames": [
-   "/__modal/volumes/vo-0OizyXQqG4s09F2nhK9LwQ/repo/Furniture-Moving-Rehearsal/outputs/isaac/20261101T145650.307033Z-rehearsal/rehearsal/frames/000222.png",
-   "/__modal/volumes/vo-0OizyXQqG4s09F2nhK9LwQ/repo/Furniture-Moving-Rehearsal/outputs/isaac/20261101T145650.307033Z-rehearsal/rehearsal/frames/000282.png"
+   "/__modal/volumes/vo-0OizyXQqG4s09F2nhK9LwQ/repo/Furniture-Moving-Rehearsal/outputs/isaac/20261101T180806.222811Z-rehearsal/rehearsal/frames/000239.png",
+   "/__modal/volumes/vo-0OizyXQqG4s09F2nhK9LwQ/repo/Furniture-Moving-Rehearsal/outputs/isaac/20261101T180806.222811Z-rehearsal/rehearsal/frames/000310.png"
   ],
   "advice": {
-   "cause": "lift_failed_-_12kg_cabinet_too_heavy_and_too_wide_to_carry_never_left_floor",
+   "cause": "approach succeeded but lift failed because 12.0 kg cabinet exceeds carry mass and size capability, bottom remained on floor",
    "confidence": "high",
    "evidence": [
-    "rehearsal approach success with position_error_m 0.047, grasp palm_gap_m 0.067 with object_shift_m 0.0019, but lift.lifted false and bottom_m ~0 for mass_kg 12.0",
-    "carry mass_kg [2.0, 4.0] vs cabinet mass 12.0 kg",
-    "carry size_m [0.28, 0.3, 0.9] with size_tolerance_m 0.02 vs cabinet [0.8, 0.3, 1.0] m",
-    "lift probes: 8 and 10 kg did not leave the floor with wrist pitch joints at 5 Nm limit (static load 1.28 Nm per kg)",
-    "push mass_kg [5.0, 20.0] includes 12.0 kg, slider_friction 0.1 within friction_max 0.15, and 0.8 m face exceeds min_face_width_m 0.36"
+    "Rehearsal approach outcome success with position_error_m 0.0596 and yaw_error_deg 4.0, but lift lifted false with bottom_m ~0 for mass_kg 12.0",
+    "Item mass 12.0 kg exceeds carry mass_kg [2.0, 4.0]",
+    "Item size [0.8, 0.3, 1.0] m exceeds carry size_m [0.28, 0.3, 0.9] m with size_tolerance_m 0.02",
+    "Lift probes (run 20261101T092539): 8 and 10 kg did not leave the floor with wrist pitch joints at their 5 Nm limit",
+    "Push mass_kg [5.0, 20.0] includes 12.0 kg, slider_friction 0.1 is within friction_max 0.15, and 0.8 m face meets min_face_width_m 0.36"
    ],
-   "explanation": "The robot walked to the cabinet and got a grip, but the 12 kg cabinet never left the floor. It is too heavy and too wide to carry, because the robot can only carry 2-4 kg items about 0.28 m wide. The next best move is to push it on furniture sliders, which works for 5-20 kg items like this one.",
-   "explanation_ko": "로봇은 캐비닛까지 걸어가 잘 잡았지만, 12kg 캐비닛은 바닥에서 전혀 들리지 않았습니다. 로봇은 약 0.28m 너비의 2~4kg 물건만 들 수 있어서 이 캐비닛은 너무 무겁고 넓어 들 수 없습니다. 다음으로는 가구 슬라이더를 깔고 미는 것이 좋으며, 이 방식은 이런 5~20kg 물건에 적용할 수 있습니다.",
+   "explanation": "The robot reached the cabinet correctly but could not lift it off the floor. At 12 kg and 0.8 m wide, it is well above the proven carry limit of 2-4 kg and about 0.28 m size. The next best plan is to push it on furniture sliders, which the robot can do for 5-20 kg items like this.",
+   "explanation_ko": "로봇은 캐비닛에 정확히 접근했지만 바닥에서 들어 올리지 못했습니다. 12kg, 너비 0.8m인 이 캐비닛은 로봇이 들 수 있는 2~4kg, 약 0.28m 크기 한계를 크게 초과합니다. 다음으로는 5~20kg 물체에 가능한 가구 슬라이더를 이용해 미는 방식이 적합합니다.",
    "strategy": "push"
   },
   "decision": {
@@ -137,37 +138,37 @@
    }
   },
   "usage": {
-   "completion_tokens": 2746,
-   "prompt_tokens": 1473,
-   "total_tokens": 4219,
+   "completion_tokens": 2924,
+   "prompt_tokens": 1471,
+   "total_tokens": 4395,
    "completion_tokens_details": {
-    "reasoning_tokens": 2292
+    "reasoning_tokens": 2214
    },
    "prompt_tokens_details": {
     "cached_tokens": 0
    }
   },
-  "cached": true
+  "cached": false
  },
  "placement": {
-  "position_m": 0.06092542191388387,
-  "yaw_deg": 7.9430212898131,
-  "yaw_rad": -3.0029607795265485,
+  "position_m": 0.013993355933623886,
+  "yaw_deg": 8.714768772416539,
+  "yaw_rad": -2.98949124496114,
   "cabinet_spec_xy_m": [
-   2.154056132864207,
-   0.539209747314453
+   2.1607720224186777,
+   0.5910681724548339
   ],
-  "tilt_deg": 1.6752248626020106e-05,
+  "tilt_deg": 1.1390761175093017e-05,
   "within_tolerance": true
  },
  "key_frames": [
-  "000192_approach.png",
-  "000222_hold.png",
-  "000435_push.png",
-  "000450_back_away.png"
+  "000209_approach.png",
+  "000239_hold.png",
+  "000461_push.png",
+  "000476_back_away.png"
  ],
  "layout": {
-  "reach_m": 0.41122464896819655,
+  "reach_m": 0.4112246489681967,
   "hand_reach_m": 0.41477672861456183,
   "size_m": [
    0.8,
@@ -203,17 +204,17 @@
    3.141592653589793
   ],
   "approach_goal": [
-   0.6612246489681965,
+   0.6612246489681968,
    1.7999999999999998,
    3.141592653589793
   ],
   "push": {
    "origin": [
-    0.034382011741399765,
-    1.8061854839324951
+    0.04770694673061371,
+    1.7968460321426392
    ],
-   "theta": 1.640309502049804,
-   "distance_m": 0.49500999889938546,
+   "theta": 1.6653295186229737,
+   "distance_m": 0.5054105936137109,
    "along_m": 0.3,
    "face_m": 0.8
   },
@@ -228,11 +229,10 @@
    ]
   },
   "push_goal": [
-   0.07986097422958384,
-   1.1529900856739144,
-   1.640309502049804
-  ],
-  "heading_frame_corrected": true
+   0.10951292964266836,
+   1.1449928394593,
+   1.6653295186229737
+  ]
  },
  "walls": {
   "thickness_m": 0.1,

@@ -258,23 +258,25 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertLess(result["placement"]["position_m"], 1e-9)
         self.assertTrue(result["placement"]["within_tolerance"])
         np.testing.assert_allclose(result["placement"]["cabinet_spec_xy_m"], [3.0, 2.5], atol=1e-9)
-        # One frame per decision: start, approach 11, reach 10, grasp 5, lift 10, hold 5, carry 1, align 40, lower 8
-        # (of 25: touchdown), release 5, withdraw 10, back away 15, and the step back, which runs its full 4 s because
-        # the doubles do not move.
+        # One frame per decision: start, approach 11, square up 20, reach 10, grasp 5, lift 10, hold 5, carry 1, align 40,
+        # lower 8 (of 25: touchdown), release 5, withdraw 10, back away 15, and the step back, which runs its full 4 s
+        # because the doubles do not move.
         phases = [frame["phase"] for frame in replay["frames"]]
-        self.assertEqual(len(phases), 161)
-        self.assertEqual(encode.call_args.kwargs["count"], 161)
-        self.assertEqual([phases.count(p) for p in ("approach", "reach", "carry", "align", "lower", "back_away", "step_back")],
-                         [11, 10, 1, 40, 8, 15, 40])
+        self.assertEqual(len(phases), 181)
+        self.assertEqual(encode.call_args.kwargs["count"], 181)
+        self.assertEqual([phases.count(p) for p in ("approach", "square_up", "reach", "carry", "align", "lower", "back_away",
+                                                    "step_back")], [11, 20, 10, 1, 40, 8, 15, 40])
+        # Already on the pre-grasp pose, the square-up docking holds still.
+        self.assertEqual({tuple(f["command"]) for f in replay["frames"] if f["phase"] == "square_up"}, {(0.0, 0.0, 0.0)})
         self.assertEqual(result["phases"]["lower"]["stopped_s"], 0.8)
         self.assertEqual(len(bottoms), 9)
         # The doubles hold the cabinet straight ahead at the reach, so the placement goal is where the robot stands.
         np.testing.assert_allclose(result["placement_goal"], result["layout"]["approach_goal"], atol=1e-6)
         self.assertEqual(len(replay["frames"][0]["bodies"]), len(replay["bodies"]))
         self.assertEqual(replay["frames"][-1]["command"], [-0.1, 0.0, 0.0])
-        # Key frames: the end of the approach (frame 11), of the hold (41), of the carry (42) and the final frame.
-        self.assertEqual(result["key_frames"], ["000011_approach.png", "000041_hold.png", "000042_carry.png",
-                                                "000160_step_back.png"])
+        # Key frames: the end of the approach (frame 11), of the hold (61), of the carry (62) and the final frame.
+        self.assertEqual(result["key_frames"], ["000011_approach.png", "000061_hold.png", "000062_carry.png",
+                                                "000180_step_back.png"])
         # The reach measured each palm against its grasp point on the floor-standing cabinet.
         self.assertEqual(set(result["reach"][0]["offset_m"]), {"left", "right"})
         self.assertIsNotNone(result["grasp"]["palm_gap_m"])
@@ -416,16 +418,17 @@ class RehearsalWorkerTests(unittest.TestCase):
         self.assertFalse(result["lift"]["lifted"])
         worker, frames = advise.call_args.args[4], advise.call_args.args[5]
         self.assertEqual((worker["status"], worker["lift"]["lifted"]), ("lift_attempt", False))
-        # Frames: the end of the hold (frame 41) and the moment of the diagnosis, after lower 25, release 5, withdraw 10
-        # and the step back, which runs its full 4 s because the doubles do not move (frame 121).
-        self.assertEqual([f.name for f in frames], ["000041.png", "000121.png"])
+        # Frames: the end of the hold (frame 61, after the 20 square-up decisions) and the moment of the diagnosis, after
+        # lower 25, release 5, withdraw 10 and the step back, which runs its full 4 s because the doubles do not move
+        # (frame 141).
+        self.assertEqual([f.name for f in frames], ["000061.png", "000141.png"])
         self.assertLess(result["phases"]["step_back"]["clearance_m"], 0.5)
         self.assertEqual((result["advice"]["mode"], result["advice"]["decision"]["strategy"]), ("rules_only", "push"))
         self.assertIn("no META_API_KEY", result["advice"]["error"])
         self.assertEqual((result["phases"]["reposition"]["outcome"], result["phases"]["push"]["outcome"]), ("success", "success"))
         phases = [frame["phase"] for frame in replay["frames"]]
         order = [p for i, p in enumerate(phases) if i == 0 or p != phases[i - 1]]
-        self.assertEqual(order, ["start", "approach", "reach", "grasp", "lift", "hold", "lower", "release", "withdraw",
+        self.assertEqual(order, ["start", "approach", "square_up", "reach", "grasp", "lift", "hold", "lower", "release", "withdraw",
                                  "step_back", "reposition", "push", "back_away"])
 
 

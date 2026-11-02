@@ -48,7 +48,7 @@ from isaac_preflight import check_versions, run_stage, write_json
 from isaac_video import encode_recording, require_ffmpeg
 
 DEFAULT_CONFIG = ROOT / "configs/isaac_g1_rehearsal.json"
-TIMELINE = ("reach", "grasp", "lift", "hold", "align", "lower", "release", "withdraw", "step_back", "back_away")
+TIMELINE = ("square_up", "reach", "grasp", "lift", "hold", "align", "lower", "release", "withdraw", "step_back", "back_away")
 
 
 def repo_path(value, prefix, suffix):
@@ -120,17 +120,22 @@ def load_request(path):
             request["strategy"] not in ("carry", "push", "auto")):
         raise ValueError("A request needs scene, target, corrections {size_m, mass_kg}, destination {center_m, yaw_deg} "
                          "and strategy carry, push or auto (optional: start, furniture)")
-    scene = json.loads(repo_path(request["scene"], "configs/scenes/", ".json").read_text())
-    start, moved = request.get("start"), request.get("furniture", {})
+    start = request.get("start")
     if start is not None and (not isinstance(start, list) or len(start) != 3 or
                               not all(type(v) in (int, float) for v in start)):
         raise ValueError("start must be the root pose [x, y, yaw] in the simulation frame")
+    scene = json.loads(repo_path(request["scene"], "configs/scenes/", ".json").read_text())
+    return request, with_furniture(scene, request.get("furniture", {}))
+
+
+def with_furniture(scene, moved):
+    """The scene spec with per-item center_m / yaw_deg / size_m overrides (a request's `furniture`)."""
     ids = {f["id"] for f in scene["scene"]["furniture"]}
     if not isinstance(moved, dict) or not set(moved) <= ids or not all(
             isinstance(v, dict) and set(v) <= {"center_m", "yaw_deg", "size_m"} for v in moved.values()):
         raise ValueError(f"furniture overrides need known ids ({sorted(ids)}) and center_m, yaw_deg or size_m")
-    scene["scene"]["furniture"] = [{**f, **moved.get(f["id"], {})} for f in scene["scene"]["furniture"]]
-    return request, scene
+    return {**scene, "scene": {**scene["scene"], "furniture": [{**f, **moved.get(f["id"], {})}
+                                                               for f in scene["scene"]["furniture"]]}}
 
 
 def facing_yaw(yaw_deg):
@@ -184,6 +189,23 @@ def door_start(scene, inside_door):
     return np.array({"right": [width/2 - inside_door, depth/2 - door["center_m"], np.pi],
                      "left": [-width/2 + inside_door, depth/2 - door["center_m"], 0.0],
                      "back": [door["center_m"] - width/2, depth/2 - inside_door, -np.pi/2]}[door["wall"]], dtype=float)
+
+
+def entry_start(scene, inside_door, clearance):
+    """Robot start inside the door with `clearance` from every wall and furniture item (the target included): the door
+    start, else the first pose shifted along the door (up to 0.4 m, half the 0.8 m door width) or up to 0.4 m further in.
+    In the edited pedestal room a pedestal stands 0.45 m from the door start. The door start when none is clear."""
+    import numpy as np
+    room, _ = spec_room(scene)
+    nominal = door_start(scene, inside_door)
+    inward = np.array([np.cos(nominal[2]), np.sin(nominal[2])])
+    along = np.array([-inward[1], inward[0]])
+    for deeper in (0.0, 0.2, 0.4):
+        for shift in (0.0, 0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4):
+            xy = nominal[:2] + deeper*inward + shift*along
+            if float(rg.obstacle_distance(xy, room)) >= clearance:
+                return np.r_[xy, nominal[2]]
+    return nominal
 
 
 def push_geometry(layout_room, item, size, placed, push_settings, hand_reach, inflation, margin):
@@ -287,7 +309,8 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
     if not room.footprint_clear(layout_room, placed[:2], placed[2], size[:2], c["goal"]["object_margin_m"]):
         raise ValueError("The destination overlaps a wall or other furniture")
     # A start carried over from an earlier move is where the robot already stands; it needs the planner's inflation.
-    start = np.asarray(request["start"], dtype=float) if "start" in request else door_start(scene, inside_door)
+    start = (np.asarray(request["start"], dtype=float) if "start" in request else
+             entry_start(scene, inside_door, a["room"]["start_clearance_m"]))
     clearance = a["room"]["inflation_m"] if "start" in request else a["room"]["start_clearance_m"]
     if float(rg.obstacle_distance(start[:2], layout_room)) < clearance:
         raise ValueError(f"The {'start' if 'start' in request else 'door start'} is within {clearance} m of a wall or furniture")
@@ -778,6 +801,10 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     if result["phases"]["push"]["outcome"] == "success":
                         status = "completed_rehearsal"
             elif result["phases"]["approach"]["outcome"] == "success":
+                # Square up first: the approach succeeds within 6 cm / 8 deg, but the reach corrects at most 5 cm sideways.
+                # Run 20261101T175925 (trio, pedestal_3) stopped 6.9 cm to the side, the right palm met the pedestal 2.8 cm
+                # off its face and the lift tilted it onto one edge.
+                scripted("square_up", arm["start"], arm["start"], dock=True)
                 # Reach: each palm to its grasp point on the cabinet where it stands; then grasp where the hands are.
                 pelvis = quat_xyzw_matrices(finite(s.batch(s.robot.data.root_link_pose_w), (1, 7))[:, 3:]) @ s.rotation
                 cabinet = pose_matrix(finite(s.batch(s.box.data.root_link_pose_w), (1, 7))[0])

@@ -444,8 +444,9 @@ renderer.setAnimationLoop((now) => {
   composer.render();
 });
 
-// ---- Try it: pick an item and a destination, check it with the rehearsal rules and Muse Spark, rehearse on Isaac ----
-const plan = { view: null, items: new Map(), floor: null, selected: null, ghost: null, pose: null, checked: null };
+// ---- Try it: pick items and destinations one after another (each checked with the rehearsal rules and Muse Spark,
+// given the moves queued before it), then rehearse them all on Isaac ----
+const plan = { view: null, items: new Map(), floor: null, selected: null, ghost: null, pose: null, checked: null, queue: [] };
 const raycaster = new THREE.Raycaster();
 let standing = null;
 
@@ -504,7 +505,8 @@ async function loadPlan(sceneId) {
   await placeStanding(view.start);
   world.add(robot.root);
   scene.add(world);
-  Object.assign(plan, { view, floor: shell.userData.floor, selected: null, ghost: null, pose: null, checked: null });
+  Object.assign(plan, { view, floor: shell.userData.floor, selected: null, ghost: null, pose: null, checked: null, queue: [] });
+  renderQueue();
   $("photo").src = view.photo ?? "";
   camera.position.set(0, -view.room.depth_m / 2 - 2.5, 4.5);
   controls.target.set(0, 0, 0.3);
@@ -531,31 +533,79 @@ function highlight(f) {
   }
 }
 
-function resizeSelected() {
-  // The selected item takes the user's corrected size, standing on the floor at its spec pose.
-  const mesh = plan.items.get(plan.selected.id), size = simSize(corrections().size_m);
+function resizeItem(id, sizeM) {
+  // An item drawn at a (corrected) spec size, standing on the floor at its spec pose.
+  const mesh = plan.items.get(id), size = simSize(sizeM);
   if (size.some((v) => !(v > 0))) return;
   mesh.geometry.dispose();
   mesh.geometry = new RoundedBoxGeometry(size[0], size[1], size[2], 3, Math.min(0.025, ...size.map((v) => v / 4)));
   mesh.position.z = size[2] / 2;
 }
 
+const queued = () => new Set(plan.queue.map((q) => q.request.target));
+// Other items of the selected one's kind, not yet queued: they can take the same corrected size.
+const alikeItems = () => plan.view.furniture.filter((o) => o.id !== plan.selected.id && o.category === plan.selected.category && !queued().has(o.id));
+const alikeIds = () => ($("fix-alike").checked && !$("alike-row").hidden ? alikeItems().map((o) => o.id) : []);
+
+function resizeSelected() {
+  resizeItem(plan.selected.id, corrections().size_m);
+  for (const o of alikeItems()) resizeItem(o.id, alikeIds().includes(o.id) ? corrections().size_m : o.size_m);
+}
+
 function selectItem(f) {
+  if (queued().has(f.id)) { $("plan-hint").textContent = `${f.category} is already in the moves.`; return; }
   highlight(f);
   plan.selected = f;
   $("plan-item").hidden = false;
   $("plan-hint").textContent = `Selected: ${f.category}.`;
   $("plan-meta").innerHTML = `<span>Meta estimate</span><span>${f.size_m.join(" × ")} m, ${f.estimated_mass_kg} kg</span>`;
   [["fix-w", f.size_m[0]], ["fix-d", f.size_m[1]], ["fix-h", f.size_m[2]], ["fix-m", f.estimated_mass_kg]].forEach(([id, v]) => { $(id).value = v; });
+  const others = alikeItems();
+  $("alike-row").hidden = !others.length;
+  $("alike-text").textContent = `Same size for the other ${others.length} ${f.category}${others.length > 1 ? "s" : ""}`;
   clearGhost();
   showFeasible().catch((error) => { $("dest-hint").textContent = error.message; });
+}
+
+function renderQueue() {
+  const v = plan.view;
+  $("queue-box").hidden = !plan.queue.length;
+  $("queue").innerHTML = plan.queue.map((q, k) => `<li><span>${k + 1}. ${q.item.category} → (${q.request.destination.center_m.map((c) => c.toFixed(2)).join(", ")})</span><small>${q.request.strategy}</small></li>`).join("");
+  // Muse Spark's explanation of the latest move stays visible after the item panel closes.
+  const advice = plan.queue[plan.queue.length - 1]?.advice;
+  $("queue-meta").hidden = !advice;
+  $("queue-meta").textContent = advice ? `Muse Spark: ${state.lang === "ko" ? advice.explanation_ko : advice.explanation}` : "";
+  $("rehearse").textContent = `Rehearse all (${plan.queue.length})`;
+  $("rehearse").disabled = !plan.queue.length;
+}
+
+function queueMove(result) {
+  // The checked move joins the queue: its outline stays, the item fades where it stands until the rehearsal.
+  plan.queue.push({ request: result.request, ghost: plan.ghost, item: plan.selected, advice: result.advice?.advice });
+  const mesh = plan.items.get(plan.selected.id);
+  Object.assign(mesh.material, { transparent: true, opacity: 0.45, needsUpdate: true });
+  highlight(null);
+  if (plan.dots) world.remove(plan.dots);
+  Object.assign(plan, { ghost: null, pose: null, checked: null, selected: null, dots: null });
+  $("plan-item").hidden = true;
+  $("plan-hint").textContent = `Added as move ${plan.queue.length}. Click another item, or rehearse all.`;
+  renderQueue();
+}
+
+function undoMove() {
+  const last = plan.queue.pop();
+  if (!last) return;
+  world.remove(last.ghost);
+  Object.assign(plan.items.get(last.item.id).material, { transparent: false, opacity: 1, needsUpdate: true });
+  $("plan-hint").textContent = "Removed the last move. Click the furniture you want to move.";
+  renderQueue();
 }
 
 function clearGhost() {
   if (plan.ghost) world.remove(plan.ghost);
   Object.assign(plan, { ghost: null, pose: null, checked: null, turned: false });
   $("plan-result").innerHTML = "";
-  $("check").disabled = $("rehearse").disabled = true;
+  $("check").disabled = true;
   refreshHint();
 }
 
@@ -571,7 +621,8 @@ async function showFeasible() {
   if (plan.dots) world.remove(plan.dots);
   plan.feasible = [];
   const v = plan.view;
-  const body = { scene: v.id, target: plan.selected.id, corrections: corrections() };
+  const body = { scene: v.id, target: plan.selected.id, corrections: corrections(), alike: alikeIds(),
+                 previous: plan.queue.map((q) => q.request) };
   const result = await (await fetch("/api/feasible", { method: "POST", body: JSON.stringify(body) })).json();
   if (result.error) throw new Error(result.error);
   plan.feasible = result.points.map((p) => ({ ...p, sim: [p.center_m[0] - v.spec_transform.x[1], v.spec_transform.y[1] - p.center_m[1], facingYaw(p.yaw_deg)] }));
@@ -606,7 +657,6 @@ function drawGhost(pose) {
   world.add(ghost);
   Object.assign(plan, { ghost, pose, checked: null });
   $("check").disabled = false;
-  $("rehearse").disabled = true;
   $("plan-result").innerHTML = "";
   refreshHint();
 }
@@ -614,7 +664,8 @@ function drawGhost(pose) {
 async function checkMove() {
   const v = plan.view, [x, y, yaw] = plan.pose;
   $("plan-result").innerHTML = `<p class="hint">Checking the move and asking Muse Spark…</p>`;
-  const body = { scene: v.id, target: plan.selected.id, corrections: corrections(), ask_meta: true,
+  const body = { scene: v.id, target: plan.selected.id, corrections: corrections(), ask_meta: true, alike: alikeIds(),
+                 previous: plan.queue.map((q) => q.request),
                  destination: { center_m: [x * v.spec_transform.x[0] + v.spec_transform.x[1], y * v.spec_transform.y[0] + v.spec_transform.y[1]],
                                 yaw_deg: specYaw(yaw) } };
   const result = await (await fetch("/api/check", { method: "POST", body: JSON.stringify(body) })).json();
@@ -625,13 +676,14 @@ async function checkMove() {
   $("plan-result").innerHTML = result.ok
     ? `<p class="ok-text">Possible: ${label}.</p>` + (advice ? `<div class="meta"><div class="who"><span>Muse Spark → ${decision.strategy}${decision.model_choice_accepted ? " · accepted by the rules" : " · overridden by the rules"}</span></div><p>${state.lang === "ko" ? advice.explanation_ko : advice.explanation}</p></div>` : "")
     : `<p class="bad-text">Not possible here: ${Object.values(result.reasons)[0]}</p>`;
-  $("rehearse").disabled = !result.ok;
+  if (result.ok) queueMove(result);
 }
 
 async function rehearseMove() {
   const started = performance.now();
-  $("rehearse").disabled = $("check").disabled = true;
-  const response = await (await fetch("/api/rehearse", { method: "POST", body: JSON.stringify(plan.checked.request) })).json();
+  $("rehearse").disabled = $("undo").disabled = $("check").disabled = true;
+  const moves = plan.queue.length;
+  const response = await (await fetch("/api/rehearse", { method: "POST", body: JSON.stringify({ moves: plan.queue.map((q) => q.request) }) })).json();
   if (response.error) throw new Error(response.error);
   const show = (text) => { $("progress").hidden = false; $("progress").textContent = text; };
   show("Rehearsing on Isaac Sim…");
@@ -642,12 +694,13 @@ async function rehearseMove() {
     if (job.error) { show(`Rehearsal error: ${job.error}`); return; }
     if (job.status === "running") {
       show(`Rehearsing on Isaac Sim… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` +
+           (moves > 1 ? ` · move ${job.move ?? 1} of ${moves}` : "") +
            (job.phases?.length ? ` · ${PHASES[job.phases[job.phases.length - 1]] ?? job.phases[job.phases.length - 1]}` : ""));
       continue;
     }
     $("progress").hidden = true;
     if (!job.demo) { show(`Rehearsal finished without a replay (${job.summary?.status ?? "unknown"}).`); return; }
-    DEMOS.push({ id: job.demo, label: `Your move (${job.summary.status.replaceAll("_", " ")})` });
+    DEMOS.push({ id: job.demo, label: `Your ${moves > 1 ? `${moves} moves` : "move"} (${job.summary.status.replaceAll("_", " ")})` });
     renderTabs();
     await load(job.demo);
     return;
@@ -666,13 +719,14 @@ renderer.domElement.addEventListener("pointerup", (e) => {
 });
 $("rot-l").addEventListener("click", () => { if (plan.pose) { plan.turned = true; drawGhost([plan.pose[0], plan.pose[1], plan.pose[2] + Math.PI / 12]); } });
 $("rot-r").addEventListener("click", () => { if (plan.pose) { plan.turned = true; drawGhost([plan.pose[0], plan.pose[1], plan.pose[2] - Math.PI / 12]); } });
-["fix-w", "fix-d", "fix-h", "fix-m"].forEach((id) => $(id).addEventListener("change", () => {
+["fix-w", "fix-d", "fix-h", "fix-m", "fix-alike"].forEach((id) => $(id).addEventListener("change", () => {
   resizeSelected();
   clearGhost();
   showFeasible().catch((error) => { $("dest-hint").textContent = error.message; });
 }));
 $("check").addEventListener("click", () => checkMove().catch((error) => { $("plan-result").innerHTML = `<p class="bad-text">${error.message}</p>`; }));
 $("rehearse").addEventListener("click", () => rehearseMove().catch((error) => { $("progress").hidden = false; $("progress").textContent = error.message; }));
+$("undo").addEventListener("click", undoMove);
 
 let scenes = [];
 function renderTabs() {

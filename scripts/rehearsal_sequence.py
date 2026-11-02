@@ -3,7 +3,8 @@
 Each move is its own rehearsal run (scripts/isaac_g1_rehearsal.py, a fresh Isaac process). The first starts inside the
 door, or at the sequence's optional `start` (root pose [x, y, yaw], simulation frame); each later one starts at the root pose where the previous run left the robot, in a room where every item already
 moved stands where it was measured after its set-down, and every item of the sequence has the user's corrected size
-(request keys `start` and `furniture`). The sequence stops at the first move that does not complete. Runs are written
+(request keys `start` and `furniture`; the sequence's optional `furniture` gives sizes of items it does not move). The
+sequence stops at the first move that does not complete. Runs are written
 under outputs/isaac/<time>-sequence/<k>/ next to sequence.json; scripts/export_replay.py merges them into one WebGL demo.
 --dry-run plans every move on the Mac, assuming each item lands on its destination and the robot ends 0.5 m behind it.
 """
@@ -27,12 +28,12 @@ CLEARANCE_M = 0.5                  # where the rehearsal's final step back leave
 def load_sequence(path):
     sequence = json.loads(Path(path).read_text())
     moves = sequence.get("moves")
-    if (not {"scene", "moves", "scope"} <= set(sequence) <= {"scene", "moves", "scope", "start"} or
+    if (not {"scene", "moves", "scope"} <= set(sequence) <= {"scene", "moves", "scope", "start", "furniture"} or
             not isinstance(moves, list) or not 1 <= len(moves) <= 4 or
             any(not isinstance(m, dict) or set(m) != set(MOVE_KEYS) for m in moves) or
             len({m["target"] for m in moves}) != len(moves)):
         raise ValueError("A sequence needs scene, scope and 1-4 moves with distinct targets, each with "
-                         "target, corrections, destination and strategy (optional: start)")
+                         "target, corrections, destination and strategy (optional: start, furniture)")
     rehearsal.repo_path(sequence["scene"], "configs/scenes/", ".json")
     return sequence
 
@@ -46,7 +47,8 @@ def spec_yaw(sim_yaw):
 def move_request(sequence, k, moved, start):
     """Request of move k: corrected sizes of every item in the sequence, the measured poses of the items already moved
     and, after the first move, the robot's carried-over start."""
-    furniture = {m["target"]: {"size_m": m["corrections"]["size_m"]} for m in sequence["moves"]}
+    furniture = {item: dict(v) for item, v in sequence.get("furniture", {}).items()}
+    furniture.update({m["target"]: {"size_m": m["corrections"]["size_m"]} for m in sequence["moves"]})
     for target, pose in moved.items():
         furniture[target].update(pose)
     request = {"scene": sequence["scene"], **{key: sequence["moves"][k][key] for key in MOVE_KEYS}, "furniture": furniture}
@@ -69,19 +71,21 @@ def settled(run_dir):
 
 
 def plan(sequence, config, trainings):
-    """Layouts of every move, assuming each item lands on its destination and the robot ends CLEARANCE_M behind it."""
+    """Layouts of every move, assuming each item lands on its destination and the robot ends CLEARANCE_M behind it,
+    and the state after the last move: (items moved -> spec pose, robot start)."""
     import numpy as np
+    base = json.loads(rehearsal.repo_path(sequence["scene"], "configs/scenes/", ".json").read_text())
     moved, start, layouts = {}, None, []
     for k, move in enumerate(sequence["moves"]):
         request = move_request(sequence, k, moved, start)
-        _, scene = rehearsal.load_request(write_request(request, f"plan-{k}"))
+        scene = rehearsal.with_furniture(base, request["furniture"])
         layout = rehearsal.rehearsal_layout(scene, request, trainings, config["start_inside_door_m"], 0.411, config["push"])
         layouts.append(layout)
         moved[move["target"]] = dict(move["destination"])
         x, y, yaw = layout["placed"]
         behind = layout["size_m"][0]/2 + CLEARANCE_M
-        start = [x - behind*np.cos(yaw), y - behind*np.sin(yaw), yaw]
-    return layouts
+        start = [float(x - behind*np.cos(yaw)), float(y - behind*np.sin(yaw)), float(yaw)]
+    return layouts, (moved, start)
 
 
 def write_request(request, name):
@@ -131,7 +135,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     sequence = load_sequence(rehearsal.repo_path(args.sequence, "configs/", ".json"))
     config, trainings = rehearsal.load_config(rehearsal.DEFAULT_CONFIG)
-    layouts = plan(sequence, config, trainings)
+    layouts, _ = plan(sequence, config, trainings)
     if args.dry_run:
         import numpy as np
         print(json.dumps({"status": "local_plan_only", "moves": [

@@ -62,6 +62,28 @@ class ServerCheckTests(unittest.TestCase):
                                CONFIG, TRAININGS)
         self.assertEqual(checked["strategy"], "push")
 
+    def test_queued_moves_and_same_size_items_shape_the_next_move(self):
+        # Edited pedestal room: the inner side table is boxed in until the outer one has been moved.
+        fix = {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0}
+        sequence = json.loads((ROOT / "configs/rehearsal_living_room_pedestal_three.json").read_text())
+        first, second = sequence["moves"][:2]
+        body = {"scene": "living_room_pedestal_three", "corrections": fix}
+        alone = server.check({**body, "target": "side_table_0", "destination": second["destination"]}, CONFIG, TRAININGS)
+        self.assertFalse(alone["ok"])
+        outer = server.check({**body, "target": "side_table_1", "destination": first["destination"], "alike": ["side_table_0"]},
+                             CONFIG, TRAININGS)
+        self.assertEqual(outer["strategy"], "carry")
+        self.assertEqual(outer["request"]["furniture"], {"side_table_0": {"size_m": fix["size_m"]}})
+        inner = server.check({**body, "target": "side_table_0", "destination": second["destination"],
+                              "previous": [outer["request"]]}, CONFIG, TRAININGS)
+        self.assertEqual(inner["strategy"], "carry")
+        # The moved side table stands on its destination, and the robot starts behind it.
+        self.assertEqual(inner["request"]["furniture"]["side_table_1"]["center_m"], first["destination"]["center_m"])
+        self.assertEqual(len(inner["request"]["start"]), 3)
+        with self.assertRaisesRegex(ValueError, "already"):
+            server.check({**body, "target": "side_table_1", "destination": first["destination"], "previous": [outer["request"]]},
+                         CONFIG, TRAININGS)
+
     def test_meta_plan_is_added_on_request(self):
         result = server.check({**move("pedestal"), "ask_meta": True}, CONFIG, TRAININGS, models=FakeModels())
         self.assertEqual((result["strategy"], result["advice"]["decision"]["strategy"]), ("carry", "carry"))
@@ -107,6 +129,31 @@ class JobTests(unittest.TestCase):
         self.assertIn("read -r META_API_KEY", start[0])
         self.assertEqual((running["status"], running["phases"]), ("running", ["approach", "reach"]))
         self.assertEqual((done["status"], done["demo"], remote.fetched), ("done", job, ["20261102T000000Z-rehearsal"]))
+        export.assert_called_once()
+
+    def test_queued_moves_run_as_one_sequence(self):
+        moves = [{"scene": "configs/scenes/living_room_pedestal_three.json", "target": t, "strategy": "carry",
+                  "corrections": {"size_m": [0.28, 0.30, 0.90], "mass_kg": 3.0},
+                  "destination": {"center_m": [1.0, 3.0], "yaw_deg": 90.0},
+                  "furniture": {"side_table_0": {"size_m": [0.28, 0.30, 0.90]}}} for t in ("side_table_1", "cabinet_0")]
+        summary = {"status": "completed_sequence", "sequence_dir": "/remote/outputs/isaac/20261102T000000Z-sequence"}
+        remote = FakeRemote(["", "", "not json", "/remote/outputs/isaac/20261102T000000Z-sequence/1/20261102T000100Z-rehearsal",
+                             json.dumps({"phases": {"approach": {}}}), json.dumps(summary)])
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "ROOT", Path(tmp)), \
+                mock.patch.object(server.export_replay, "export_sequence") as export:
+            jobs = server.Jobs(remote, key=lambda: "k")
+            job = jobs.start({"moves": moves})
+            written = json.loads((Path(tmp) / f"configs/requests/{job}.json").read_text())
+            running = jobs.status(job)
+            local = Path(tmp) / "outputs/isaac/20261102T000000Z-sequence"
+            local.mkdir(parents=True)
+            (local / "sequence.json").write_text(json.dumps({"runs": [{"run": "0/x-rehearsal"}]}))
+            done = jobs.status(job)
+        self.assertEqual([m["target"] for m in written["moves"]], ["side_table_1", "cabinet_0"])
+        self.assertEqual(written["furniture"], {"side_table_0": {"size_m": [0.28, 0.30, 0.90]}})
+        self.assertIn(f"scripts/rehearsal_sequence.py --sequence configs/requests/{job}.json", remote.calls[1][0])
+        self.assertEqual((running["move"], running["phases"]), (2, ["approach"]))
+        self.assertEqual((done["status"], done["demo"], remote.fetched), ("done", job, ["20261102T000000Z-sequence"]))
         export.assert_called_once()
 
     def test_unchecked_requests_are_refused(self):

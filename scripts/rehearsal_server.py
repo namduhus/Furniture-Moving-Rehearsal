@@ -1,11 +1,14 @@
 """Local server for the interactive rehearsal: serves the viewer, checks a user's move, runs it on the Modal session.
 
 - GET  /api/scenes, /api/scene?id=   scene specs under configs/scenes/ and their simulation room for the viewer
-- POST /api/feasible                 {scene, target, corrections}: destinations that pass the rehearsal layout checks
-- POST /api/check                    {scene, target, corrections, destination}: the first strategy (carry, auto, push)
-                                     whose rehearsal layout is valid, and optionally Muse Spark's plan for it
-- POST /api/rehearse                 the checked request: written to configs/requests/<job>.json, copied to the running
-                                     Modal session and started there over SSH (one job at a time)
+- POST /api/feasible                 {scene, target, corrections, previous, alike}: destinations that pass the rehearsal
+                                     layout checks, after the moves already queued in `previous` (checked requests), with
+                                     the corrected size also given to the `alike` items
+- POST /api/check                    {scene, target, corrections, destination, previous}: the first strategy (carry, auto,
+                                     push) whose rehearsal layout is valid, and optionally Muse Spark's plan for it
+- POST /api/rehearse                 a checked request, or {moves: [checked requests]} for several moves in one room
+                                     (scripts/rehearsal_sequence.py): written to configs/requests/<job>.json, copied to
+                                     the running Modal session and started there over SSH (one job at a time)
 - GET  /api/job?id=                  running (with the phases recorded so far) or done (result downloaded and exported
                                      to web/demos/<job>/ for replay)
 
@@ -28,6 +31,7 @@ import export_replay
 import isaac_g1_rehearsal as rehearsal
 import meta_models
 import rehearsal_advisor as advisor
+import rehearsal_sequence as sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 REMOTE_REPO = "/workspace/repo/Furniture-Moving-Rehearsal"
@@ -85,7 +89,7 @@ def scene_view(scene_id, config, trainings):
             "furniture": [{**{k: f[k] for k in ("id", "category", "size_m", "estimated_mass_kg", "yaw_deg", "center_m")},
                            "sim": [*rehearsal.spec_to_sim(f["center_m"], width, depth).tolist(), rehearsal.facing_yaw(f["yaw_deg"])]}
                           for f in spec["furniture"]],
-            "start": rehearsal.door_start(scene, config["start_inside_door_m"]).tolist(),
+            "start": rehearsal.entry_start(scene, config["start_inside_door_m"], walls["start_clearance_m"]).tolist(),
             "spec_transform": {"x": [1.0, width/2], "y": [-1.0, depth/2]},
             # Spec order [width along the front, depth, height] of the trained cabinet, and the carry mass range.
             "carry_tier": {"size_m": [carry_object[1], carry_object[0], carry_object[2]], "tolerance_m": 0.02,
@@ -114,14 +118,43 @@ def move_request(body):
                             "mass_kg": float(body["corrections"]["mass_kg"])}}
 
 
+def static_sizes(requests, targets):
+    """Corrected sizes the user gave to items that are not moved (the same size as an item of their kind), from the
+    requests' furniture overrides."""
+    return {item: {"size_m": v["size_m"]} for r in requests for item, v in (r.get("furniture") or {}).items()
+            if item not in targets and "size_m" in v}
+
+
+def context(body, config, trainings):
+    """Request fields (without destination and strategy) and scene for the user's next move. Items listed in
+    body["alike"] take the corrected size. After the moves queued in body["previous"] (checked requests, each assumed to
+    land on its destination, as rehearsal_sequence.plan does), the items they moved stand there with their corrected
+    sizes and the robot starts where the last one should leave it."""
+    request, previous = move_request(body), body.get("previous") or []
+    scene = json.loads(scene_path(body["scene"]).read_text())
+    targets = {m["target"] for m in previous}
+    if request["target"] in targets:
+        raise ValueError(f"{request['target']} is already in the queued moves")
+    alike = {"furniture": {item: {"size_m": request["corrections"]["size_m"]} for item in body.get("alike") or []}}
+    furniture = static_sizes(previous + [alike], targets | {request["target"]})
+    if previous:
+        queued = {"scene": request["scene"], "moves": [{k: m[k] for k in sequence.MOVE_KEYS} for m in previous],
+                  "scope": "Try it", "furniture": furniture}
+        _, (moved, start) = sequence.plan(queued, config, trainings)
+        furniture = {**furniture, **{m["target"]: {"size_m": m["corrections"]["size_m"], **moved[m["target"]]} for m in previous}}
+        request = {**request, "start": start}
+    return ({**request, "furniture": furniture} if furniture else request), rehearsal.with_furniture(scene, furniture)
+
+
 def feasible(body, config, trainings, step=0.15):
     """Destinations the item can be rehearsed to, each with its strategy: within the carry tier, floor points on a
-    `step` grid with the grip frame's x axis pointing away from the room centre (the robot sets it down from the open
-    side; the heading is turned back by the side carry_side grips it from); otherwise points straight along its four
-    sides at the push distances, keeping its heading."""
+    `step` grid with the grip frame's x axis pointing away from the room centre, squared to the walls (the robot sets it
+    down from the open side; the heading is turned back by the side carry_side grips it from; a turned item's
+    axis-aligned obstacle box would grow and crowd the next move); otherwise points straight along its four sides at the
+    push distances, keeping its heading."""
     import numpy as np
-    scene = json.loads(scene_path(body["scene"]).read_text())
-    spec, base = scene["scene"], move_request(body)
+    base, scene = context(body, config, trainings)
+    spec = scene["scene"]
     width, depth = spec["room"]["width_m"], spec["room"]["depth_m"]
     item = next(f for f in spec["furniture"] if f["id"] == body["target"])
     settings = json.loads(advisor.DEFAULT_CONFIG.read_text())
@@ -129,14 +162,14 @@ def feasible(body, config, trainings, step=0.15):
     if advisor.carry_rule(base["corrections"]["size_m"], base["corrections"]["mass_kg"], settings)[0]:
         a = trainings["approach"][0]
         cabinet = np.r_[rehearsal.spec_to_sim(item["center_m"], width, depth), rehearsal.facing_yaw(item["yaw_deg"])]
-        side = rehearsal.carry_side(rehearsal.spec_room(scene, body["target"])[0],
-                                    rehearsal.door_start(scene, config["start_inside_door_m"]), cabinet, a["object"]["size_m"],
-                                    0.411, a)
+        start = (np.asarray(base["start"]) if "start" in base else
+                 rehearsal.entry_start(scene, config["start_inside_door_m"], a["room"]["start_clearance_m"]))
+        side = rehearsal.carry_side(rehearsal.spec_room(scene, body["target"])[0], start, cabinet, a["object"]["size_m"], 0.411, a)
         turn = float(side[0][2] - cabinet[2]) if side is not None else 0.0
         for x in np.arange(step/2, width, step):
             for y in np.arange(step/2, depth, step):
                 sim = rehearsal.spec_to_sim([x, y], width, depth)
-                yaw = float(np.arctan2(sim[1], sim[0])) - turn
+                yaw = float(round(np.arctan2(sim[1], sim[0])/(np.pi/2))*np.pi/2) - turn
                 candidates.append(([float(x), float(y)], float(np.degrees(np.arctan2(-np.cos(yaw), np.sin(yaw))))))
     else:
         low, high = config["push"]["distance_m"]
@@ -157,9 +190,9 @@ def feasible(body, config, trainings, step=0.15):
 def check(body, config, trainings, models=None):
     """Validate a user's move; with `ask_meta`, add Muse Spark's plan for a valid one (rules accept or override its
     choice)."""
-    request = {**move_request(body), "destination": {"center_m": [float(v) for v in body["destination"]["center_m"]],
-                                                     "yaw_deg": float(body["destination"]["yaw_deg"])}}
-    scene = json.loads(scene_path(body["scene"]).read_text())
+    base, scene = context(body, config, trainings)
+    request = {**base, "destination": {"center_m": [float(v) for v in body["destination"]["center_m"]],
+                                       "yaw_deg": float(body["destination"]["yaw_deg"])}}
     strategy, reasons = choose_strategy(request, scene, config, trainings)
     result = {"ok": strategy is not None, "strategy": strategy, "reasons": reasons,
               "request": {**request, "strategy": strategy} if strategy else None}
@@ -181,19 +214,27 @@ class Jobs:
     def start(self, request):
         if any(job["status"] == "running" for job in self.jobs.values()):
             raise RuntimeError("A rehearsal is already running")
-        if request.get("strategy") not in STRATEGIES:
+        moves = request.get("moves") if "moves" in request else None
+        if any(m.get("strategy") not in STRATEGIES for m in (moves or [request])) or moves == []:
             raise ValueError("Check the move first")
         job = "web-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+        if moves is not None:
+            # Several moves: a sequence spec; each move runs from the measured end of the previous one.
+            request = {"scene": moves[0]["scene"], "moves": [{k: m[k] for k in sequence.MOVE_KEYS} for m in moves],
+                       "scope": f"Try it: {len(moves)} moves queued in the viewer",
+                       "furniture": static_sizes(moves, {m["target"] for m in moves})}
         path = ROOT / "configs/requests" / f"{job}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(request, indent=1) + "\n")
         relative = f"configs/requests/{job}.json"
         self.remote(f"mkdir -p {REMOTE_REPO}/configs/requests && cat > {REMOTE_REPO}/{relative}", path.read_bytes())
+        runner = (f"scripts/rehearsal_sequence.py --sequence {relative}" if moves is not None else
+                  f"scripts/isaac_g1_rehearsal.py --request {relative}")
         # The key arrives on standard input and is exported only into the run's environment.
         self.remote(f"cd {REMOTE_REPO} && read -r META_API_KEY; export META_API_KEY; nohup {REMOTE_PYTHON} "
-                    f"scripts/isaac_g1_rehearsal.py --request {relative} > outputs/isaac/{job}.out 2>&1 < /dev/null &",
-                    (self.key() + "\n").encode())
-        self.jobs[job] = {"status": "running", "request": request, "started": datetime.now().isoformat()}
+                    f"{runner} > outputs/isaac/{job}.out 2>&1 < /dev/null &", (self.key() + "\n").encode())
+        self.jobs[job] = {"status": "running", "request": request, "started": datetime.now().isoformat(),
+                          "moves": len(moves) if moves is not None else 1}
         return job
 
     def status(self, job):
@@ -207,19 +248,29 @@ class Jobs:
             summary = json.loads(last)
         except ValueError:
             summary = None
-        if not isinstance(summary, dict) or "run_dir" not in summary:
-            newest = self.remote(f"ls -t {REMOTE_REPO}/outputs/isaac | grep -- '-rehearsal$' | head -1").strip()
-            worker = self.remote(f"cat {REMOTE_REPO}/outputs/isaac/{newest}/rehearsal-worker.json 2>/dev/null || true")
+        done = "sequence_dir" if "moves" in state["request"] else "run_dir"
+        if not isinstance(summary, dict) or done not in summary:
+            # The newest run (inside the newest sequence folder for several moves) and the phases it has recorded.
+            where = (f"$(ls -td {REMOTE_REPO}/outputs/isaac/*-sequence | head -1)/*/" if done == "sequence_dir" else
+                     f"{REMOTE_REPO}/outputs/isaac/")
+            newest = self.remote(f"ls -td {where}*-rehearsal 2>/dev/null | head -1").strip()
+            worker = self.remote(f"cat {newest}/rehearsal-worker.json 2>/dev/null || true") if newest else ""
             try:
                 phases = list(json.loads(worker).get("phases", {})) if worker.strip() else []
             except ValueError:
                 phases = []
-            return {**state, "phases": phases}
-        name = Path(summary["run_dir"]).name
+            move = int(Path(newest).parent.name) + 1 if done == "sequence_dir" and Path(newest).parent.name.isdigit() else 1
+            return {**state, "phases": phases, "move": move}
+        name = Path(summary[done]).name
         self.remote.fetch(name, ROOT / "outputs/isaac")
+        summary.setdefault("status", "unknown")
         state.update(status="done", summary=summary, run=name)
-        if (ROOT / "outputs/isaac" / name / "replay.json").is_file():
-            export_replay.export(ROOT / "outputs/isaac" / name, job)
+        local = ROOT / "outputs/isaac" / name
+        if done == "sequence_dir" and any(r.get("run") for r in json.loads((local / "sequence.json").read_text())["runs"]):
+            export_replay.export_sequence(local, job)
+            state["demo"] = job
+        elif done == "run_dir" and (local / "replay.json").is_file():
+            export_replay.export(local, job)
             state["demo"] = job
         return state
 

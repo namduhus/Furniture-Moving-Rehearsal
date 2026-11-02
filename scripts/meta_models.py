@@ -1,4 +1,4 @@
-"""Meta model calls behind one interface: Muse Spark chat, SAM 3.1 segmentation and Muse Image generation.
+"""Meta model calls behind one interface: Muse Spark chat, SAM 3.1 segmentation and Muse Image generation and editing.
 
 Providers share the OpenAI-compatible request shapes: the Meta Model API (Muse Spark, SAM 3.1) and partner inference
 for the open-weight Muse Spark Open. Keys come only from the environment or the git-ignored `.env` at the repository
@@ -164,6 +164,16 @@ class MetaModels:
         return {"image": base64.b64decode(response["data"][0]["b64_json"]),
                 "format": response.get("output_format", output_format), "cached": hit}
 
+    def edit_image(self, image, prompt, output_format="png", model="muse-image-1.0"):
+        """One Muse Image edit of a picture by an instruction (the API takes no mask); image/web search and shell tools are
+        disabled."""
+        body = {"model": model, "prompt": prompt, "n": 1, "images": [{"image_url": image_data_url(image)}],
+                "output_format": output_format, "response_format": "b64_json",
+                "tool_enablement": {"enable_image_search": False, "enable_web_search": False, "enable_shell": False}}
+        response, hit = self._call("/images/edits", body)
+        return {"image": base64.b64decode(response["data"][0]["b64_json"]),
+                "format": response.get("output_format", output_format), "cached": hit}
+
     def segment(self, image, phrase, model="sam-3.1", encoding="one_bit", confidence=True):
         """SAM 3.1 boxes and masks for one short noun phrase in one image (streamed special-token text)."""
         body = {"model": model, "stream": True,
@@ -210,7 +220,23 @@ def main(argv=None):
     g.add_argument("--config", type=Path, default=ROOT / "configs/home_images.json")
     g.add_argument("--out", type=Path, default=ROOT / "outputs/meta/images")
     g.add_argument("--dry-run", action="store_true")
+    e = sub.add_parser("edit", help="edit generated images with Muse Image as listed under the prompt file's edits")
+    e.add_argument("--config", type=Path, default=ROOT / "configs/home_images.json")
+    e.add_argument("--out", type=Path, default=ROOT / "outputs/meta/images")
+    e.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.action == "edit":
+        edits = json.loads(args.config.read_text())["edits"]
+        if args.dry_run:
+            print(json.dumps({"status": "local_plan_only", "edits": sorted(edits), "estimated_usd": 0.01*len(edits)}, indent=2))
+            return 0
+        models = MetaModels()
+        for name, edit in edits.items():
+            result = models.edit_image(args.out / f"{edit['source']}.png", edit["prompt"])
+            path = args.out / f"{name}.{result['format']}"
+            path.write_bytes(result["image"])
+            print(json.dumps({"image": str(path), "source": edit["source"], "bytes": len(result["image"]), "cached": result["cached"]}))
+        return 0
     if args.action == "generate":
         config = json.loads(args.config.read_text())
         if args.dry_run:

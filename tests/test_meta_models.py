@@ -84,6 +84,17 @@ class MetaModelTests(unittest.TestCase):
         self.assertEqual(body["tool_enablement"], {"enable_image_search": False, "enable_web_search": False, "enable_shell": False})
         self.assertEqual((result["image"], result["format"], result["cached"]), (b"\x89PNG\r\n\x1a\n", "png", False))
 
+    def test_image_edit_sends_the_picture_without_a_mask(self):
+        reply = {"created": 1, "data": [{"b64_json": "iVBORw0KGgo="}], "output_format": "png"}
+        client, transport = self.client([reply])
+        result = client.edit_image(self.image, "add two pedestals")
+        body = transport.calls[0]["body"]
+        self.assertEqual(transport.calls[0]["url"], "https://api.meta.ai/v1/images/edits")
+        self.assertEqual((body["prompt"], body["n"], body["images"]), ("add two pedestals", 1, [{"image_url": mm.image_data_url(self.image)}]))
+        self.assertNotIn("mask", body)
+        self.assertFalse(any(body["tool_enablement"].values()))
+        self.assertEqual(result["image"], b"\x89PNG\r\n\x1a\n")
+
     def test_masks_decode_with_the_official_parser_after_a_size_check(self):
         # Published one_bit test vector (meta-sam protocol): a 5 x 5 raster.
         record = {"box": {"x1": 10, "y1": 20, "x2": 14, "y2": 24},
