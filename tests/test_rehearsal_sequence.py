@@ -98,12 +98,11 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(requests[1]["furniture"]["pedestal_3"]["yaw_deg"], round(sequence.spec_yaw(np.pi/2 + 0.02), 2))
         self.assertEqual(requests[0]["start"], seq["start"])
 
-    def test_a_failed_move_is_retried_and_a_stopped_sequence_resumes(self):
+    def test_a_stopped_sequence_resumes_with_a_changed_remaining_move(self):
         seq = sequence.load_sequence(TRIO)
         yaw = np.pi/2
         root = [-1.2, -1.46, 0.75, 0, 0, np.sin(yaw/2), np.cos(yaw/2)]
-        calls, plan = [], iter(["completed_rehearsal", "failed_carry", "failed_carry",       # first sequence (1 retry)
-                                "completed_rehearsal", "completed_rehearsal"])              # resumed (move 1 and 2)
+        calls, plan = [], iter(["completed_rehearsal", "failed_carry", "completed_rehearsal", "completed_rehearsal"])
 
         def runner(path, out):
             request = json.loads(path.read_text())
@@ -112,20 +111,27 @@ class SequenceTests(unittest.TestCase):
             fake_run(out, request["target"], status, [0.71, 3.09], yaw, root, name=f"20261102T0000{len(calls):02d}Z")
             return 0 if status == "completed_rehearsal" else 1
 
+        moved = {**seq, "moves": [seq["moves"][0], {**seq["moves"][1], "destination": {"center_m": [1.4, 3.1], "yaw_deg": 180.0}},
+                                  seq["moves"][2]]}
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sequence, "ROOT", Path(tmp)):
             directory = Path(tmp) / "20261102T000000Z-sequence"
-            stopped = sequence.run(seq, directory, runner, retries=1)
-            resumed = sequence.run(seq, directory, runner)
+            stopped = sequence.run(seq, directory, runner)
+            changed_done = {**seq, "moves": [{**seq["moves"][0], "destination": {"center_m": [0.5, 3.1], "yaw_deg": 180.0}},
+                                             *seq["moves"][1:]]}
+            with self.assertRaisesRegex(ValueError, "Completed move 0"):
+                sequence.run(changed_done, directory, runner)
+            resumed = sequence.run(moved, directory, runner)
         self.assertEqual(stopped["status"], "stopped_at_move_1")
-        self.assertEqual([a["status"] for a in stopped["runs"][1]["attempts"]], ["failed_carry", "failed_carry"])
-        # Both attempts of move 1 started from the same state; the resumed one too, and move 0 was not run again.
-        self.assertEqual([c["target"] for c in calls], ["pedestal_3", "pedestal_2", "pedestal_2", "pedestal_2", "pedestal_1"])
+        # Move 0 is not run again; the retried move 1 starts from the same state with its new destination.
+        self.assertEqual([c["target"] for c in calls], ["pedestal_3", "pedestal_2", "pedestal_2", "pedestal_1"])
         self.assertEqual(calls[1]["start"], calls[2]["start"])
-        self.assertEqual(calls[1]["start"], calls[3]["start"])
+        self.assertEqual(calls[2]["destination"]["center_m"], [1.4, 3.1])
         self.assertEqual(resumed["status"], "completed_sequence")
         self.assertEqual(resumed["runs"][0], stopped["runs"][0])
-        self.assertEqual([a["status"] for a in resumed["runs"][1]["attempts"]], ["failed_carry", "failed_carry", "completed_rehearsal"])
-        self.assertEqual(resumed["runs"][1]["run"], "1/20261102T000004Z-rehearsal")
+        attempts = resumed["runs"][1]["attempts"]
+        self.assertEqual([(a["status"], a["destination"]["center_m"]) for a in attempts],
+                         [("failed_carry", seq["moves"][1]["destination"]["center_m"]), ("completed_rehearsal", [1.4, 3.1])])
+        self.assertEqual(resumed["runs"][1]["run"], "1/20261102T000003Z-rehearsal")
 
     def test_export_merges_the_runs_into_one_demo(self):
         with tempfile.TemporaryDirectory() as tmp:

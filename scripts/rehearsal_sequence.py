@@ -5,9 +5,10 @@ door, or at the sequence's optional `start` (root pose [x, y, yaw], simulation f
 pose where the previous run left the robot, in a room where every item already moved stands where it was measured after
 its set-down, and every item of the sequence has the user's corrected size (request keys `start` and `furniture`; the
 sequence's optional `furniture` gives sizes of items it does not move). The sequence stops at the first move that does
-not complete after `--retries` more attempts from the same state (every attempt is listed). `--resume <sequence folder>`
-continues a stopped sequence: its completed moves are kept and the next move starts from their measured end, as it would
-have without the stop. Runs are written under outputs/isaac/<time>-sequence/<k>/ next to sequence.json;
+not complete. `--resume <sequence folder>` continues a stopped sequence: its completed moves are kept and the next move
+starts from their measured end, as it would have without the stop; with `--sequence` too, the moves not yet completed
+come from that spec (the completed ones must match). The same request on the same code repeats bit for bit (move 2 of
+20261102T005739 failed identically three times), so a retry needs a changed request. Runs are written under outputs/isaac/<time>-sequence/<k>/ next to sequence.json;
 scripts/export_replay.py merges them into one WebGL demo. --dry-run plans every move on the Mac, assuming each item lands
 on its destination and the robot ends 0.5 m behind it.
 """
@@ -107,13 +108,15 @@ def rehearse(request_path, output_root):
                               stdout=log, stderr=subprocess.STDOUT, cwd=ROOT).returncode
 
 
-def run(sequence, directory, runner=rehearse, retries=0):
+def run(sequence, directory, runner=rehearse):
     path = directory / "sequence.json"
-    before = json.loads(path.read_text())["runs"] if path.exists() else []
-    runs = []
-    for entry in before:                       # completed moves of a stopped sequence are kept
+    stored = json.loads(path.read_text()) if path.exists() else {"runs": [], "sequence": sequence}
+    before, runs = stored["runs"], []
+    for k, entry in enumerate(before):         # completed moves of a stopped sequence are kept
         if entry["status"] != "completed_rehearsal":
             break
+        if stored["sequence"]["moves"][k] != sequence["moves"][k]:
+            raise ValueError(f"Completed move {k} ({entry['target']}) differs from the given sequence")
         runs.append(entry)
     moved, start = {}, None
     for entry, move in zip(runs, sequence["moves"]):
@@ -121,19 +124,18 @@ def run(sequence, directory, runner=rehearse, retries=0):
     record = {"status": "running", "sequence": sequence, "runs": runs}
     for k in range(len(runs), len(sequence["moves"])):
         move = sequence["moves"][k]
-        earlier = before[k] if k < len(before) else None    # the stopped move's attempts so far
-        attempts = (earlier.get("attempts") or [{key: earlier.get(key) for key in ("run", "exit_code", "status", "placement")}]
+        earlier = before[k] if k < len(before) else None    # the stopped move's attempts so far, with their requests
+        attempts = (earlier.get("attempts") or [{**{key: earlier.get(key) for key in ("run", "exit_code", "status", "placement")},
+                                                 "destination": stored["sequence"]["moves"][k]["destination"]}]
                     if earlier else [])
         request = write_request(move_request(sequence, k, moved, start), f"{directory.name}-{k}")
-        for _ in range(retries + 1):
-            code = runner(request, directory / str(k))
-            found = sorted((directory / str(k)).glob("*-rehearsal"))
-            new = found[-1] if found and str(found[-1].relative_to(directory)) not in [a["run"] for a in attempts] else None
-            summary = json.loads((new / "summary.json").read_text()) if new and (new / "summary.json").exists() else {}
-            attempts.append({"run": str(new.relative_to(directory)) if new else None, "exit_code": code,
-                             "status": summary.get("status", "failed_before_run"), "placement": summary.get("placement")})
-            if attempts[-1]["status"] == "completed_rehearsal":
-                break
+        code = runner(request, directory / str(k))
+        found = sorted((directory / str(k)).glob("*-rehearsal"))
+        new = found[-1] if found and str(found[-1].relative_to(directory)) not in [a["run"] for a in attempts] else None
+        summary = json.loads((new / "summary.json").read_text()) if new and (new / "summary.json").exists() else {}
+        attempts.append({"run": str(new.relative_to(directory)) if new else None, "exit_code": code,
+                         "status": summary.get("status", "failed_before_run"), "placement": summary.get("placement"),
+                         "destination": move["destination"]})
         runs.append({"target": move["target"], **attempts[-1], "attempts": attempts})
         if runs[-1]["status"] != "completed_rehearsal":
             record["status"] = f"stopped_at_move_{k}"
@@ -151,17 +153,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sequence", type=str, help="configs/... sequence JSON")
     parser.add_argument("--resume", type=Path, help="a stopped outputs/isaac/<time>-sequence folder to continue")
-    parser.add_argument("--retries", type=int, default=0, choices=range(0, 3), help="more attempts of a failed move")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs/isaac")
     args = parser.parse_args(argv)
-    if (args.sequence is None) == (args.resume is None):
-        parser.error("Give --sequence or --resume")
-    if args.resume:
+    if args.sequence is None and args.resume is None:
+        parser.error("Give --sequence, --resume or both")
+    if args.sequence:
+        sequence = load_sequence(rehearsal.repo_path(args.sequence, "configs/", ".json"))
+    else:
         stored = json.loads((args.resume / "sequence.json").read_text())["sequence"]
         sequence = load_sequence(write_request(stored, f"{args.resume.name}-spec"))
-    else:
-        sequence = load_sequence(rehearsal.repo_path(args.sequence, "configs/", ".json"))
     config, trainings = rehearsal.load_config(rehearsal.DEFAULT_CONFIG)
     layouts, _ = plan(sequence, config, trainings)
     if args.dry_run:
@@ -176,7 +177,7 @@ def main(argv=None):
     else:
         directory = args.output_root.expanduser().resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-sequence")
         directory.mkdir(parents=True)
-    record = run(sequence, directory, retries=args.retries)
+    record = run(sequence, directory)
     print(json.dumps({"status": record["status"], "sequence_dir": str(directory),
                       "runs": [{k: r[k] for k in ("target", "status", "placement")} for r in record["runs"]]}), flush=True)
     return 0 if record["status"] == "completed_sequence" else 1
