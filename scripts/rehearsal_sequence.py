@@ -1,12 +1,15 @@
 """Several moves in one room, one after another (for example three pedestals carried to new places).
 
 Each move is its own rehearsal run (scripts/isaac_g1_rehearsal.py, a fresh Isaac process). The first starts inside the
-door, or at the sequence's optional `start` (root pose [x, y, yaw], simulation frame); each later one starts at the root pose where the previous run left the robot, in a room where every item already
-moved stands where it was measured after its set-down, and every item of the sequence has the user's corrected size
-(request keys `start` and `furniture`; the sequence's optional `furniture` gives sizes of items it does not move). The
-sequence stops at the first move that does not complete. Runs are written
-under outputs/isaac/<time>-sequence/<k>/ next to sequence.json; scripts/export_replay.py merges them into one WebGL demo.
---dry-run plans every move on the Mac, assuming each item lands on its destination and the robot ends 0.5 m behind it.
+door, or at the sequence's optional `start` (root pose [x, y, yaw], simulation frame); each later one starts at the root
+pose where the previous run left the robot, in a room where every item already moved stands where it was measured after
+its set-down, and every item of the sequence has the user's corrected size (request keys `start` and `furniture`; the
+sequence's optional `furniture` gives sizes of items it does not move). The sequence stops at the first move that does
+not complete after `--retries` more attempts from the same state (every attempt is listed). `--resume <sequence folder>`
+continues a stopped sequence: its completed moves are kept and the next move starts from their measured end, as it would
+have without the stop. Runs are written under outputs/isaac/<time>-sequence/<k>/ next to sequence.json;
+scripts/export_replay.py merges them into one WebGL demo. --dry-run plans every move on the Mac, assuming each item lands
+on its destination and the robot ends 0.5 m behind it.
 """
 
 from __future__ import annotations
@@ -96,44 +99,69 @@ def write_request(request, name):
 
 
 def rehearse(request_path, output_root):
-    """One rehearsal run in a fresh process; its log goes to output_root/rehearsal.out."""
+    """One rehearsal run in a fresh process; its log is appended to output_root/rehearsal.out."""
     output_root.mkdir(parents=True, exist_ok=True)
-    with (output_root / "rehearsal.out").open("w") as log:
+    with (output_root / "rehearsal.out").open("a") as log:
         return subprocess.run([sys.executable, str(ROOT / "scripts/isaac_g1_rehearsal.py"), "--request",
                                str(request_path.relative_to(ROOT)), "--output-root", str(output_root)],
                               stdout=log, stderr=subprocess.STDOUT, cwd=ROOT).returncode
 
 
-def run(sequence, directory, runner=rehearse):
-    moved, start, runs = {}, None, []
+def run(sequence, directory, runner=rehearse, retries=0):
+    path = directory / "sequence.json"
+    before = json.loads(path.read_text())["runs"] if path.exists() else []
+    runs = []
+    for entry in before:                       # completed moves of a stopped sequence are kept
+        if entry["status"] != "completed_rehearsal":
+            break
+        runs.append(entry)
+    moved, start = {}, None
+    for entry, move in zip(runs, sequence["moves"]):
+        moved[move["target"]], start = entry["settled"]["item"], entry["settled"]["robot_start_next"]
     record = {"status": "running", "sequence": sequence, "runs": runs}
-    for k, move in enumerate(sequence["moves"]):
-        path = write_request(move_request(sequence, k, moved, start), f"{directory.name}-{k}")
-        code = runner(path, directory / str(k))
-        found = sorted((directory / str(k)).glob("*-rehearsal"))
-        summary = json.loads((found[-1] / "summary.json").read_text()) if found and (found[-1] / "summary.json").exists() else {}
-        runs.append({"target": move["target"], "run": str(found[-1].relative_to(directory)) if found else None,
-                     "exit_code": code, "status": summary.get("status", "failed_before_run"),
-                     "placement": summary.get("placement")})
+    for k in range(len(runs), len(sequence["moves"])):
+        move = sequence["moves"][k]
+        earlier = before[k] if k < len(before) else None    # the stopped move's attempts so far
+        attempts = (earlier.get("attempts") or [{key: earlier.get(key) for key in ("run", "exit_code", "status", "placement")}]
+                    if earlier else [])
+        request = write_request(move_request(sequence, k, moved, start), f"{directory.name}-{k}")
+        for _ in range(retries + 1):
+            code = runner(request, directory / str(k))
+            found = sorted((directory / str(k)).glob("*-rehearsal"))
+            new = found[-1] if found and str(found[-1].relative_to(directory)) not in [a["run"] for a in attempts] else None
+            summary = json.loads((new / "summary.json").read_text()) if new and (new / "summary.json").exists() else {}
+            attempts.append({"run": str(new.relative_to(directory)) if new else None, "exit_code": code,
+                             "status": summary.get("status", "failed_before_run"), "placement": summary.get("placement")})
+            if attempts[-1]["status"] == "completed_rehearsal":
+                break
+        runs.append({"target": move["target"], **attempts[-1], "attempts": attempts})
         if runs[-1]["status"] != "completed_rehearsal":
             record["status"] = f"stopped_at_move_{k}"
             break
-        moved[move["target"]], start = settled(found[-1])
+        moved[move["target"]], start = settled(directory / runs[-1]["run"])
         runs[-1]["settled"] = {"item": moved[move["target"]], "robot_start_next": start}
-        (directory / "sequence.json").write_text(json.dumps(record, indent=1) + "\n")
+        path.write_text(json.dumps(record, indent=1) + "\n")
     else:
         record["status"] = "completed_sequence"
-    (directory / "sequence.json").write_text(json.dumps(record, indent=1) + "\n")
+    path.write_text(json.dumps(record, indent=1) + "\n")
     return record
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sequence", type=str, required=True, help="configs/... sequence JSON")
+    parser.add_argument("--sequence", type=str, help="configs/... sequence JSON")
+    parser.add_argument("--resume", type=Path, help="a stopped outputs/isaac/<time>-sequence folder to continue")
+    parser.add_argument("--retries", type=int, default=0, choices=range(0, 3), help="more attempts of a failed move")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--output-root", type=Path, default=ROOT / "outputs/isaac")
     args = parser.parse_args(argv)
-    sequence = load_sequence(rehearsal.repo_path(args.sequence, "configs/", ".json"))
+    if (args.sequence is None) == (args.resume is None):
+        parser.error("Give --sequence or --resume")
+    if args.resume:
+        stored = json.loads((args.resume / "sequence.json").read_text())["sequence"]
+        sequence = load_sequence(write_request(stored, f"{args.resume.name}-spec"))
+    else:
+        sequence = load_sequence(rehearsal.repo_path(args.sequence, "configs/", ".json"))
     config, trainings = rehearsal.load_config(rehearsal.DEFAULT_CONFIG)
     layouts, _ = plan(sequence, config, trainings)
     if args.dry_run:
@@ -143,9 +171,12 @@ def main(argv=None):
                                                                     ("start", "cabinet", "placed")}}
             for m, layout in zip(sequence["moves"], layouts)]}, indent=1))
         return 0
-    directory = args.output_root.expanduser().resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-sequence")
-    directory.mkdir(parents=True)
-    record = run(sequence, directory)
+    if args.resume:
+        directory = args.resume.expanduser().resolve()
+    else:
+        directory = args.output_root.expanduser().resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ-sequence")
+        directory.mkdir(parents=True)
+    record = run(sequence, directory, retries=args.retries)
     print(json.dumps({"status": record["status"], "sequence_dir": str(directory),
                       "runs": [{k: r[k] for k in ("target", "status", "placement")} for r in record["runs"]]}), flush=True)
     return 0 if record["status"] == "completed_sequence" else 1
