@@ -172,6 +172,15 @@ class RehearsalLayoutTests(unittest.TestCase):
         np.testing.assert_allclose(cabinet[:2, 3], placed[:2], atol=1e-12)
         self.assertAlmostEqual(float(room.wrap(np.arctan2(cabinet[1, 0], cabinet[0, 0]) - placed[2])), 0.0, places=12)
 
+    def test_a_timed_out_carry_counts_only_when_the_alignment_places_it(self):
+        inside, outside = {"within_tolerance": True}, {"within_tolerance": False}
+        self.assertEqual(rehearsal.carry_status("success", outside), "completed_rehearsal")
+        self.assertEqual(rehearsal.carry_status("time_out", inside), "completed_rehearsal")
+        self.assertEqual(rehearsal.carry_status("time_out", outside), "failed_carry")
+        self.assertEqual(rehearsal.carry_status("time_out", None), "failed_carry")
+        for failure in ("fallen", "wall_contact", "object_grounded"):
+            self.assertEqual(rehearsal.carry_status(failure, inside), "failed_carry")
+
     def test_placement_error_and_configuration_checks(self):
         yaw = np.radians(170.0)
         error = rehearsal.placement_error([0.03, 1.04, 0.45, 0.0, 0.0, np.sin(yaw/2), np.cos(yaw/2)], np.array([0.0, 1.0, -np.pi]))

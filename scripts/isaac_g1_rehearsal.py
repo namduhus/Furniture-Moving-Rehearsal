@@ -373,6 +373,14 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
     return layout
 
 
+def carry_status(carry, placement):
+    """Rehearsal status after a carry and its set-down. A carry that timed out (still holding the cabinet, near its goal)
+    counts when the alignment finished it: run 20261102T002432 hovered 15-18 cm short beside the TV bench for 40 s, and
+    the alignment then set the pedestal down 2.8 cm / 1.1 deg off. Any other carry failure stays a failure."""
+    finished = carry == "success" or (carry == "time_out" and bool(placement and placement["within_tolerance"]))
+    return "completed_rehearsal" if finished else "failed_carry"
+
+
 def turn_z(quat, angle):
     """Quaternion [x, y, z, w] rotated by `angle` about the world z axis."""
     import numpy as np
@@ -876,8 +884,9 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                             # Leave room to turn: the next move of a sequence starts here.
                             step_back()
                             measure()
-                            if result["phases"]["carry"]["outcome"] == "success":
-                                status = "completed_rehearsal"
+                            status = carry_status(result["phases"]["carry"]["outcome"], result["placement"])
+                            result["phases"]["carry"]["finished_by_align"] = (result["phases"]["carry"]["outcome"] != "success"
+                                                                              and status == "completed_rehearsal")
             result["video"] = encode_recording(case, binary=encoder, count=count, fps=1/Fraction(str(env.decision_dt)),
                                                width=width, height=height, require_motion=False)
             # Key frames for the Meta model diagnosis (the frames folder is not downloaded): the end of each walking
