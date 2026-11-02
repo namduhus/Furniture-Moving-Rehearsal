@@ -93,7 +93,8 @@ class ExportTests(unittest.TestCase):
             looks = export_replay.appearance(scene, Models())
         self.assertEqual(set(looks["items"]), {"sofa_1"})
         grid = looks["items"]["sofa_1"]["grid"]
-        self.assertEqual((len(grid), grid[0]), (export_replay.GRID, "1"*12 + "0"*12))
+        half = export_replay.GRID//2
+        self.assertEqual((len(grid), grid[0]), (export_replay.GRID, "1"*half + "0"*half))
         self.assertEqual(looks["image_px"], [640, 480])
 
 

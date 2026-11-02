@@ -45,3 +45,4 @@ models/
 
 # Local planning references and development records
 docs/
+web/demos/web-*/

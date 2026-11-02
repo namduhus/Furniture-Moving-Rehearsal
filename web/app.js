@@ -360,6 +360,8 @@ async function load(id) {
                                                                        get("appearance.json")]);
   robot ??= await loadRobot();
   const colors = await photoColors(`./demos/${id}/photo.png`, appearance);
+  metaSource = { photo: `./demos/${id}/photo.png`, appearance, furniture: sceneSpec.scene.furniture, detections: sceneSpec.detections ?? [],
+                 door: sceneSpec.scene.door, reference: sceneSpec.reference };
   setMode("replay");
   scene.remove(world);
   world = new THREE.Group();
@@ -436,6 +438,81 @@ function update() {
   showMeta(demo.rehearsal, state.t >= demo.diagnosis);
 }
 
+// ---- How Meta built this room: the photo with each item's SAM 3.1 mask and Muse Spark's estimate, revealed in turn ----
+let metaSource = null, metaToken = 0;
+const META_COLORS = [[59, 130, 246], [234, 88, 12], [22, 163, 74], [219, 39, 119], [147, 51, 234], [202, 138, 4], [13, 148, 136]];
+
+function maskCanvas(grid, rgb) {
+  // The item's mask cells (rows of 0/1 over its pixel box) as a small translucent image; drawn scaled with smoothing.
+  const n = grid.length, off = Object.assign(document.createElement("canvas"), { width: n, height: n });
+  const g = off.getContext("2d"), data = g.createImageData(n, n);
+  grid.forEach((row, i) => [...row].forEach((bit, j) => {
+    if (bit !== "1") return;
+    data.data.set([...rgb, 105], 4 * (i * n + j));
+  }));
+  g.putImageData(data, 0, 0);
+  return off;
+}
+
+function metaLabel(g, text, x, y, dpr, placed) {
+  // A label above its box; moved down past labels already drawn (`placed`) so neighbours stay readable.
+  g.font = `${13 * dpr}px system-ui, sans-serif`;
+  const w = g.measureText(text).width + 10 * dpr, h = 20 * dpr;
+  x = Math.min(Math.max(0, x), g.canvas.width - w);
+  y = Math.min(Math.max(h, y), g.canvas.height);
+  while (placed.some((r) => x < r.x + r.w && r.x < x + w && y - h < r.y && r.y - r.h < y)) y += h + 2 * dpr;
+  placed.push({ x, y, w, h });
+  g.fillStyle = "rgba(17, 19, 23, 0.78)";
+  g.fillRect(x, y - h, w, h);
+  g.fillStyle = "#fff";
+  g.fillText(text, x + 5 * dpr, y - 6 * dpr);
+}
+
+async function showMetaView() {
+  const src = metaSource;
+  if (!src?.photo) return;
+  const token = ++metaToken, image = new Image();
+  image.src = src.photo;
+  await image.decode();
+  const dpr = Math.min(window.devicePixelRatio, 2), scale = Math.min(window.innerWidth * 0.86 / image.width, window.innerHeight * 0.72 / image.height);
+  const canvas = $("meta-canvas"), g = canvas.getContext("2d");
+  canvas.width = Math.round(image.width * scale * dpr);
+  canvas.height = Math.round(image.height * scale * dpr);
+  canvas.style.width = `${Math.round(image.width * scale)}px`;
+  $("meta-caption").style.maxWidth = canvas.style.width;
+  state.playing = false;
+  const k = canvas.width / (src.appearance?.image_px?.[0] ?? image.width);          // SAM pixel -> canvas pixel
+  const items = src.furniture.filter((f) => src.appearance?.items?.[f.id]);
+  const door = src.detections.find((d) => d.id === src.door?.detection_id);
+  const ref = src.reference ?? { height_m: 2.0, width_m: 0.8 };
+  $("meta-caption").textContent = `SAM 3.1 segmented ${items.length} furniture items (one call per short noun phrase). Muse Spark read the photo with those detections and estimated each item's size and mass, scaled by the ${ref.height_m} m door. These estimates build the 3D room; the user then corrects what the robot will move.`;
+  $("meta-view").hidden = false;
+  const draw = (count) => {
+    const placed = [];
+    g.drawImage(image, 0, 0, canvas.width, canvas.height);
+    if (door) {
+      const [x1, y1, x2, y2] = door.box_px.map((v) => v * k);
+      g.setLineDash([6 * dpr, 4 * dpr]); g.lineWidth = 2 * dpr; g.strokeStyle = "#fff";
+      g.strokeRect(x1, y1, x2 - x1, y2 - y1); g.setLineDash([]);
+      metaLabel(g, `door · scale reference ${ref.height_m} × ${ref.width_m} m`, x1, y1 - 4 * dpr, dpr, placed);
+    }
+    g.imageSmoothingEnabled = true;
+    items.slice(0, count).forEach((f, i) => {
+      const look = src.appearance.items[f.id], [x1, y1, x2, y2] = look.box_px.map((v) => v * k);
+      g.drawImage(maskCanvas(look.grid, META_COLORS[i % META_COLORS.length]), x1, y1, x2 - x1, y2 - y1);
+      metaLabel(g, `${f.category} · ${f.size_m.map((v) => v.toFixed(2)).join(" × ")} m · ${f.estimated_mass_kg} kg`, x1, y1 - 4 * dpr, dpr, placed);
+    });
+  };
+  for (let count = 0; count <= items.length; count += 1) {
+    if (token !== metaToken) return;                      // closed or reopened meanwhile
+    draw(count);
+    await new Promise((resolve) => setTimeout(resolve, count === 0 ? 500 : 700));
+  }
+}
+
+$("meta-open").addEventListener("click", () => showMetaView().catch((error) => { $("meta-caption").textContent = error.message; }));
+$("meta-close").addEventListener("click", () => { metaToken += 1; $("meta-view").hidden = true; });
+
 let last = performance.now();
 renderer.setAnimationLoop((now) => {
   const dt = (now - last) / 1000;
@@ -490,6 +567,8 @@ async function loadPlan(sceneId) {
   if (view.error) throw new Error(view.error);
   robot ??= await loadRobot();
   const colors = view.photo ? await photoColors(view.photo, view.appearance) : { items: {}, floor: [196, 160, 120] };
+  metaSource = { photo: view.photo, appearance: view.appearance, detections: view.detections ?? [], door: view.door,
+                 reference: view.reference, furniture: view.furniture.map((f) => ({ ...f, detection_id: view.detection_ids?.[f.id] })) };
   state.demo = null;
   scene.remove(world);
   world = new THREE.Group();

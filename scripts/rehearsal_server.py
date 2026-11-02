@@ -95,6 +95,10 @@ def scene_view(scene_id, config, trainings):
             "carry_tier": {"size_m": [carry_object[1], carry_object[0], carry_object[2]], "tolerance_m": 0.02,
                            "mass_kg": trainings["carry"][0]["mass_kg"]},
             "push_distance_m": config["push"]["distance_m"],
+            # SAM 3.1 detections, the door used as the scale reference, for the viewer's "how Meta built this room".
+            "detections": [{k: d[k] for k in ("id", "phrase", "box_px", "image_px", "confidence")} for d in scene.get("detections", [])],
+            "door": spec["door"], "reference": scene.get("reference"),
+            "detection_ids": {f["id"]: f["detection_id"] for f in spec["furniture"]},
             "appearance": export_replay.appearance(scene, meta_models.MetaModels(transport=export_replay.cache_only))}
 
 

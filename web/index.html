@@ -55,6 +55,12 @@
     .hint { color: var(--muted); font-size: 12px; margin: 4px 0; }
     .bad-text { color: var(--warn); } .ok-text { color: var(--ok); }
     #progress { position: fixed; left: 50%; top: 86px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 16px; }
+    #meta-open { font: inherit; font-size: 12px; margin-top: 6px; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+    #meta-view { position: fixed; inset: 0; background: rgba(15, 17, 20, .55); display: grid; place-items: center; z-index: 20; }
+    #meta-view .sheet { background: var(--panel); border-radius: 10px; padding: 12px; max-width: 92vw; }
+    #meta-view canvas { display: block; border-radius: 6px; }
+    #meta-caption { font-size: 13px; margin: 8px 0; max-width: 86vw; }
+    #meta-close { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
     @media (max-width: 900px) { figure.panel { display: none; } aside.panel { width: 260px; } }
   </style>
   <script type="importmap">
@@ -117,7 +123,15 @@
   <figure class="panel">
     <img id="photo" alt="Room photo the scene was built from">
     <figcaption>Room photo → scene by Meta SAM 3.1 + Muse Spark, corrected by the user. The motion is replayed from the Isaac Sim rehearsal.</figcaption>
+    <button id="meta-open" type="button">How Meta built this room</button>
   </figure>
+  <div id="meta-view" hidden>
+    <div class="sheet">
+      <canvas id="meta-canvas"></canvas>
+      <p id="meta-caption"></p>
+      <button id="meta-close" type="button">Back to 3D</button>
+    </div>
+  </div>
   <footer class="panel">
     <button id="play" type="button">Pause</button>
     <span id="phase"></span>

@@ -25,7 +25,7 @@ WORKER_KEYS = ("status", "request", "mass_kg", "friction", "checkpoints", "phase
                "placement_goal", "key_frames")
 
 
-GRID = 24
+GRID = 48                      # mask cells per side: enough for the colour mean and the viewer's mask overlay
 
 
 def cache_only(url, headers, body, stream):
