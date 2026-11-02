@@ -254,6 +254,12 @@ class Jobs:
             summary = None
         done = "sequence_dir" if "moves" in state["request"] else "run_dir"
         if not isinstance(summary, dict) or done not in summary:
+            # No result and no process left: the run ended early (e.g. the session has no Isaac runtime); show its log.
+            alive = self.remote(f"pgrep -f 'requests/{job}.json' >/dev/null && echo alive || echo stopped").strip()
+            if alive == "stopped":
+                log = self.remote(f"tail -n 5 {REMOTE_REPO}/outputs/isaac/{job}.out 2>/dev/null || true").strip()
+                state.update(status="failed", error=log or "the remote run stopped without output")
+                return state
             # This job's newest run (inside its sequence folder for several moves) and the phases it has recorded; an
             # older run (the previous job's) is not shown while Isaac starts. Folder names start with the UTC time.
             def newest(pattern):

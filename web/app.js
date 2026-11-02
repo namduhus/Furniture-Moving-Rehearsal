@@ -699,7 +699,12 @@ async function rehearseMove() {
     await new Promise((resolve) => setTimeout(resolve, 4000));
     const job = await (await fetch(`/api/job?id=${response.job}`)).json();
     const elapsed = Math.round((performance.now() - started) / 1000);
-    if (job.error) { show(`Rehearsal error: ${job.error}`); return; }
+    if (job.error) {
+      // The queued moves stay, so the rehearsal can be started again (e.g. once an Isaac session is running).
+      show(`Rehearsal ${job.status === "failed" ? "stopped" : "error"}: ${job.error}`);
+      $("rehearse").disabled = $("undo").disabled = false;
+      return;
+    }
     if (job.status === "running") {
       show(`Rehearsing on Isaac Sim… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` +
            (moves > 1 ? ` · move ${job.move ?? 1} of ${moves}` : "") +
