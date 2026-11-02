@@ -95,6 +95,23 @@ class MetaModelTests(unittest.TestCase):
         self.assertFalse(any(body["tool_enablement"].values()))
         self.assertEqual(result["image"], b"\x89PNG\r\n\x1a\n")
 
+    def test_transcription_sends_the_wav_as_multipart_and_reads_the_transcript(self):
+        reply = {"sessionId": "s", "transcript": "move the side table next to the TV", "audioDurationMs": 2400, "turns": []}
+        client, transport = self.client([reply])
+        wav = b"RIFF....WAVEfmt "
+        result = client.transcribe(wav, language=["Korean", "English"])
+        call = transport.calls[0]
+        self.assertEqual(call["url"], "https://api.meta.ai/v1/asr/transcribe")
+        self.assertEqual(call["body"]["multipart"]["request"], {"model": "muse-voice-transcribe-1.0", "audioEncoding": "WAV",
+                                                                 "mode": "PUSH_TO_TALK", "languageBias": ["Korean", "English"]})
+        self.assertEqual((result["text"], result["duration_ms"], result["cached"]), (reply["transcript"], 2400, False))
+        # The same clip comes from the cache; the form body holds both parts with their types.
+        self.assertTrue(client.transcribe(wav, language=["Korean", "English"])["cached"])
+        data, content_type = mm.multipart(call["body"]["multipart"])
+        self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
+        self.assertIn(b'name="request"\r\nContent-Type: application/json', data)
+        self.assertIn(b'name="audio"; filename="speech.wav"\r\nContent-Type: audio/wav\r\n\r\n' + wav, data)
+
     def test_masks_decode_with_the_official_parser_after_a_size_check(self):
         # Published one_bit test vector (meta-sam protocol): a 5 x 5 raster.
         record = {"box": {"x1": 10, "y1": 20, "x2": 14, "y2": 24},

@@ -1,4 +1,5 @@
-"""Meta model calls behind one interface: Muse Spark chat, SAM 3.1 segmentation and Muse Image generation and editing.
+"""Meta model calls behind one interface: Muse Spark chat, SAM 3.1 segmentation, Muse Image generation and editing, and
+Muse Voice Transcribe speech-to-text.
 
 Providers share the OpenAI-compatible request shapes: the Meta Model API (Muse Spark, SAM 3.1) and partner inference
 for the open-weight Muse Spark Open. Keys come only from the environment or the git-ignored `.env` at the repository
@@ -46,9 +47,23 @@ def image_data_url(path):
     return f"data:{MIME[path.suffix.lower()]};base64,{base64.b64encode(path.read_bytes()).decode()}"
 
 
+def multipart(parts):
+    """multipart/form-data body for the speech-to-text call: the `request` JSON part and the `audio` WAV part."""
+    boundary = "fmr" + hashlib.sha256(os.urandom(16)).hexdigest()[:24]
+    head = "--{b}\r\nContent-Disposition: form-data; name=\"{n}\"{f}\r\nContent-Type: {t}\r\n\r\n"
+    data = b"".join([head.format(b=boundary, n="request", f="", t="application/json").encode(), json.dumps(parts["request"]).encode(),
+                     b"\r\n", head.format(b=boundary, n="audio", f='; filename="speech.wav"', t="audio/wav").encode(),
+                     base64.b64decode(parts["audio_wav_base64"]), f"\r\n--{boundary}--\r\n".encode()])
+    return data, f"multipart/form-data; boundary={boundary}"
+
+
 def http_transport(url, headers, body, stream, timeout=180):
-    """POST JSON (or GET when body is None); returns the decoded JSON, or the list of SSE event objects when streaming."""
+    """POST JSON (or GET when body is None; multipart/form-data when the body is {"multipart": parts}); returns the
+    decoded JSON, or the list of SSE event objects when streaming."""
     data = None if body is None else json.dumps(body).encode()
+    if isinstance(body, dict) and "multipart" in body:
+        data, content_type = multipart(body["multipart"])
+        headers = {**headers, "Content-Type": content_type, "Accept": "application/json"}
     request = urllib.request.Request(url, data=data, headers=headers, method="GET" if body is None else "POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -132,7 +147,8 @@ class MetaModels:
         self.log.parent.mkdir(parents=True, exist_ok=True)
         with self.log.open("a") as file:
             file.write(json.dumps({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "provider": self.provider, "path": path,
-                                   "model": (body or {}).get("model"), "cache_hit": hit, "request": key,
+                                   "model": (body or {}).get("model") or (body or {}).get("multipart", {}).get("request", {}).get("model"),
+                                   "cache_hit": hit, "request": key,
                                    "seconds": time.perf_counter() - tic, "usage": usage}) + "\n")
         return response, hit
 
@@ -173,6 +189,14 @@ class MetaModels:
         response, hit = self._call("/images/edits", body)
         return {"image": base64.b64decode(response["data"][0]["b64_json"]),
                 "format": response.get("output_format", output_format), "cached": hit}
+
+    def transcribe(self, wav, language=None, model="muse-voice-transcribe-1.0"):
+        """Text of one spoken clip (RIFF/WAVE, mono 16-bit PCM at 16 or 24 kHz, at most 10 minutes); `language` is an
+        optional list of language names to bias recognition (e.g. ["Korean", "English"]), else it is detected."""
+        request = {"model": model, "audioEncoding": "WAV", "mode": "PUSH_TO_TALK", **({"languageBias": language} if language else {})}
+        response, hit = self._call("/asr/transcribe", {"multipart": {"request": request,
+                                                                     "audio_wav_base64": base64.b64encode(wav).decode()}})
+        return {"text": response.get("transcript", ""), "duration_ms": response.get("audioDurationMs"), "cached": hit}
 
     def segment(self, image, phrase, model="sam-3.1", encoding="one_bit", confidence=True):
         """SAM 3.1 boxes and masks for one short noun phrase in one image (streamed special-token text)."""

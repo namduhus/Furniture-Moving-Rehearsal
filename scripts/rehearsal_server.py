@@ -11,6 +11,8 @@
                                      the running Modal session and started there over SSH (one job at a time)
 - GET  /api/job?id=                  running (with the phases recorded so far) or done (result downloaded and exported
                                      to web/demos/<job>/ for replay)
+- POST /api/voice                    {scene, audio_base64}: a spoken move (WAV) -> Muse Voice Transcribe text -> Muse Spark
+                                     picks the item and where it goes relative to another item -> a spot in the room
 
 The Meta API key never leaves the Mac except as the remote run's standard input, so it is not in any command line or
 log. Bind to localhost only.
@@ -19,6 +21,7 @@ log. Bind to localhost only.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timedelta, timezone
 from functools import partial
 import http.server
@@ -193,6 +196,77 @@ def feasible(body, config, trainings, step=0.15):
     return {"points": points, "candidates": len(candidates), "reasons": {} if points else reasons}
 
 
+VOICE_SCHEMA = {
+    "title": "MoveCommand", "type": "object", "additionalProperties": False,
+    "required": ["target_id", "anchor_id", "relation", "explanation"],
+    "properties": {"target_id": {"type": "string"}, "anchor_id": {"type": "string"},
+                   "relation": {"type": "string", "enum": ["next_to", "in_front_of", "behind", "left_of", "right_of", "room_center"]},
+                   "explanation": {"type": "string"}}}
+VOICE_PROMPT = """Someone who cannot move furniture themselves asked a home robot, in their own words: "{text}"
+Furniture in the room (id: kind, centre [x, y] m, size [width, depth, height] m). x runs to the right along the back
+wall, y toward the camera; "in front of" an item is toward the camera, "behind" toward the back wall, left and right as
+seen from the camera.
+{listing}
+The room is {width} m wide and {depth} m deep. Pick the item to move (target_id): if the request does not say which of
+several similar items, pick the one easiest for a robot to reach (farthest from the walls and other furniture). Pick
+where it should go: relative to another item (anchor_id with next_to, in_front_of, behind, left_of or right_of) or the
+middle of the room (relation room_center, anchor_id ""). Use only ids from the list. explanation: one short sentence in
+the language the person used, saying what will be moved where."""
+# Recognition hints: the viewer is used in Korean and English (without them a Korean request came back as French).
+VOICE_LANGUAGES = ["Korean", "English"]
+
+
+def check_wav(data):
+    """The clip Muse Voice Transcribe accepts: RIFF/WAVE, mono 16-bit PCM at 16 or 24 kHz, at most 10 minutes."""
+    import struct
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE" or data[12:16] != b"fmt ":
+        raise ValueError("The recording is not a WAV file")
+    fmt, channels, rate, _, _, bits = struct.unpack("<HHIIHH", data[20:36])
+    if (fmt, channels, bits) != (1, 1, 16) or rate not in (16000, 24000):
+        raise ValueError("The recording must be mono 16-bit PCM at 16 or 24 kHz")
+    if len(data) - 44 > 10*60*rate*2:
+        raise ValueError("The recording is longer than 10 minutes")
+
+
+def voice_spot(spec, command):
+    """Spec point for a spoken destination: past the anchor's footprint (its rotated extent) plus 0.45 m in the named
+    direction, the anchor's centre for next_to (the viewer snaps to the nearest checked destination around it), or the
+    room centre."""
+    import numpy as np
+    width, depth = spec["room"]["width_m"], spec["room"]["depth_m"]
+    items = {f["id"]: f for f in spec["furniture"]}
+    anchor = items.get(command["anchor_id"])
+    if command["relation"] == "room_center" or anchor is None:
+        return [width/2, depth/2]
+    theta = np.radians(anchor["yaw_deg"])
+    half = [(abs(np.cos(theta))*anchor["size_m"][0] + abs(np.sin(theta))*anchor["size_m"][1])/2,
+            (abs(np.sin(theta))*anchor["size_m"][0] + abs(np.cos(theta))*anchor["size_m"][1])/2]
+    dx, dy = {"next_to": (0, 0), "in_front_of": (0, 1), "behind": (0, -1), "left_of": (-1, 0), "right_of": (1, 0)}[command["relation"]]
+    x, y = anchor["center_m"]
+    return [float(np.clip(x + dx*(half[0] + 0.45), 0.0, width)), float(np.clip(y + dy*(half[1] + 0.45), 0.0, depth))]
+
+
+def voice_move(body, models=None):
+    """A spoken move: Muse Voice Transcribe turns the clip into text, Muse Spark picks the item and where it should go
+    relative to another item, and voice_spot turns that into a point of the room."""
+    wav = base64.b64decode(body["audio_base64"])
+    check_wav(wav)
+    models = models or meta_models.MetaModels()
+    text = models.transcribe(wav, language=VOICE_LANGUAGES)["text"].strip()
+    if not text:
+        raise ValueError("No speech was recognised; try again a little closer to the microphone")
+    spec = json.loads(scene_path(body["scene"]).read_text())["scene"]
+    listing = "\n".join(f"- {f['id']}: {f['category']}, centre {f['center_m']}, size {f['size_m']}" for f in spec["furniture"])
+    settings = json.loads(advisor.DEFAULT_CONFIG.read_text())
+    prompt = VOICE_PROMPT.format(text=text, listing=listing, width=spec["room"]["width_m"], depth=spec["room"]["depth_m"])
+    # A short choice: low reasoning effort answered the same in 6.9 s instead of 17 s (2026-11-02).
+    command = models.chat(settings["chat_model"], [{"role": "user", "content": prompt}], schema=VOICE_SCHEMA,
+                          reasoning_effort="low")["content"]
+    if command["target_id"] not in {f["id"] for f in spec["furniture"]}:
+        raise ValueError(f"Could not tell which item to move from: {text}")
+    return {"transcript": text, **command, "center_m": voice_spot(spec, command)}
+
+
 def check(body, config, trainings, models=None):
     """Validate a user's move; with `ask_meta`, add Muse Spark's plan for a valid one (rules accept or override its
     choice)."""
@@ -319,6 +393,8 @@ def handler(config, trainings, jobs):
                     return self.reply(check(body, config, trainings))
                 if url.path == "/api/rehearse" and method == "POST":
                     return self.reply({"job": jobs.start(body)})
+                if url.path == "/api/voice" and method == "POST":
+                    return self.reply(voice_move(body))
                 if url.path == "/api/job":
                     return self.reply(jobs.status(query.get("id")))
                 return self.reply({"error": "not found"}, 404)

@@ -438,6 +438,61 @@ function update() {
   showMeta(demo.rehearsal, state.t >= demo.diagnosis);
 }
 
+// ---- Voice: say the move; Muse Voice Transcribe writes it down, Muse Spark picks the item and the spot ----
+let recorder = null;
+
+async function wavBase64(blob) {
+  // The recording decoded and resampled to 16 kHz mono 16-bit PCM in a RIFF/WAVE container, as Muse Voice Transcribe takes.
+  const context = new AudioContext();
+  const decoded = await context.decodeAudioData(await blob.arrayBuffer());
+  await context.close();
+  const rate = 16000, offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+  const source = offline.createBufferSource();
+  source.buffer = decoded;
+  source.connect(offline.destination);
+  source.start();
+  const pcm = (await offline.startRendering()).getChannelData(0);
+  const bytes = new Uint8Array(44 + pcm.length * 2), view = new DataView(bytes.buffer);
+  const text = (offset, s) => [...s].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  text(0, "RIFF"); view.setUint32(4, 36 + pcm.length * 2, true); text(8, "WAVE"); text(12, "fmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, rate, true);
+  view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  text(36, "data"); view.setUint32(40, pcm.length * 2, true);
+  pcm.forEach((v, i) => view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, v)) * 0x7fff, true));
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+async function sendVoice(blob) {
+  $("voice-text").textContent = "Muse Voice Transcribe and Muse Spark are reading your request…";
+  const result = await (await fetch("/api/voice", { method: "POST", body: JSON.stringify({ scene: plan.view.id, audio_base64: await wavBase64(blob) }) })).json();
+  if (result.error) throw new Error(result.error);
+  $("voice-text").textContent = `“${result.transcript}” → ${result.explanation}`;
+  const v = plan.view;
+  plan.voiceGoal = { x: result.center_m[0] - v.spec_transform.x[1], y: v.spec_transform.y[1] - result.center_m[1] };   // spec -> simulation
+  selectItem(v.furniture.find((f) => f.id === result.target_id));
+}
+
+async function toggleVoice() {
+  if (recorder) { recorder.stop(); return; }
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true }), chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => chunks.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach((track) => track.stop());
+    recorder = null;
+    $("voice").textContent = "Speak a move";
+    sendVoice(new Blob(chunks)).catch((error) => { $("voice-text").textContent = error.message; });
+  };
+  recorder.start();
+  $("voice").textContent = "Stop and send";
+  $("voice-text").hidden = false;
+  $("voice-text").textContent = "Listening… say which item and where, e.g. “move the side table in front of the TV”.";
+}
+
+$("voice").addEventListener("click", () => toggleVoice().catch((error) => { $("voice-text").hidden = false; $("voice-text").textContent = error.message; }));
+
 // ---- How Meta built this room: the photo with each item's SAM 3.1 mask and Muse Spark's estimate, revealed in turn ----
 let metaSource = null, metaToken = 0;
 const META_COLORS = [[59, 130, 246], [234, 88, 12], [22, 163, 74], [219, 39, 119], [147, 51, 234], [202, 138, 4], [13, 148, 136]];
@@ -719,6 +774,11 @@ async function showFeasible() {
   world.add(dots);
   // With no destination, say why (the rehearsal rules' reasons for the carry, lift-then-push and push strategies).
   const why = Object.entries(result.reasons ?? {}).map(([strategy, reason]) => `${strategy}: ${reason}`).join("; ");
+  if (plan.voiceGoal && plan.feasible.length) {
+    // A spoken destination lands on the nearest checked spot.
+    placeGhost(plan.voiceGoal);
+    plan.voiceGoal = null;
+  }
   $("dest-hint").textContent = plan.feasible.length
     ? `Green dots: where it can go (${inCarryTier() ? "carried" : "lifted if it can be, else pushed on sliders"}). Click near one.`
     : `No reachable destination with this correction (${why || "no candidate"}).${inCarryTier() ? "" : " Try “Use carry size”."}`;

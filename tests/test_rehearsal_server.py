@@ -1,9 +1,12 @@
+import base64
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest import mock
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -23,6 +26,30 @@ class FakeModels:
     def chat(self, model, messages, schema=None):
         return {"content": {"cause": "c", "evidence": [], "strategy": "carry", "explanation": "x", "explanation_ko": "y",
                             "confidence": "high"}, "usage": {}, "cached": False}
+
+
+def wav(rate=16000, seconds=0.5, channels=1, bits=16):
+    import struct
+    data = bytes(int(rate*seconds)*channels*bits//8)
+    return (b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, channels, rate,
+            rate*channels*bits//8, channels*bits//8, bits) + b"data" + struct.pack("<I", len(data)) + data)
+
+
+class VoiceModels:
+    """Muse Voice Transcribe hears a Korean request; Muse Spark maps it to the outer side table, in front of the TV bench."""
+
+    def __init__(self, text="사이드 테이블을 TV 앞으로 옮겨 줘"):
+        self.text, self.prompts = text, []
+
+    def transcribe(self, data, language=None):
+        self.language = language
+        return {"text": self.text, "duration_ms": 500, "cached": False}
+
+    def chat(self, model, messages, schema=None, reasoning_effort=None):
+        self.prompts.append(messages[0]["content"])
+        self.effort = reasoning_effort
+        return {"content": {"target_id": "side_table_1", "anchor_id": "tv_stand_1", "relation": "in_front_of",
+                            "explanation": "사이드 테이블을 TV 장 앞으로 옮깁니다."}, "usage": {}, "cached": False}
 
 
 class ServerCheckTests(unittest.TestCase):
@@ -89,6 +116,24 @@ class ServerCheckTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already"):
             server.check({**body, "target": "side_table_1", "destination": first["destination"], "previous": [outer["request"]]},
                          CONFIG, TRAININGS)
+
+    def test_a_spoken_move_becomes_an_item_and_a_spot(self):
+        models = VoiceModels()
+        body = {"scene": "living_room_pedestal_three", "audio_base64": base64.b64encode(wav()).decode()}
+        result = server.voice_move(body, models)
+        self.assertEqual((result["transcript"], result["target_id"], result["relation"]), (models.text, "side_table_1", "in_front_of"))
+        # The TV bench (1.8 x 0.45 m, yaw 0, centre (1.6, 0.3)): 0.225 m to its front face, then 0.45 m more toward the camera.
+        np.testing.assert_allclose(result["center_m"], [1.6, 0.3 + 0.225 + 0.45], atol=1e-9)
+        self.assertIn(models.text, models.prompts[0])
+        self.assertIn("side_table_1: side_table", models.prompts[0])
+        self.assertEqual((models.language, models.effort), (["Korean", "English"], "low"))
+        self.assertEqual(server.voice_spot({"room": {"width_m": 3.2, "depth_m": 3.6}, "furniture": []},
+                                           {"relation": "room_center", "anchor_id": ""}), [1.6, 1.8])
+        for bad, message in ((wav(rate=44100), "16 or 24 kHz"), (wav(channels=2), "mono"), (b"ID3....", "not a WAV")):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                server.voice_move({**body, "audio_base64": base64.b64encode(bad).decode()}, models)
+        with self.assertRaisesRegex(ValueError, "No speech"):
+            server.voice_move(body, VoiceModels(text="  "))
 
     def test_meta_plan_is_added_on_request(self):
         result = server.check({**move("pedestal"), "ask_meta": True}, CONFIG, TRAININGS, models=FakeModels())
