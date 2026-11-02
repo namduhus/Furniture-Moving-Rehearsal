@@ -735,13 +735,18 @@ $("rehearse").addEventListener("click", () => rehearseMove().catch((error) => { 
 $("undo").addEventListener("click", undoMove);
 
 let scenes = [];
+// Scenes kept out of the Try it tabs (their demos and requests still use them).
+const HIDDEN_TRY = new Set(["living_room_bookcase", "living_room_cabinet"]);
 function renderTabs() {
   $("tabs").innerHTML = DEMOS.map((d) => `<button type="button" data-id="${d.id}">${d.label}</button>`).join("") +
     scenes.map((id) => `<button type="button" class="try" data-scene="${id}">Try it · ${id.replace("living_room_", "")} room</button>`).join("");
 }
 renderTabs();
 // The Try it tabs need the local rehearsal server (scripts/rehearsal_server.py); a plain static server has no /api.
-fetch("/api/scenes").then((r) => (r.ok ? r.json() : [])).then((list) => { scenes = Array.isArray(list) ? list : []; renderTabs(); }).catch(() => {});
+fetch("/api/scenes").then((r) => (r.ok ? r.json() : [])).then((list) => {
+  scenes = Array.isArray(list) ? list.filter((id) => !HIDDEN_TRY.has(id)) : [];
+  renderTabs();
+}).catch(() => {});
 $("tabs").addEventListener("click", (e) => {
   if (e.target.dataset.id) load(e.target.dataset.id).catch(fail);
   if (e.target.dataset.scene) loadPlan(e.target.dataset.scene).catch(fail);
