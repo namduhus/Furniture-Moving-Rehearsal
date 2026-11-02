@@ -61,8 +61,8 @@ def repo_path(value, prefix, suffix):
 def load_config(path):
     config = json.loads(Path(path).read_text())
     if set(config) != {"approach_training", "carry_training", "approach_checkpoint", "carry_checkpoint", "push", "request",
-                       "start_inside_door_m", "timeline_seconds", "back_away_mps", "set_down", "camera", "stage_timeout_seconds",
-                       "scope"}:
+                       "start_inside_door_m", "timeline_seconds", "back_away_mps", "set_down", "carry_min_command", "camera",
+                       "stage_timeout_seconds", "scope"}:
         raise ValueError("Unreviewed rehearsal configuration keys")
 
     def number(value, low, high):
@@ -106,8 +106,9 @@ def load_config(path):
             not number(cam["target_height_m"], 0.0, 2.0)):
         raise ValueError("Invalid rehearsal camera")
     if (not number(config["start_inside_door_m"], 0.3, 1.5) or not number(config["back_away_mps"], 0.0, 0.15) or
+            not number(config["carry_min_command"], 0.0, 0.15) or
             type(config["stage_timeout_seconds"]) is not int or not 60 <= config["stage_timeout_seconds"] <= 3600):
-        raise ValueError("Invalid start distance, back-away speed or stage timeout")
+        raise ValueError("Invalid start distance, back-away speed, carry minimum command or stage timeout")
     return config, trainings
 
 
@@ -384,6 +385,16 @@ def carry_status(carry, placement):
     return "completed_rehearsal" if finished else "failed_carry"
 
 
+def keep_walking(commands, minimum):
+    """Commands [vx, vy, yaw rate] with every non-zero one shorter than `minimum` scaled up to it (zero stays zero)."""
+    import numpy as np
+    commands = np.array(commands, dtype=float)
+    norm = np.linalg.norm(commands, axis=1)
+    small = (norm > 1e-9) & (norm < minimum)
+    commands[small] *= (minimum/norm[small])[:, None]
+    return commands
+
+
 def turn_z(quat, angle):
     """Quaternion [x, y, z, w] rotated by `angle` about the world z axis."""
     import numpy as np
@@ -439,9 +450,18 @@ class RehearsalEnv(room.RoomTaskEnv):
     """RoomTaskEnv over one fixed room in which the approach and carry phases share the robot without resets."""
 
     def __init__(self, layout, *args):
-        self.layout = layout
+        self.layout, self.min_command = layout, 0.0
         super().__init__(*args)
         self.reset_on_done = False
+
+    def control(self, commands, rpys, arms=None):
+        """With min_command set, small non-zero commands are scaled up to it (keep_walking): under GR00T's 0.05 switch
+        norm Balance takes over, and its stance lowered the hands 1.5 cm and grounded the pedestal mid-carry in run
+        20261102T005739 (move 2, twice, both while the carry policy commanded 0.04-0.046)."""
+        if self.min_command > 0:
+            commands = keep_walking(commands, self.min_command)
+            self.last_command = commands.copy()
+        return super().control(commands, rpys, arms)
 
     def episode(self, i, rng):
         L = self.layout
@@ -870,8 +890,10 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     # Hand over to the alignment near the goal: beside furniture the carry policy hovered 15-18 cm short
                     # until its time limit (runs 20261102T002432/003755), and in the second run the tilted pedestal's
                     # corner dipped under the 1 cm floor clearance while hovering.
+                    env.min_command = config["carry_min_command"]
                     result["phases"]["carry"] = drive("carry", actors["carry"],
                                                       (down["handover_m"], int(round(down["handover_s"]/env.decision_dt))))
+                    env.min_command = 0.0
                     write_json(evidence, result)
                     status = "failed_carry"
                     if result["phases"]["carry"]["outcome"] != "fallen":

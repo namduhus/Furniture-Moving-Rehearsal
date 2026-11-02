@@ -172,6 +172,12 @@ class RehearsalLayoutTests(unittest.TestCase):
         np.testing.assert_allclose(cabinet[:2, 3], placed[:2], atol=1e-12)
         self.assertAlmostEqual(float(room.wrap(np.arctan2(cabinet[1, 0], cabinet[0, 0]) - placed[2])), 0.0, places=12)
 
+    def test_small_carry_commands_are_kept_above_the_balance_switch(self):
+        commands = rehearsal.keep_walking([[0.038, -0.024, 0.013], [0.0, 0.0, 0.0], [0.1, 0.0, 0.0]], 0.06)
+        self.assertAlmostEqual(float(np.linalg.norm(commands[0])), 0.06)
+        np.testing.assert_allclose(commands[0]/np.linalg.norm(commands[0]), np.array([0.038, -0.024, 0.013])/np.linalg.norm([0.038, -0.024, 0.013]))
+        np.testing.assert_allclose(commands[1:], [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0]])
+
     def test_a_timed_out_carry_counts_only_when_the_alignment_places_it(self):
         inside, outside = {"within_tolerance": True}, {"within_tolerance": False}
         self.assertEqual(rehearsal.carry_status("success", outside), "completed_rehearsal")
