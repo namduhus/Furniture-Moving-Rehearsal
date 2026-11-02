@@ -176,6 +176,8 @@ class RehearsalLayoutTests(unittest.TestCase):
         inside, outside = {"within_tolerance": True}, {"within_tolerance": False}
         self.assertEqual(rehearsal.carry_status("success", outside), "completed_rehearsal")
         self.assertEqual(rehearsal.carry_status("time_out", inside), "completed_rehearsal")
+        self.assertEqual(rehearsal.carry_status("near_goal", inside), "completed_rehearsal")
+        self.assertEqual(rehearsal.carry_status("near_goal", outside), "failed_carry")
         self.assertEqual(rehearsal.carry_status("time_out", outside), "failed_carry")
         self.assertEqual(rehearsal.carry_status("time_out", None), "failed_carry")
         for failure in ("fallen", "wall_contact", "object_grounded"):

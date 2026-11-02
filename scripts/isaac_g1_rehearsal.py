@@ -95,8 +95,10 @@ def load_config(path):
     if set(t) != set(TIMELINE) or not all(number(v, 0.1, 5.0) for v in t.values()):
         raise ValueError("Invalid rehearsal timeline")
     down = config["set_down"]
-    if (set(down) != {"touchdown_m", "position_tolerance_m", "yaw_tolerance_deg"} or not number(down["touchdown_m"], 0.001, 0.03)
-            or not number(down["position_tolerance_m"], 0.01, 0.1) or not number(down["yaw_tolerance_deg"], 1.0, 10.0)):
+    if (set(down) != {"touchdown_m", "position_tolerance_m", "yaw_tolerance_deg", "handover_m", "handover_s"} or
+            not number(down["touchdown_m"], 0.001, 0.03) or not number(down["position_tolerance_m"], 0.01, 0.1) or
+            not number(down["yaw_tolerance_deg"], 1.0, 10.0) or not number(down["handover_m"], 0.1, 0.5) or
+            not number(down["handover_s"], 0.2, 5.0)):
         raise ValueError("Invalid set-down settings")
     cam = config["camera"]
     if (set(cam) != {"eye_from_front_m", "target_height_m"} or not isinstance(cam["eye_from_front_m"], list) or
@@ -374,10 +376,11 @@ def rehearsal_layout(scene, request, trainings, inside_door, reach, push_setting
 
 
 def carry_status(carry, placement):
-    """Rehearsal status after a carry and its set-down. A carry that timed out (still holding the cabinet, near its goal)
-    counts when the alignment finished it: run 20261102T002432 hovered 15-18 cm short beside the TV bench for 40 s, and
-    the alignment then set the pedestal down 2.8 cm / 1.1 deg off. Any other carry failure stays a failure."""
-    finished = carry == "success" or (carry == "time_out" and bool(placement and placement["within_tolerance"]))
+    """Rehearsal status after a carry and its set-down. A carry handed over near its goal, or one that timed out still
+    holding the cabinet, counts when the alignment finished it: run 20261102T002432 hovered 15-18 cm short beside the TV
+    bench for 40 s, and the alignment then set the pedestal down 2.8 cm / 1.1 deg off. Any other carry failure stays a
+    failure."""
+    finished = carry == "success" or (carry in ("near_goal", "time_out") and bool(placement and placement["within_tolerance"]))
     return "completed_rehearsal" if finished else "failed_carry"
 
 
@@ -627,13 +630,21 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                                "command": [round(float(v), 4) for v in command],
                                "bodies": np.round(bodies - offset, 4).tolist(), "cabinet": np.round(cabinet - offset, 4).tolist()})
 
-            def drive(task, act):
-                """Policy decisions until the task ends (success, failure or its episode limit)."""
+            def drive(task, act, handover=None):
+                """Policy decisions until the task ends (success, failure or its episode limit), or, with `handover`
+                (metres, decisions), as "near_goal" once the root has stayed that close to its goal that long."""
+                near = 0
                 while True:
                     env.step(act(env.obs))
                     record(task, env.last_command[0])
                     if 0 in env.last_completed:
                         return env.last_completed[0]
+                    error = float(env.last_task["position_error_m"][0])
+                    near = near + 1 if handover and error <= handover[0] else 0
+                    if handover and near >= handover[1]:
+                        return {"outcome": "near_goal", "progress_m": float(env.start_remaining[0] - env.previous_remaining[0]),
+                                "seconds": float(env.length[0]*env.decision_dt), "position_error_m": error,
+                                "yaw_error_deg": float(np.degrees(abs(env.last_task["yaw_error_rad"][0])))}
 
             # Station keeping while setting the load down: plain Balance stepped the robot back 18 cm and dragged the
             # cabinet 10 cm in run 20261101T103451 (14 cm in the lift probes), so these phases dock to the carry goal.
@@ -856,7 +867,11 @@ def run_worker(config, trainings, request, scene, model_paths, directory):
                     env.arm_start = env.arm_lift = arm["lift"][0]
                     env.begin(carry_config, layout["carry_goal"], layout["carry_path"] if path is None else path,
                               sum(carry_config["lift_prefix_seconds"].values()))
-                    result["phases"]["carry"] = drive("carry", actors["carry"])
+                    # Hand over to the alignment near the goal: beside furniture the carry policy hovered 15-18 cm short
+                    # until its time limit (runs 20261102T002432/003755), and in the second run the tilted pedestal's
+                    # corner dipped under the 1 cm floor clearance while hovering.
+                    result["phases"]["carry"] = drive("carry", actors["carry"],
+                                                      (down["handover_m"], int(round(down["handover_s"]/env.decision_dt))))
                     write_json(evidence, result)
                     status = "failed_carry"
                     if result["phases"]["carry"]["outcome"] != "fallen":
