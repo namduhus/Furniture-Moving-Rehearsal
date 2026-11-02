@@ -703,7 +703,8 @@ async function rehearseMove() {
     if (job.status === "running") {
       show(`Rehearsing on Isaac Sim… ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}` +
            (moves > 1 ? ` · move ${job.move ?? 1} of ${moves}` : "") +
-           (job.phases?.length ? ` · ${PHASES[job.phases[job.phases.length - 1]] ?? job.phases[job.phases.length - 1]}` : ""));
+           (job.phases?.length ? ` · ${PHASES[job.phases[job.phases.length - 1]] ?? job.phases[job.phases.length - 1]}`
+                               : " · starting Isaac Sim (about 5 min for the first run of a session)"));
       continue;
     }
     $("progress").hidden = true;

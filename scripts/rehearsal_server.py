@@ -19,7 +19,7 @@ log. Bind to localhost only.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import partial
 import http.server
 import json
@@ -235,8 +235,10 @@ class Jobs:
         # The key arrives on standard input and is exported only into the run's environment.
         self.remote(f"cd {REMOTE_REPO} && read -r META_API_KEY; export META_API_KEY; nohup {REMOTE_PYTHON} "
                     f"{runner} > outputs/isaac/{job}.out 2>&1 < /dev/null &", (self.key() + "\n").encode())
+        # Run folders are named by their UTC start; only those from this job on count (30 s for clock skew).
+        since = (datetime.now(timezone.utc) - timedelta(seconds=30)).strftime("%Y%m%dT%H%M%S")
         self.jobs[job] = {"status": "running", "request": request, "started": datetime.now().isoformat(),
-                          "moves": len(moves) if moves is not None else 1}
+                          "moves": len(moves) if moves is not None else 1, "since": since}
         return job
 
     def status(self, job):
@@ -252,10 +254,15 @@ class Jobs:
             summary = None
         done = "sequence_dir" if "moves" in state["request"] else "run_dir"
         if not isinstance(summary, dict) or done not in summary:
-            # The newest run (inside the newest sequence folder for several moves) and the phases it has recorded.
-            where = (f"$(ls -td {REMOTE_REPO}/outputs/isaac/*-sequence | head -1)/*/" if done == "sequence_dir" else
-                     f"{REMOTE_REPO}/outputs/isaac/")
-            newest = self.remote(f"ls -td {where}*-rehearsal 2>/dev/null | head -1").strip()
+            # This job's newest run (inside its sequence folder for several moves) and the phases it has recorded; an
+            # older run (the previous job's) is not shown while Isaac starts. Folder names start with the UTC time.
+            def newest(pattern):
+                found = [line.strip() for line in self.remote(f"ls -1d {pattern} 2>/dev/null || true").splitlines()]
+                found = [path for path in found if path and Path(path).name >= state.get("since", "")]
+                return max(found, key=lambda path: Path(path).name) if found else ""
+            folder = newest(f"{REMOTE_REPO}/outputs/isaac/*-sequence") if done == "sequence_dir" else None
+            newest = (newest(f"{folder}/*/*-rehearsal") if folder else "") if done == "sequence_dir" else \
+                newest(f"{REMOTE_REPO}/outputs/isaac/*-rehearsal")
             worker = self.remote(f"cat {newest}/rehearsal-worker.json 2>/dev/null || true") if newest else ""
             try:
                 phases = list(json.loads(worker).get("phases", {})) if worker.strip() else []

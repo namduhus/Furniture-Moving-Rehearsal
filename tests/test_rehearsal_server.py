@@ -112,7 +112,7 @@ class JobTests(unittest.TestCase):
     def test_a_job_uploads_the_request_starts_with_the_key_on_stdin_and_comes_back(self):
         request = {**json.loads((ROOT / "configs/rehearsal_living_room_pedestal.json").read_text())}
         summary = {"status": "completed_rehearsal", "run_dir": "/remote/outputs/isaac/20261102T000000Z-rehearsal"}
-        remote = FakeRemote(["", "", "still running", "20261102T000000Z-rehearsal",
+        remote = FakeRemote(["", "", "still running", "/r/outputs/isaac/20201231T000000Z-rehearsal\n/r/outputs/isaac/20991231T000000Z-rehearsal",
                              json.dumps({"phases": {"approach": {}, "reach": {}}}), json.dumps(summary)])
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "ROOT", Path(tmp)), \
                 mock.patch.object(server.export_replay, "export") as export:
@@ -143,7 +143,10 @@ class JobTests(unittest.TestCase):
                   "destination": {"center_m": [1.0, 3.0], "yaw_deg": 90.0},
                   "furniture": {"side_table_0": {"size_m": [0.28, 0.30, 0.90]}}} for t in ("side_table_1", "cabinet_0")]
         summary = {"status": "completed_sequence", "sequence_dir": "/remote/outputs/isaac/20261102T000000Z-sequence"}
-        remote = FakeRemote(["", "", "not json", "/remote/outputs/isaac/20261102T000000Z-sequence/1/20261102T000100Z-rehearsal",
+        # The older sequence folder (a previous job) is ignored; this job's folder holds move 1's run.
+        remote = FakeRemote(["", "", "not json",
+                             "/remote/outputs/isaac/20201231T000000Z-sequence\n/remote/outputs/isaac/20991231T000000Z-sequence",
+                             "/remote/outputs/isaac/20991231T000000Z-sequence/1/20991231T000100Z-rehearsal",
                              json.dumps({"phases": {"approach": {}}}), json.dumps(summary)])
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "ROOT", Path(tmp)), \
                 mock.patch.object(server.export_replay, "export_sequence") as export:
@@ -161,6 +164,15 @@ class JobTests(unittest.TestCase):
         self.assertEqual((running["move"], running["phases"]), (2, ["approach"]))
         self.assertEqual((done["status"], done["demo"], remote.fetched), ("done", job, ["20261102T000000Z-sequence"]))
         export.assert_called_once()
+
+    def test_a_previous_jobs_run_is_not_shown_as_progress(self):
+        remote = FakeRemote(["", "", "not json", "/r/outputs/isaac/20201231T000000Z-rehearsal"])
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(server, "ROOT", Path(tmp)):
+            jobs = server.Jobs(remote, key=lambda: "k")
+            job = jobs.start(json.loads((ROOT / "configs/rehearsal_living_room_pedestal.json").read_text()))
+            running = jobs.status(job)
+        self.assertEqual((running["status"], running["phases"]), ("running", []))
+        self.assertFalse(any("rehearsal-worker.json" in command for command, _ in remote.calls))
 
     def test_unchecked_requests_are_refused(self):
         with self.assertRaisesRegex(ValueError, "Check the move"):
