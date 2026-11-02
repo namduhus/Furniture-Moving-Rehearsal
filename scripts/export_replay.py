@@ -100,11 +100,14 @@ def export(run, name, out=ROOT / "web/demos", models=None):
     return target
 
 
-def export_sequence(directory, name, out=ROOT / "web/demos", models=None):
+def export_sequence(directory, name, out=ROOT / "web/demos", models=None, completed_only=False):
+    """Merge a sequence's runs; with completed_only, only its completed moves (a stopped sequence's last attempt is left
+    out and its item stays where it stood)."""
     record = json.loads((directory / "sequence.json").read_text())
     walls = room.load_config(ROOT / "configs/isaac_g1_room_approach.json")[0]["room"]
     frames, moves = [], []
-    for k, entry in enumerate(r for r in record["runs"] if r["run"]):
+    kept = [r for r in record["runs"] if r["run"] and (r.get("status") == "completed_rehearsal" or not completed_only)]
+    for k, entry in enumerate(kept):
         run = directory / entry["run"]
         replay = json.loads((run / "replay.json").read_text())
         worker = json.loads((run / "rehearsal-worker.json").read_text())
@@ -130,8 +133,19 @@ def export_sequence(directory, name, out=ROOT / "web/demos", models=None):
     write("replay.json", {**{k: replay[k] for k in ("bodies", "decision_dt", "frame", "spec_transform")},
                           "cabinet_size_m": moves[0]["size_m"], "room": display, "items": [m["target"] for m in moves],
                           "frames": frames})
-    write("scene.json", scene)
-    write("rehearsal.json", {"run": directory.name, "status": record["status"], "request": moves[0]["request"],
+    # The spec as Meta estimated it (the runs' scene carries the corrected sizes and moved poses), for the side panel.
+    spec = record.get("sequence", {}).get("scene")
+    write("scene.json", json.loads((ROOT / spec).read_text()) if spec and (ROOT / spec).is_file() else scene)
+    status = f"completed_{len(moves)}_of_{len(record['sequence']['moves'])}_moves" if completed_only else record["status"]
+    # A left-out move is reported with how its last attempt ended (what the rehearsal found), not hidden.
+    left_out = []
+    for entry in record["runs"]:
+        if entry in kept or not entry.get("run"):
+            continue
+        worker = json.loads((directory / entry["run"] / "rehearsal-worker.json").read_text())
+        left_out.append({"target": entry["target"], "status": entry.get("status"), "attempts": len(entry.get("attempts") or [entry]),
+                         "carry": (worker["phases"].get("carry") or {}).get("outcome"), "lift": worker.get("lift")})
+    write("rehearsal.json", {"run": directory.name, "status": status, "request": moves[0]["request"], "left_out": left_out,
                              "moves": moves, "layout": {**first["layout"], "room": display, "placed": moves[0]["layout"]["placed"]},
                              "walls": {"thickness_m": walls["wall_thickness_m"], "height_m": walls["wall_height_m"]}})
     photo = ROOT / scene["image"]
@@ -145,8 +159,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", type=Path, help="outputs/isaac/<run>-rehearsal or outputs/isaac/<run>-sequence")
     parser.add_argument("name", help="demo folder name under web/demos/")
+    parser.add_argument("--completed-only", action="store_true", help="sequence: only the moves that completed")
     args = parser.parse_args(argv)
-    target = (export_sequence if (args.run / "sequence.json").exists() else export)(args.run, args.name)
+    if (args.run / "sequence.json").exists():
+        target = export_sequence(args.run, args.name, completed_only=args.completed_only)
+    else:
+        target = export(args.run, args.name)
     print(json.dumps({"demo": str(target), "files": sorted(p.name for p in target.iterdir())}))
     return 0
 

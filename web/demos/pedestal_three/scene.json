@@ -1,0 +1,337 @@
+{
+ "image": "outputs/meta/images/living_room_pedestal_three.png",
+ "models": {
+  "segmentation": "sam-3.1",
+  "layout": "muse-spark-1.3"
+ },
+ "reference": {
+  "object": "door",
+  "height_m": 2.0,
+  "width_m": 0.8
+ },
+ "detections": [
+  {
+   "id": "door_0",
+   "phrase": "door",
+   "box_px": [
+    1321,
+    86,
+    1425,
+    866
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.8632478713989258,
+   "mask_fill": 0.7514297908664106
+  },
+  {
+   "id": "sofa_0",
+   "phrase": "sofa",
+   "box_px": [
+    178,
+    591,
+    660,
+    985
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.7037037014961243,
+   "mask_fill": 0.3994391592630448
+  },
+  {
+   "id": "armchair_0",
+   "phrase": "armchair",
+   "box_px": [
+    178,
+    592,
+    660,
+    985
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.719298243522644,
+   "mask_fill": 0.3984456285272882
+  },
+  {
+   "id": "tv_stand_0",
+   "phrase": "tv stand",
+   "box_px": [
+    785,
+    697,
+    922,
+    718
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.7887788414955139,
+   "mask_fill": 0.4855072463768116
+  },
+  {
+   "id": "tv_stand_1",
+   "phrase": "tv stand",
+   "box_px": [
+    657,
+    713,
+    1063,
+    842
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.6717948913574219,
+   "mask_fill": 0.7764883764883765
+  },
+  {
+   "id": "cabinet_0",
+   "phrase": "cabinet",
+   "box_px": [
+    1371,
+    634,
+    1628,
+    1047
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.7538461089134216,
+   "mask_fill": 0.9607909223682732
+  },
+  {
+   "id": "cabinet_1",
+   "phrase": "cabinet",
+   "box_px": [
+    132,
+    707,
+    294,
+    1058
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.5428571701049805,
+   "mask_fill": 0.9657348020078081
+  },
+  {
+   "id": "cabinet_2",
+   "phrase": "cabinet",
+   "box_px": [
+    331,
+    707,
+    481,
+    1058
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.5345454812049866,
+   "mask_fill": 0.9672260686333534
+  },
+  {
+   "id": "cabinet_3",
+   "phrase": "cabinet",
+   "box_px": [
+    659,
+    713,
+    1062,
+    840
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.6908212304115295,
+   "mask_fill": 0.781849474009901
+  },
+  {
+   "id": "chair_0",
+   "phrase": "chair",
+   "box_px": [
+    178,
+    592,
+    660,
+    985
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.859649121761322,
+   "mask_fill": 0.3998644260175931
+  },
+  {
+   "id": "side_table_0",
+   "phrase": "side table",
+   "box_px": [
+    132,
+    708,
+    294,
+    1059
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.5704697966575623,
+   "mask_fill": 0.9658568042387061
+  },
+  {
+   "id": "side_table_1",
+   "phrase": "side table",
+   "box_px": [
+    331,
+    707,
+    481,
+    1058
+   ],
+   "image_px": [
+    1920,
+    1280
+   ],
+   "confidence": 0.5897435545921326,
+   "mask_fill": 0.9647990668272125
+  }
+ ],
+ "scene": {
+  "door": {
+   "center_m": 1.35,
+   "detection_id": "door_0",
+   "wall": "right"
+  },
+  "furniture": [
+   {
+    "category": "armchair",
+    "center_m": [
+     0.65,
+     1.25
+    ],
+    "detection_id": "armchair_0",
+    "estimated_mass_kg": 24.0,
+    "id": "armchair_0",
+    "mass_basis": "typical upholstered armchair",
+    "size_m": [
+     0.95,
+     0.9,
+     0.85
+    ],
+    "yaw_deg": 0.0
+   },
+   {
+    "category": "tv_stand",
+    "center_m": [
+     1.6,
+     0.3
+    ],
+    "detection_id": "tv_stand_1",
+    "estimated_mass_kg": 25.0,
+    "id": "tv_stand_1",
+    "mass_basis": "typical solid oak low TV bench",
+    "size_m": [
+     1.8,
+     0.45,
+     0.42
+    ],
+    "yaw_deg": 0.0
+   },
+   {
+    "category": "tv",
+    "center_m": [
+     1.6,
+     0.28
+    ],
+    "detection_id": "none",
+    "estimated_mass_kg": 12.0,
+    "id": "tv_1",
+    "mass_basis": "typical 43-inch flat panel",
+    "size_m": [
+     1.1,
+     0.06,
+     0.65
+    ],
+    "yaw_deg": 0.0
+   },
+   {
+    "category": "side_table",
+    "center_m": [
+     0.25,
+     2.4
+    ],
+    "detection_id": "side_table_0",
+    "estimated_mass_kg": 8.0,
+    "id": "side_table_0",
+    "mass_basis": "typical solid wood plinth",
+    "size_m": [
+     0.32,
+     0.32,
+     0.9
+    ],
+    "yaw_deg": 0.0
+   },
+   {
+    "category": "side_table",
+    "center_m": [
+     0.7,
+     2.35
+    ],
+    "detection_id": "side_table_1",
+    "estimated_mass_kg": 8.0,
+    "id": "side_table_1",
+    "mass_basis": "typical solid wood plinth",
+    "size_m": [
+     0.32,
+     0.32,
+     0.9
+    ],
+    "yaw_deg": 0.0
+   },
+   {
+    "category": "cabinet",
+    "center_m": [
+     2.97,
+     2.3
+    ],
+    "detection_id": "cabinet_0",
+    "estimated_mass_kg": 30.0,
+    "id": "cabinet_0",
+    "mass_basis": "typical small oak storage cabinet",
+    "size_m": [
+     0.85,
+     0.45,
+     1.02
+    ],
+    "yaw_deg": -90.0
+   }
+  ],
+  "notes": "Scale from door_0 2.0m tall, 0.8m wide; room dims approx +/-0.3m. Duplicates merged: sofa_0/chair_0 same box as armchair_0 kept as armchair; tv_stand_0 fragment and cabinet_3 same as tv_stand_1 kept as one TV bench; cabinet_1/cabinet_2 same boxes as side_table_0/1 kept as side tables. TV visible but no detection, id none. Yaw 0=front faces camera (+y); right cabinet faces -x ~ -90deg. Depth/width estimated by perspective, door on right wall ~1.0-1.8m from back wall.",
+  "room": {
+   "depth_m": 3.6,
+   "height_m": 2.55,
+   "width_m": 3.2
+  }
+ },
+ "checks_failed": [
+  "tv_1: no SAM detection"
+ ],
+ "usage": {
+  "completion_tokens": 6336,
+  "prompt_tokens": 3813,
+  "total_tokens": 10149,
+  "completion_tokens_details": {
+   "reasoning_tokens": 5563
+  },
+  "prompt_tokens_details": {
+   "cached_tokens": 0
+  }
+ }
+}

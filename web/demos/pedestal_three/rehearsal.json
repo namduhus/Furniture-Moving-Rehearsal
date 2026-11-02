@@ -1,0 +1,465 @@
+{
+ "run": "20261102T005739.773949Z-sequence",
+ "status": "completed_2_of_3_moves",
+ "request": {
+  "scene": "configs/scenes/living_room_pedestal_three.json",
+  "target": "side_table_1",
+  "corrections": {
+   "size_m": [
+    0.28,
+    0.3,
+    0.9
+   ],
+   "mass_kg": 3.0
+  },
+  "destination": {
+   "center_m": [
+    2.175,
+    0.825
+   ],
+   "yaw_deg": -90.0
+  },
+  "strategy": "carry",
+  "furniture": {
+   "side_table_1": {
+    "size_m": [
+     0.28,
+     0.3,
+     0.9
+    ]
+   },
+   "side_table_0": {
+    "size_m": [
+     0.28,
+     0.3,
+     0.9
+    ]
+   },
+   "cabinet_0": {
+    "size_m": [
+     0.28,
+     0.3,
+     0.9
+    ]
+   }
+  }
+ },
+ "left_out": [
+  {
+   "target": "cabinet_0",
+   "status": "failed_carry",
+   "attempts": 5,
+   "carry": "wall_contact",
+   "lift": {
+    "lifted": true,
+    "bottom_m": 0.012991772964596748,
+    "mass_kg": 3.0
+   }
+  }
+ ],
+ "moves": [
+  {
+   "run": "20261102T005739.951518Z-rehearsal",
+   "target": "side_table_1",
+   "status": "completed_rehearsal",
+   "request": {
+    "scene": "configs/scenes/living_room_pedestal_three.json",
+    "target": "side_table_1",
+    "corrections": {
+     "size_m": [
+      0.28,
+      0.3,
+      0.9
+     ],
+     "mass_kg": 3.0
+    },
+    "destination": {
+     "center_m": [
+      2.175,
+      0.825
+     ],
+     "yaw_deg": -90.0
+    },
+    "strategy": "carry",
+    "furniture": {
+     "side_table_1": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ]
+     },
+     "side_table_0": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ]
+     },
+     "cabinet_0": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ]
+     }
+    }
+   },
+   "phases": {
+    "approach_checkpoint_iteration": 299,
+    "carry_checkpoint_iteration": 299,
+    "approach": {
+     "outcome": "success",
+     "progress_m": 1.8586416907353056,
+     "seconds": 9.9,
+     "position_error_m": 0.025550791170052337,
+     "yaw_error_deg": 2.142616627019024
+    },
+    "square_up": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "reach": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "grasp": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "lift": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "hold": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "carry": {
+     "outcome": "near_goal",
+     "progress_m": 1.5736132393086546,
+     "seconds": 23.400000000000002,
+     "position_error_m": 0.15671350923014282,
+     "yaw_error_deg": 3.1354958638560237,
+     "finished_by_align": true
+    },
+    "align": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "lower": {
+     "invalid_action": false,
+     "fallen": false,
+     "stopped_s": 0.7
+    },
+    "release": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "withdraw": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "back_away": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "step_back": {
+     "invalid_action": false,
+     "fallen": false,
+     "clearance_m": 0.5067142723213037
+    }
+   },
+   "lift": {
+    "lifted": true,
+    "bottom_m": 0.021087151020765305,
+    "mass_kg": 3.0
+   },
+   "placement": {
+    "position_m": 0.010753872209457496,
+    "yaw_deg": 1.6376360472763534,
+    "yaw_rad": 1.5993784677692144,
+    "cabinet_spec_xy_m": [
+     2.1803887844085694,
+     0.8156937241554261
+    ],
+    "tilt_deg": 5.260243483501765e-05,
+    "within_tolerance": true
+   },
+   "layout": {
+    "cabinet": [
+     -0.9000000000000001,
+     -0.55,
+     3.141592653589793
+    ],
+    "placed": [
+     0.5749999999999997,
+     0.9750000000000001,
+     1.5707963267948966
+    ],
+    "size_m": [
+     0.3,
+     0.28,
+     0.9
+    ]
+   },
+   "size_m": [
+    0.3,
+    0.28,
+    0.9
+   ],
+   "frames": [
+    0,
+    459
+   ]
+  },
+  {
+   "run": "20261102T010002.234868Z-rehearsal",
+   "target": "side_table_0",
+   "status": "completed_rehearsal",
+   "request": {
+    "scene": "configs/scenes/living_room_pedestal_three.json",
+    "target": "side_table_0",
+    "corrections": {
+     "size_m": [
+      0.28,
+      0.3,
+      0.9
+     ],
+     "mass_kg": 3.0
+    },
+    "destination": {
+     "center_m": [
+      1.575,
+      3.225
+     ],
+     "yaw_deg": 90.0
+    },
+    "strategy": "carry",
+    "furniture": {
+     "side_table_1": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ],
+      "center_m": [
+       2.1804,
+       0.8157
+      ],
+      "yaw_deg": 1.64
+     },
+     "side_table_0": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ]
+     },
+     "cabinet_0": {
+      "size_m": [
+       0.28,
+       0.3,
+       0.9
+      ]
+     }
+    },
+    "start": [
+     0.6556,
+     0.3295,
+     1.4991679908624849
+    ]
+   },
+   "phases": {
+    "approach_checkpoint_iteration": 299,
+    "carry_checkpoint_iteration": 299,
+    "approach": {
+     "outcome": "success",
+     "progress_m": 1.9755861302729718,
+     "seconds": 13.5,
+     "position_error_m": 0.021839430660523913,
+     "yaw_error_deg": 1.1317838667236908
+    },
+    "square_up": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "reach": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "grasp": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "lift": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "hold": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "carry": {
+     "outcome": "near_goal",
+     "progress_m": 1.146706294304842,
+     "seconds": 20.700000000000003,
+     "position_error_m": 0.16129228412719282,
+     "yaw_error_deg": 2.2995077810310214,
+     "finished_by_align": true
+    },
+    "align": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "lower": {
+     "invalid_action": false,
+     "fallen": false,
+     "stopped_s": 0.7
+    },
+    "release": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "withdraw": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "back_away": {
+     "invalid_action": false,
+     "fallen": false
+    },
+    "step_back": {
+     "invalid_action": false,
+     "fallen": false,
+     "clearance_m": 0.5057549103865709
+    }
+   },
+   "lift": {
+    "lifted": true,
+    "bottom_m": 0.02554875984787941,
+    "mass_kg": 3.0
+   },
+   "placement": {
+    "position_m": 0.013816454818057244,
+    "yaw_deg": 0.902072724567538,
+    "yaw_rad": -1.5550521876587573,
+    "cabinet_spec_xy_m": [
+     1.5624456353485585,
+     3.230769085884094
+    ],
+    "tilt_deg": 4.204347618426554e-05,
+    "within_tolerance": true
+   },
+   "layout": {
+    "cabinet": [
+     -1.35,
+     -0.5999999999999999,
+     3.141592653589793
+    ],
+    "placed": [
+     -0.025000000000000133,
+     -1.425,
+     -1.5707963267948968
+    ],
+    "size_m": [
+     0.3,
+     0.28,
+     0.9
+    ]
+   },
+   "size_m": [
+    0.3,
+    0.28,
+    0.9
+   ],
+   "frames": [
+    460,
+    928
+   ]
+  }
+ ],
+ "layout": {
+  "reach_m": 0.41122464896819655,
+  "hand_reach_m": 0.41477672861456183,
+  "size_m": [
+   0.3,
+   0.28,
+   0.9
+  ],
+  "room": {
+   "width_m": 3.2,
+   "depth_m": 3.6,
+   "boxes": [
+    [
+     -0.9500000000000001,
+     0.55,
+     0.95,
+     0.8999999999999999,
+     0.85
+    ],
+    [
+     0.0,
+     1.5,
+     1.8,
+     0.4500000000000002,
+     0.42
+    ],
+    [
+     0.0,
+     1.52,
+     1.1,
+     0.06000000000000005,
+     0.65
+    ],
+    [
+     1.37,
+     -0.4999999999999998,
+     0.2999999999999998,
+     0.28,
+     0.9
+    ]
+   ]
+  },
+  "start": [
+   1.0,
+   0.44999999999999996,
+   3.141592653589793
+  ],
+  "cabinet": [
+   -0.9000000000000001,
+   -0.55,
+   3.141592653589793
+  ],
+  "placed": [
+   0.5749999999999997,
+   0.9750000000000001,
+   1.5707963267948966
+  ],
+  "approach_goal": [
+   -0.4887753510318036,
+   -0.55,
+   3.141592653589793
+  ],
+  "carry_goal": [
+   0.5749999999999997,
+   0.5637753510318035,
+   1.5707963267948966
+  ],
+  "push": null,
+  "spec_transform": {
+   "x": [
+    1.0,
+    1.6
+   ],
+   "y": [
+    -1.0,
+    1.8
+   ]
+  }
+ },
+ "walls": {
+  "thickness_m": 0.1,
+  "height_m": 1.2
+ }
+}

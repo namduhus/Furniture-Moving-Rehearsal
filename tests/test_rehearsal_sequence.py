@@ -156,6 +156,26 @@ class SequenceTests(unittest.TestCase):
         self.assertEqual(len(demo["layout"]["room"]["boxes"]), 3)
         self.assertEqual(replay["room"], demo["layout"]["room"])
 
+    def test_export_can_keep_only_the_completed_moves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "20261102T000000Z-sequence"
+            scene = json.loads((ROOT / "configs/scenes/living_room_trio.json").read_text())
+            runs = []
+            for k, (target, status) in enumerate((("pedestal_3", "completed_rehearsal"), ("pedestal_2", "failed_carry"))):
+                run = fake_run(directory / str(k), target, status, [0.7, 3.1], np.pi/2, [0, 0, 0.75, 0, 0, 0, 1])
+                (run / "scene.json").write_text(json.dumps(scene))
+                runs.append({"target": target, "run": f"{k}/{run.name}", "status": status})
+            (directory / "sequence.json").write_text(json.dumps({"status": "stopped_at_move_1", "runs": runs,
+                                                                 "sequence": json.loads(TRIO.read_text())}))
+            with mock.patch.object(export_replay, "appearance", return_value={"items": {}}):
+                target = export_replay.export_sequence(directory, "trio", out=Path(tmp) / "web", completed_only=True)
+            demo = json.loads((target / "rehearsal.json").read_text())
+        self.assertEqual([m["target"] for m in demo["moves"]], ["pedestal_3"])
+        self.assertEqual(demo["status"], "completed_1_of_3_moves")
+        self.assertEqual([(m["target"], m["status"], m["carry"]) for m in demo["left_out"]], [("pedestal_2", "failed_carry", "success")])
+        # The item of the left-out move stays a static box in the display room.
+        self.assertEqual(len(demo["layout"]["room"]["boxes"]), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

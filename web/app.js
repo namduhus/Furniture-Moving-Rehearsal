@@ -15,6 +15,7 @@ import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 const DEMOS = [
   { id: "pedestal_carry", label: "Light pedestal · carry" },
   { id: "bookcase_push", label: "Heavy bookcase · try to lift, then push" },
+  { id: "pedestal_three", label: "Pedestal room · two moves in a row" },
 ];
 const PHASES = {
   start: "Start", approach: "Walk to the item", reach: "Reach", grasp: "Grasp", lift: "Lift", hold: "Hold",
@@ -314,8 +315,13 @@ function describe(rehearsal, scene) {
       ["User correction", `${w} × ${d} × ${h} m, ${req.corrections.mass_kg} kg each`],
       ["Strategy", req.strategy],
     ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
-    $("result").innerHTML = [["Status", rehearsal.status.replaceAll("_", " ")], ...moves.map((m, k) => [`Box ${k + 1} placement`, placementText(m.placement)])]
-      .map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+    // Moves the rehearsal could not finish are listed with how they ended.
+    const leftOut = (rehearsal.left_out ?? []).map((m) => {
+      const kind = scene.scene.furniture.find((f) => f.id === m.target)?.category ?? m.target;
+      return [`${kind}`, `<span class="result bad">not moved: ${(m.carry ?? m.status).replaceAll("_", " ")} (${m.attempts} tries)</span>`];
+    });
+    $("result").innerHTML = [["Status", rehearsal.status.replaceAll("_", " ")], ...moves.map((m, k) => [`Box ${k + 1} placement`, placementText(m.placement)]),
+                             ...leftOut].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
     return;
   }
   $("request").innerHTML = [
