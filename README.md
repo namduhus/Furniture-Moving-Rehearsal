@@ -4,6 +4,8 @@
 
 **A simulated humanoid tries the furniture move first.**
 
+[Watch the 3-minute demo on YouTube](https://youtu.be/ZHPW66bc3ms) · [View the demo post on X](https://x.com/namduhus/status/2117493104626536887)
+
 For people who cannot move furniture themselves, this project explores three questions: **Can it be moved? How can it be moved? Can the result be explained simply?** Upload a room image and enter a door's known dimensions to build an editable 3D room estimate. Select furniture and a destination by clicking or speaking, confirm the preview, and a Unitree G1 rehearses the move in Isaac Sim. Muse Spark explains the result in plain English or Korean.
 
 Built for **Push the Frontier** at the Meta Global AI Developer Hackathon. This is a **VLM-guided humanoid controller**: all robot motion is simulated, with no physical robot involved.
