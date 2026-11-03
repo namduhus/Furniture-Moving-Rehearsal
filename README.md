@@ -71,7 +71,7 @@ These are **per-skill evaluations from one training run each**, using 256 matche
 3. **Plan → rehearsal:** geometry checks and Muse Spark select a move strategy. Isaac Sim executes the approach, lift/carry or push, and placement using GR00T whole-body control and PPO-trained policies.
 4. **Outcome → explanation:** measured states drive the replay and placement results; Muse Spark diagnoses the bookcase lift failure and explains the strategy change.
 
-All Meta calls use one [client](scripts/meta_models.py) with response caching. Included room images were generated with Muse Image; they are not photographs of real homes. New photo-to-scene conversion is available through [scene_from_image.py](scripts/scene_from_image.py); the browser currently uses prepared scenes.
+All Meta calls use one [client](scripts/meta_models.py) with response caching. Included room images were generated with Muse Image; they are not photographs of real homes. **Upload room image** connects the browser to [photo-to-scene conversion](scripts/scene_from_image.py): SAM detections and Spark's layout become simple 3D room/furniture shapes, with estimated dimensions and mass for user correction.
 
 ## Run the recorded demos
 
@@ -95,7 +95,16 @@ Set `META_API_KEY` in your environment or a Git-ignored `.env` file using [.env.
 uv run --locked python scripts/rehearsal_server.py --port 8000
 ```
 
-Open **http://127.0.0.1:8000/web/** and select a **Try it** room:
+Open **http://127.0.0.1:8000/web/**. Select a **Try it** room, or create one from your image:
+
+1. Press **Upload room image** and select a PNG, JPEG or WebP (up to 12 MB). The browser resizes it to at most 1920 pixels per side and converts it to PNG.
+2. Enter the known height and width of a visible door as the scale reference.
+3. Review the displayed call/cost estimate, then press **Convert with Meta**. This sends the image to Meta; the default profile uses 15 short-phrase SAM requests and one Spark request, with response caching. Conversion can take several minutes and needs `META_API_KEY`, but no GPU.
+4. The generated 3D room opens automatically. Check estimated furniture dimensions and mass before queuing a move. Items without their own SAM mask remain labelled as estimates with a warning.
+
+Uploaded images and generated scenes are stored locally in Git-ignored `outputs/uploads/` and `configs/scenes/upload-*.json`; use only images you may share with Meta, without people or personal information. This is an estimated room layout built from simple shapes, not a photorealistic mesh reconstruction. A new physics rehearsal additionally needs the Isaac worker below.
+
+In either room:
 
 1. Click furniture, or press **Speak a move**, speak, and press **Stop and send**.
 2. Check the transcript, selected item, dimensions and mass. **Use carry size** applies a demo preset of **0.28 × 0.30 × 0.90 m, 3 kg**; it does not measure the photographed item.

@@ -652,7 +652,9 @@ async function loadPlan(sceneId) {
   controls.target.set(0, 0, 0.3);
   setMode("plan");
   $("plan-item").hidden = true;
-  $("plan-hint").textContent = "Click the furniture you want to move.";
+  $("plan-hint").textContent = view.uploaded
+    ? `Your image is now a 3D estimate. Click furniture to check its dimensions and mass.${view.warnings?.length ? ` Check: ${view.warnings.join("; ")}.` : ""}${view.notes ? ` ${view.notes}` : ""}`
+    : "Click the furniture you want to move.";
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.scene === sceneId));
   $("status").hidden = true;
 }
@@ -893,8 +895,75 @@ let scenes = [];
 const HIDDEN_TRY = new Set(["living_room_bookcase", "living_room_cabinet"]);
 function renderTabs() {
   $("tabs").innerHTML = DEMOS.map((d) => `<button type="button" data-id="${d.id}">${d.label}</button>`).join("") +
-    scenes.map((id) => `<button type="button" class="try" data-scene="${id}">Try it · ${id.replace("living_room_", "")} room</button>`).join("");
+    scenes.map((id) => `<button type="button" class="try" data-scene="${id}">${id.startsWith("upload-") ? `Your room · ${id.slice(7, 13)}` : `Try it · ${id.replace("living_room_", "")} room`}</button>`).join("");
 }
+
+// Uploaded images are normalized locally before the user explicitly starts the paid Meta conversion.
+let uploadImage = null, uploadOptions = null, uploadBusy = false, fileToken = 0;
+function uploadReady() { $("upload-convert").disabled = uploadBusy || !uploadImage || !uploadOptions; }
+$("upload-open").addEventListener("click", async () => {
+  $("upload-room").showModal();
+  if (uploadOptions) return;
+  try {
+    const response = await fetch("/api/upload-options");
+    if (!response.ok) throw new Error("Start scripts/rehearsal_server.py to enable room conversion.");
+    uploadOptions = await response.json();
+    $("upload-cost").textContent = `${uploadOptions.sam_calls} SAM calls + ${uploadOptions.spark_calls} Spark call. Planning estimate: $${uploadOptions.estimated_usd.toFixed(3)} per conversion; actual cost may vary. Cached calls are reused. Conversion can take several minutes.`;
+  } catch (error) { $("upload-status").textContent = error.message; }
+  uploadReady();
+});
+$("upload-close").addEventListener("click", () => $("upload-room").close());
+$("upload-room").addEventListener("cancel", (event) => { if (uploadBusy) event.preventDefault(); });
+$("upload-file").addEventListener("change", async () => {
+  const token = ++fileToken;
+  uploadImage = null; uploadReady();
+  $("upload-preview").hidden = true; $("upload-status").textContent = "";
+  const file = $("upload-file").files[0];
+  if (!file) return;
+  try {
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 12 * 1024 * 1024)
+      throw new Error("Choose a PNG, JPEG or WebP image no larger than 12 MB.");
+    const bitmap = await createImageBitmap(file);
+    if (bitmap.width < 64 || bitmap.height < 64 || bitmap.width * bitmap.height > 40_000_000) {
+      bitmap.close(); throw new Error("Choose an image at least 64 pixels per side, at most 40 megapixels.");
+    }
+    const scale = Math.min(1, 1920 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
+    const dataURL = canvas.toDataURL("image/png");
+    if (token !== fileToken) return;
+    if (dataURL.length > 8 * 1024 * 1024) throw new Error("This image is too detailed. Choose a smaller image.");
+    uploadImage = dataURL.split(",")[1];
+    $("upload-preview").src = dataURL; $("upload-preview").hidden = false;
+  } catch (error) { if (token === fileToken) $("upload-status").textContent = error.message; }
+  uploadReady();
+});
+$("upload-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (uploadBusy || !uploadImage || !uploadOptions) return;
+  uploadBusy = true; uploadReady();
+  $("upload-room").querySelectorAll("input").forEach((element) => { element.disabled = true; });
+  $("upload-close").disabled = true;
+  $("upload-status").textContent = "SAM is finding furniture and Muse Spark is estimating your 3D room. Keep this page open…";
+  try {
+    const response = await fetch("/api/convert-room", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_base64: uploadImage, confirm_meta: true,
+        reference: { height_m: Number($("upload-height").value), width_m: Number($("upload-width").value) } }) });
+    const result = await response.json();
+    if (!response.ok || result.error) throw new Error(result.error || "Room conversion failed. Please try again.");
+    scenes = [...new Set([...scenes, result.id])]; renderTabs();
+    $("upload-status").textContent = "Room converted. Opening 3D…";
+    await loadPlan(result.id);
+    $("upload-room").close();
+    $("upload-status").textContent = "";
+  } catch (error) { $("upload-status").textContent = error.message; }
+  finally {
+    uploadBusy = false;
+    $("upload-room").querySelectorAll("input").forEach((element) => { element.disabled = false; });
+    $("upload-close").disabled = false; uploadReady();
+  }
+});
 renderTabs();
 // The Try it tabs need the local rehearsal server (scripts/rehearsal_server.py); a plain static server has no /api.
 fetch("/api/scenes").then((r) => (r.ok ? r.json() : [])).then((list) => {

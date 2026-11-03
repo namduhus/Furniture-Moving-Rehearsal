@@ -45,6 +45,18 @@
     #phase { min-width: 170px; color: var(--ink); }
     #status { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); color: var(--muted); }
     .tabs .try { border-style: dashed; }
+    #upload-open, #upload-room button { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+    #upload-room { width: min(540px, 92vw); border: 1px solid var(--line); border-radius: 12px; padding: 22px; color: var(--ink); }
+    #upload-room::backdrop { background: rgba(15, 17, 20, .55); }
+    #upload-room h2 { margin-top: 0; }
+    #upload-room label { display: block; margin: 12px 0; }
+    #upload-room input[type="number"] { width: 90px; font: inherit; padding: 5px; }
+    #upload-room input[type="file"] { max-width: 100%; }
+    #upload-preview { display: block; max-width: 100%; max-height: 210px; margin: 12px auto; border-radius: 6px; }
+    #upload-room .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    #upload-room #upload-convert { color: #fff; background: var(--accent); }
+    #upload-room button:disabled { opacity: .45; cursor: default; }
+    #upload-status { white-space: pre-wrap; }
     #plan-panel label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin: 3px 0; }
     #plan-panel input { font: inherit; width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; }
     #plan-panel label.check { display: flex; gap: 6px; } #plan-panel label.check input { width: auto; }
@@ -73,7 +85,24 @@
   <header class="panel">
     <h1>Furniture-Moving Rehearsal</h1>
     <div class="tabs" id="tabs"></div>
+    <button id="upload-open" type="button">Upload room image</button>
   </header>
+  <dialog id="upload-room" aria-labelledby="upload-title">
+    <form id="upload-form">
+      <h2 id="upload-title">Turn a room image into 3D</h2>
+      <p>Choose a room image with a visible door. SAM 3.1 finds furniture; Muse Spark estimates the room and furniture layout.</p>
+      <label>Room image <input id="upload-file" type="file" accept="image/png,image/jpeg,image/webp" required></label>
+      <img id="upload-preview" alt="Selected room image" hidden>
+      <p>Use the door as a scale reference. Enter its known dimensions:</p>
+      <label>Door height (m) <input id="upload-height" type="number" min="1.5" max="3" step="0.01" value="2.0" required></label>
+      <label>Door width (m) <input id="upload-width" type="number" min="0.5" max="1.8" step="0.01" value="0.8" required></label>
+      <p class="hint">The result uses simple 3D shapes and estimated dimensions and mass. Check and correct them before moving furniture.</p>
+      <p id="upload-cost" class="hint">Checking conversion options…</p>
+      <p class="hint">Convert sends this image to Meta. Use an image you may share, without people or personal information. The local copy and generated scene stay out of Git.</p>
+      <p id="upload-status" role="status" aria-live="polite"></p>
+      <div class="actions"><button id="upload-close" type="button">Cancel</button><button id="upload-convert" type="submit" disabled>Convert with Meta</button></div>
+    </form>
+  </dialog>
   <aside class="panel">
     <div id="plan-panel" hidden>
       <h2>Your move</h2>
