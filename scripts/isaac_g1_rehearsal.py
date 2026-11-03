@@ -74,7 +74,7 @@ def load_config(path):
         if trainings[task][0]["task"] != task:
             raise ValueError(f"{task}_training must be a {task} configuration")
         if config[f"{task}_checkpoint"] is not None:
-            repo_path(config[f"{task}_checkpoint"], "outputs/isaac/", ".pt")
+            repo_path(config[f"{task}_checkpoint"], ("models/", "outputs/isaac/"), ".pt")
     a, c = trainings["approach"][0], trainings["carry"][0]
     if (a["object"] != c["object"] or a["push_profile"] != c["push_profile"] or a["arm_lift_m"] != c["arm_lift_m"] or
             a["decision_control_steps"] != c["decision_control_steps"]):
@@ -87,7 +87,7 @@ def load_config(path):
         raise ValueError("Invalid push settings")
     trainings["push"] = ppo.load_config(repo_path(push["training"], "configs/", ".json"))
     if push["checkpoint"] is not None:
-        repo_path(push["checkpoint"], "outputs/isaac/", ".pt")
+        repo_path(push["checkpoint"], ("models/", "outputs/isaac/"), ".pt")
     if trainings["push"][0]["push_profile"] != a["push_profile"]:
         raise ValueError("The push policy must share the room tasks' profile")
     repo_path(config["request"], "configs/", ".json")

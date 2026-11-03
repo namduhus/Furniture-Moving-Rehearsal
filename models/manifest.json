@@ -1,0 +1,64 @@
+{
+  "format": "RSL-RL 5.5.1 OnPolicyRunner checkpoint (actor, critic, observation normalizers and optimizer state)",
+  "total_checkpoint_bytes": 1553943,
+  "upstream_controller": "Frozen GR00T-WBC Walk/Balance; separately downloaded by the existing runners.",
+  "controller_contract": "configs/g1_wbc_reference.json",
+  "controller_contract_sha256": "b9b07b9e75213341efa66dd1ebe2ff686b8d09005c2f1afb93b8c6081508e3ca",
+  "policies": {
+    "approach": {
+      "file": "models/approach.pt",
+      "bytes": 530931,
+      "sha256": "70ea896cb5c93f7063a4c1855fedd45e38410409abe8882ee34e1b105513a07f",
+      "training_run": "20261101T085012.623231Z-room-approach",
+      "source_checkpoint": "model_299.pt",
+      "training_config": "configs/isaac_g1_room_approach.json",
+      "training_config_sha256": "d378f897b17b296bf8e13ba8ebba2193387c05a6abaa0d8299909f0ad929e61b",
+      "source_training_config_sha256": "3e9cb2fb604835bc775e86bd2acc4e4fbd8a03c771bdd983425f9180cfae93bb",
+      "training_seed": 0,
+      "training_iterations": 300,
+      "config_compatibility_note": "The source approach config predates the explicit init_checkpoint field. The current config adds init_checkpoint: null (training from scratch); all other fields match."
+    },
+    "carry": {
+      "file": "models/carry.pt",
+      "bytes": 530931,
+      "sha256": "dacf3db7aae343fe457b4d2443a81ba1ed3653da15e6523c499cd90dd0a2c702",
+      "training_run": "20261101T113949.346965Z-room-carry",
+      "source_checkpoint": "model_299.pt",
+      "training_config": "configs/isaac_g1_room_carry_strong.json",
+      "training_config_sha256": "5d4c3e6373a7ac1b3050faedccbcac5a9194809751b4c1f0879747e3eae11945",
+      "source_training_config_sha256": "ada802b075228f251305950d37a76ee8fda8e069180ed8b16641e58bc4f01f08",
+      "training_seed": 0,
+      "training_iterations": 300
+    },
+    "push": {
+      "file": "models/push.pt",
+      "bytes": 492081,
+      "sha256": "c8e540d6c97a735253e4691b571a1a97d533b4787ff0ecb4f6e40a518b05b02b",
+      "training_run": "20261030T173207.162496Z-ppo",
+      "source_checkpoint": "model_99.pt",
+      "training_config": "configs/isaac_g1_ppo_push.json",
+      "training_config_sha256": "0a21a2c9db21ff03005cce9982dedf8a0e98bbc7f822e7c17b5a370212c4d39e",
+      "source_training_config_sha256": "d51a9b290e338942d6b7628c561638704f771500ae94d1b35c11bd3b08755111",
+      "training_seed": 0,
+      "training_iterations": 100
+    }
+  },
+  "runtime": {
+    "isaaclab_release": "v3.0.0",
+    "isaaclab_commit": "e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4",
+    "versions": {
+      "isaaclab": "28.0.0",
+      "isaacsim": "6.2.0.0",
+      "torch": "2.11.0",
+      "torchvision": "0.26.0",
+      "rsl-rl-lib": "5.5.1",
+      "warp-lang": "1.17.0"
+    },
+    "torch_cuda": "13.0",
+    "physics": "isaacsim_physx"
+  },
+  "evaluation": {
+    "file": "models/evaluation.json",
+    "sha256": "be56e2350adf45fb55536645a232efd25f912d2e3e2f0d4a959c8ac8c7cc2fe7"
+  }
+}

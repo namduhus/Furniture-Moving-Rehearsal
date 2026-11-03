@@ -1,0 +1,6345 @@
+{
+  "scope": "Per-skill before/after training evaluation, not end-to-end furniture-moving success or held-out-room generalization. Both controllers use the same evaluation seed on the training run's sampled environment set.",
+  "source": "Selected fields extracted from saved worker JSON; per-episode outcomes and times retained for recomputation.",
+  "policies": {
+    "approach": {
+      "training_run": "20261101T085012.623231Z-room-approach",
+      "source_worker_file": "room-worker.json",
+      "source_worker_sha256": "c9e7536a7096ff65e6abb8716f3d588e66c1c055c76f08e2d10d8bbdac65be4e",
+      "environment_seed": 0,
+      "environment_count": 256,
+      "episode_limit_seconds": 30.0,
+      "success_conditions": {
+        "min_distance_m": 1.0,
+        "max_distance_m": 3.5,
+        "position_tolerance_m": 0.06,
+        "yaw_tolerance_deg": 8.0,
+        "stop_speed_mps": 0.05,
+        "object_inflation_m": 0.1,
+        "object_margin_m": 0.05,
+        "staging_m": 0.4
+      },
+      "termination": {
+        "robot_link_radius_m": 0.08,
+        "wall_contact_m": 0.01,
+        "object_tilt_rad": 0.3,
+        "object_floor_clearance_m": 0.01,
+        "object_push_m": 0.03
+      },
+      "scripted_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 213,
+        "success_rate": 0.83203125,
+        "outcome_counts": {
+          "object_pushed": 36,
+          "success": 213,
+          "time_out": 3,
+          "wall_contact": 4
+        },
+        "median_success_seconds": 17.3,
+        "per_episode": [
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 12.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.8
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 23.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 3.8000000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 19.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 21.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 20.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 24.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.900000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.700000000000003
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.6
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 10.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 30.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.900000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 30.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 29.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 30.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.3
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 15.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.5
+          }
+        ],
+        "final_error_at_success": {
+          "position_m_median": 0.03274082396290189,
+          "yaw_deg_median": 4.696236680223065
+        }
+      },
+      "learned_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 221,
+        "success_rate": 0.86328125,
+        "outcome_counts": {
+          "object_pushed": 25,
+          "success": 221,
+          "time_out": 2,
+          "wall_contact": 8
+        },
+        "median_success_seconds": 14.5,
+        "per_episode": [
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 3.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.7
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 6.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 9.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 30.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 6.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.200000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 4.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 30.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.5
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 4.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 17.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "object_pushed",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          }
+        ],
+        "final_error_at_success": {
+          "position_m_median": 0.029207182061438,
+          "yaw_deg_median": 3.1485467188483236
+        }
+      },
+      "mass_kg": [
+        2.0,
+        4.0
+      ]
+    },
+    "carry": {
+      "training_run": "20261101T113949.346965Z-room-carry",
+      "source_worker_file": "room-worker.json",
+      "source_worker_sha256": "cf7b6d590942142e22283534f1232f8b92add0a7720e7afd5548927657ae25df",
+      "environment_seed": 0,
+      "environment_count": 256,
+      "episode_limit_seconds": 40.0,
+      "success_conditions": {
+        "min_distance_m": 1.0,
+        "max_distance_m": 3.5,
+        "position_tolerance_m": 0.1,
+        "yaw_tolerance_deg": 10.0,
+        "stop_speed_mps": 0.05,
+        "object_inflation_m": 0.1,
+        "object_margin_m": 0.1,
+        "staging_m": 0.4
+      },
+      "termination": {
+        "robot_link_radius_m": 0.08,
+        "wall_contact_m": 0.01,
+        "object_tilt_rad": 0.3,
+        "object_floor_clearance_m": 0.01,
+        "object_push_m": 0.03
+      },
+      "scripted_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 109,
+        "success_rate": 0.42578125,
+        "outcome_counts": {
+          "success": 109,
+          "time_out": 50,
+          "wall_contact": 97
+        },
+        "median_success_seconds": 16.400000000000002,
+        "per_episode": [
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 17.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 3.9000000000000004
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.700000000000003
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.800000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 20.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 24.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 25.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.7
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 33.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 23.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 34.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 22.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 20.6
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 12.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 28.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 9.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 37.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.600000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 15.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 30.1
+          }
+        ],
+        "final_error_at_success": {
+          "position_m_median": 0.07745261905292031,
+          "yaw_deg_median": 4.128988400050819
+        }
+      },
+      "learned_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 202,
+        "success_rate": 0.7890625,
+        "outcome_counts": {
+          "success": 202,
+          "time_out": 7,
+          "wall_contact": 47
+        },
+        "median_success_seconds": 18.65,
+        "per_episode": [
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.100000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 34.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 30.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 38.800000000000004
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 35.800000000000004
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 39.400000000000006
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 20.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 26.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 30.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 30.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.200000000000003
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.200000000000003
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 29.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.200000000000003
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 34.300000000000004
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 31.1
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 38.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 29.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 29.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 38.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 31.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.7
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 12.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.900000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 29.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.0
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 25.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 25.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 33.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 28.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.700000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.6
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 10.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 21.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 8.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.900000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 37.800000000000004
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 40.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.400000000000002
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 14.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 33.5
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 26.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 37.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 24.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 27.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 22.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 23.3
+          },
+          {
+            "outcome": "wall_contact",
+            "seconds": 5.9
+          }
+        ],
+        "final_error_at_success": {
+          "position_m_median": 0.06471985231759736,
+          "yaw_deg_median": 3.8241320616902903
+        }
+      },
+      "mass_kg": [
+        2.0,
+        4.0
+      ]
+    },
+    "push": {
+      "training_run": "20261030T173207.162496Z-ppo",
+      "source_worker_file": "ppo-worker.json",
+      "source_worker_sha256": "b24dcec52af38cf3cbb710d1a4517274e570c028a2b8f2bd20cfe75aca595164",
+      "environment_seed": 0,
+      "environment_count": 256,
+      "episode_limit_seconds": 20.0,
+      "success_conditions": {
+        "progress_m_at_least": 1.0
+      },
+      "termination": {
+        "box_lateral_m": 0.3,
+        "box_yaw_rad": 0.35,
+        "box_tilt_rad": 0.1745,
+        "robot_box_distance_m": 1.5
+      },
+      "scripted_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 70,
+        "success_rate": 0.2734375,
+        "outcome_counts": {
+          "off_course": 36,
+          "success": 70,
+          "time_out": 150
+        },
+        "median_success_seconds": 11.650000000000002,
+        "per_episode": [
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.700000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.3
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.600000000000001
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.900000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 16.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.6
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.1
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.9
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 16.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 16.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 16.400000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.400000000000002
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.5
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.6
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 17.900000000000002
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.200000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 18.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.600000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "off_course",
+            "seconds": 19.6
+          }
+        ]
+      },
+      "learned_eval": {
+        "episodes": 256,
+        "seed": 1,
+        "successes": 225,
+        "success_rate": 0.87890625,
+        "outcome_counts": {
+          "lost_box": 13,
+          "success": 225,
+          "time_out": 18
+        },
+        "median_success_seconds": 6.5,
+        "per_episode": [
+          {
+            "outcome": "success",
+            "seconds": 16.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.300000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 17.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 15.4
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.4
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.200000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 14.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.300000000000001
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.100000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.4
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 18.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 19.0
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.800000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.5
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.1000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.1
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.7
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 11.4
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 12.600000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.2
+          },
+          {
+            "outcome": "success",
+            "seconds": 10.200000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.1000000000000005
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.700000000000003
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.6
+          },
+          {
+            "outcome": "success",
+            "seconds": 8.8
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 13.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.6000000000000005
+          },
+          {
+            "outcome": "success",
+            "seconds": 4.3
+          },
+          {
+            "outcome": "success",
+            "seconds": 9.700000000000001
+          },
+          {
+            "outcome": "success",
+            "seconds": 5.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 7.5
+          },
+          {
+            "outcome": "lost_box",
+            "seconds": 19.3
+          },
+          {
+            "outcome": "time_out",
+            "seconds": 20.0
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.9
+          },
+          {
+            "outcome": "success",
+            "seconds": 6.0
+          }
+        ]
+      },
+      "randomization": {
+        "mass_kg": [
+          5.0,
+          20.0
+        ],
+        "friction": [
+          0.05,
+          0.15
+        ],
+        "gap_m": [
+          0.06,
+          0.12
+        ],
+        "yaw_rad": [
+          -0.087,
+          0.087
+        ]
+      }
+    }
+  }
+}

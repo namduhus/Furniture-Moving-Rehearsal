@@ -31,12 +31,19 @@ wandb/
 data/
 web/vendor/g1/meshes/
 configs/requests/
-models/
+/models/*
 *.pt
 *.pth
 *.ckpt
 *.safetensors
 *.onnx
+
+# Selected project-trained policies and their reproducibility records
+!/models/approach.pt
+!/models/carry.pt
+!/models/push.pt
+!/models/manifest.json
+!/models/evaluation.json
 
 # Local editor and operating-system files
 .DS_Store
