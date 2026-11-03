@@ -147,7 +147,7 @@ class ControllerAdapterTests(unittest.TestCase):
         for case, file, role in (("stand", "isaac_g1_deployment.json", "balance"),
                                  ("forward", "isaac_g1_deployment_forward.json", "walk"),
                                  ("turn", "isaac_g1_deployment_turn.json", "walk")):
-            profile, asset, _ = runner.load_plan(ROOT / "configs" / file)
+            profile, asset, _ = runner.load_plan(ROOT / "tests/fixtures/configs" / file)
             self.assertEqual(profile["initialization"]["minimum_clearance_m"], 0.0)
             contract, robot = runner.trial_contract(profile)
             self.assertEqual(contract["policy_role"], role)
@@ -163,12 +163,12 @@ class ControllerAdapterTests(unittest.TestCase):
             for name in before: np.testing.assert_allclose(before[name], after[name], atol=1e-12, rtol=0)
             with mock.patch.object(wbc,"prepare_model",side_effect=AssertionError("model access")), \
                     mock.patch.object(runner,"run_stage",side_effect=AssertionError("GPU launch")), mock.patch("builtins.print"):
-                self.assertEqual(runner.main(["--profile",str(ROOT/"configs"/file),"--stage","balance","--dry-run"]),0)
+                self.assertEqual(runner.main(["--profile",str(ROOT / "tests/fixtures/configs" / file),"--stage","balance","--dry-run"]),0)
         self.assertEqual(self.contract, original)
         self.assertEqual(len(self.robot.limits), 43)
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/"invalid.json"
-            raw=json.loads((ROOT/"configs/isaac_g1_deployment.json").read_text())
+            raw=json.loads((ROOT/"tests/fixtures/configs/isaac_g1_deployment.json").read_text())
             for changes in ({"command":[1,0,0]}, {"functional_case":"turn"}, {"control_steps":4},
                             {"initialization":{**raw["initialization"],"minimum_clearance_m":0.001}}):
                 path.write_text(json.dumps({**raw,**changes}))
@@ -244,9 +244,9 @@ class ControllerAdapterTests(unittest.TestCase):
 
     def test_movement_prerequisite_and_clean_exit_cannot_hide_functional_failure(self):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
-            runner.main(["--profile",str(ROOT/"configs/isaac_g1_deployment_forward.json"),"--stage","balance"])
+            runner.main(["--profile",str(ROOT/"tests/fixtures/configs/isaac_g1_deployment_forward.json"),"--stage","balance"])
         self.assertEqual(exit_error.exception.code,2)
-        profile,asset,runtime=runner.load_plan(ROOT/"configs/isaac_g1_deployment.json")
+        profile,asset,runtime=runner.load_plan(ROOT/"tests/fixtures/configs/isaac_g1_deployment.json")
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(runner,"check_versions",return_value={}), \
                 mock.patch.object(wbc,"prepare_model",return_value=Path("unused.onnx")), \
                 mock.patch.object(runner,"balance_check",side_effect=SystemExit(0)), \
@@ -319,25 +319,25 @@ class ControllerAdapterTests(unittest.TestCase):
         for base, file in (("isaac_g1_deployment.json", "isaac_g1_contact.json"),
                            ("isaac_g1_deployment_forward.json", "isaac_g1_contact_forward.json"),
                            ("isaac_g1_deployment_turn.json", "isaac_g1_contact_turn.json")):
-            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
-            after, contact_asset, contact_runtime = runner.load_plan(ROOT / "configs" / file)
+            before, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / base)
+            after, contact_asset, contact_runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / file)
             self.assertEqual((asset, runtime), (contact_asset, contact_runtime))
             self.assertEqual({k: v for k, v in before.items() if k != "scope"},
                              {k: v for k, v in after.items() if k not in ("scope", "contact_override")})
             self.assertEqual(runner.trial_contract(before)[0], runner.trial_contract(after)[0])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
-            raw = json.loads((ROOT / "configs/isaac_g1_contact.json").read_text())
-            palm = json.loads((ROOT / "configs/isaac_g1_palm.json").read_text())
+            raw = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_contact.json").read_text())
+            palm = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_palm.json").read_text())
             for data in ({**raw, "contact_override": {"source": "guessed.json"}},
                          {**raw, "contact_override": {**raw["contact_override"], "friction": 2.0}},
                          {**palm, "contact_override": raw["contact_override"]}):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
             stand = Path(tmp) / "stand"; stand.mkdir()
-            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_deployment.json").read_text())
+            (stand / "profile.json").write_text((ROOT / "tests/fixtures/configs/isaac_g1_deployment.json").read_text())
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
-                runner.main(["--profile", str(ROOT / "configs/isaac_g1_contact_forward.json"), "--stage", "balance",
+                runner.main(["--profile", str(ROOT / "tests/fixtures/configs/isaac_g1_contact_forward.json"), "--stage", "balance",
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
@@ -345,8 +345,8 @@ class ControllerAdapterTests(unittest.TestCase):
         for base, file in (("isaac_g1_contact.json", "isaac_g1_arm_hold.json"),
                            ("isaac_g1_contact_forward.json", "isaac_g1_arm_hold_forward.json"),
                            ("isaac_g1_contact_turn.json", "isaac_g1_arm_hold_turn.json")):
-            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
-            after, arm_asset, arm_runtime = runner.load_plan(ROOT / "configs" / file)
+            before, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / base)
+            after, arm_asset, arm_runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / file)
             self.assertEqual((asset, runtime), (arm_asset, arm_runtime))
             self.assertEqual({k: v for k, v in before.items() if k != "scope"},
                              {k: v for k, v in after.items() if k not in ("scope", "arm_hold")})
@@ -356,25 +356,25 @@ class ControllerAdapterTests(unittest.TestCase):
             self.assertIn("implicit", implicit["actuation_origin"])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
-            raw = json.loads((ROOT / "configs/isaac_g1_arm_hold.json").read_text())
-            deployment = json.loads((ROOT / "configs/isaac_g1_deployment.json").read_text())
+            raw = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_arm_hold.json").read_text())
+            deployment = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_deployment.json").read_text())
             for data in ({**raw, "arm_hold": "explicit"}, {**raw, "arm_hold": {"kp": 40}}, {**deployment, "arm_hold": "implicit"}):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
             stand = Path(tmp) / "stand"; stand.mkdir()
-            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_contact.json").read_text())
+            (stand / "profile.json").write_text((ROOT / "tests/fixtures/configs/isaac_g1_contact.json").read_text())
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
-                runner.main(["--profile", str(ROOT / "configs/isaac_g1_arm_hold_forward.json"), "--stage", "balance",
+                runner.main(["--profile", str(ROOT / "tests/fixtures/configs/isaac_g1_arm_hold_forward.json"), "--stage", "balance",
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
     def test_crouch_start_profiles_change_only_the_startup_placement(self):
-        placement = json.loads((ROOT / "configs/isaac_g1_placement.json").read_text())["initialization"]
+        placement = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_placement.json").read_text())["initialization"]
         for base, file in (("isaac_g1_arm_hold.json", "isaac_g1_crouch_start.json"),
                            ("isaac_g1_arm_hold_forward.json", "isaac_g1_crouch_start_forward.json"),
                            ("isaac_g1_arm_hold_turn.json", "isaac_g1_crouch_start_turn.json")):
-            before, asset, runtime = runner.load_plan(ROOT / "configs" / base)
-            after, crouch_asset, crouch_runtime = runner.load_plan(ROOT / "configs" / file)
+            before, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / base)
+            after, crouch_asset, crouch_runtime = runner.load_plan(ROOT / "tests/fixtures/configs" / file)
             self.assertEqual((asset, runtime), (crouch_asset, crouch_runtime))
             self.assertEqual(after["initialization"], placement)
             self.assertEqual({k: v for k, v in before.items() if k not in ("scope", "initialization")},
@@ -382,22 +382,22 @@ class ControllerAdapterTests(unittest.TestCase):
             self.assertEqual(runner.trial_contract(before)[0], runner.trial_contract(after)[0])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
-            raw = json.loads((ROOT / "configs/isaac_g1_crouch_start.json").read_text())
-            contact = json.loads((ROOT / "configs/isaac_g1_contact.json").read_text())
+            raw = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_crouch_start.json").read_text())
+            contact = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_contact.json").read_text())
             for data in ({**contact, "initialization": raw["initialization"]},
                          {**raw, "initialization": {**raw["initialization"], "minimum_clearance_m": 0}},
                          {**raw, "initialization": {**raw["initialization"], "maximum_vertical_shift_m": 0.2}}):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError): runner.load_plan(path)
             stand = Path(tmp) / "stand"; stand.mkdir()
-            (stand / "profile.json").write_text((ROOT / "configs/isaac_g1_arm_hold.json").read_text())
+            (stand / "profile.json").write_text((ROOT / "tests/fixtures/configs/isaac_g1_arm_hold.json").read_text())
             with mock.patch("sys.stderr"), self.assertRaises(SystemExit) as exit_error:
-                runner.main(["--profile", str(ROOT / "configs/isaac_g1_crouch_start_forward.json"), "--stage", "balance",
+                runner.main(["--profile", str(ROOT / "tests/fixtures/configs/isaac_g1_crouch_start_forward.json"), "--stage", "balance",
                              "--stand-run", str(stand)])
             self.assertEqual(exit_error.exception.code, 2)
 
     def test_push_profile_object_checks_and_gate(self):
-        base, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_crouch_start_forward.json")
+        base, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_crouch_start_forward.json")
         push, push_asset, push_runtime = runner.load_plan(ROOT / "configs/isaac_g1_push.json")
         self.assertEqual((asset, runtime), (push_asset, push_runtime))
         self.assertEqual({k: v for k, v in base.items() if k not in ("scope", "functional_case")},
@@ -408,7 +408,7 @@ class ControllerAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "profile.json"
             raw = json.loads((ROOT / "configs/isaac_g1_push.json").read_text())
-            forward = json.loads((ROOT / "configs/isaac_g1_crouch_start_forward.json").read_text())
+            forward = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_crouch_start_forward.json").read_text())
             for data in ({**raw, "push_object": {**raw["push_object"], "mass_kg": 500}},
                          {**raw, "push_object": {**raw["push_object"], "size_m": [0.7, 0.8]}},
                          {**raw, "push_object": {**raw["push_object"], "friction": 0}},
@@ -773,7 +773,7 @@ class ControllerAdapterTests(unittest.TestCase):
                 mock.patch.object(runner, "run_stage", side_effect=AssertionError("worker called")), \
                 mock.patch("builtins.print"):
             self.assertEqual(runner.main(["--stage", "balance", "--prepare-model", "--dry-run"]), 0)
-            self.assertEqual(runner.main(["--stage","dynamics","--profile",str(ROOT/"configs/isaac_g1_placement.json"),"--dry-run"]),0)
+            self.assertEqual(runner.main(["--stage","dynamics","--profile",str(ROOT/"tests/fixtures/configs/isaac_g1_placement.json"),"--dry-run"]),0)
 
     def test_dynamics_comparison_maps_bodies_and_preserves_inertia_eigenvalues(self):
         source = wbc.load_dynamics_reference()
@@ -860,7 +860,7 @@ class ControllerAdapterTests(unittest.TestCase):
 
     def test_diagnostic_profile_preserves_the_working_control_configuration(self):
         baseline, asset, runtime = runner.load_plan(runner.DEFAULT_PROFILE)
-        profile, diagnostic_asset, diagnostic_runtime = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
+        profile, diagnostic_asset, diagnostic_runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_diagnostics.json")
         self.assertEqual(asset, diagnostic_asset)
         self.assertEqual(runtime, diagnostic_runtime)
         self.assertEqual({k:v for k,v in profile.items() if k not in ("base_profile", "diagnostics", "scope")},
@@ -903,15 +903,15 @@ class ControllerAdapterTests(unittest.TestCase):
         self.assertFalse(wbc.contact_summary([], feet, 1.0, 0.005, 4)["force_evidence_present"])
 
     def test_initial_placement_profile_preserves_control_and_rejects_unsafe_configuration(self):
-        diagnostic, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
-        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
+        diagnostic, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_diagnostics.json")
+        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_placement.json")
         self.assertEqual(asset, trial_asset)
         self.assertEqual(runtime, trial_runtime)
         self.assertEqual({k:v for k,v in diagnostic.items() if k != "scope"},
                          {k:v for k,v in trial.items() if k not in ("scope", "initialization")})
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "profile.json"
-            raw = json.loads((ROOT / "configs/isaac_g1_placement.json").read_text())
+            raw = json.loads((ROOT / "tests/fixtures/configs/isaac_g1_placement.json").read_text())
             for key,value in (("mode", "fixed_height"), ("minimum_clearance_m", 0),
                               ("minimum_clearance_m", float("nan")), ("maximum_vertical_shift_m", 0.11),
                               ("maximum_vertical_shift_m", True), ("unknown", 1)):
@@ -926,8 +926,8 @@ class ControllerAdapterTests(unittest.TestCase):
                 runner.load_plan(path)
 
     def test_palm_profile_preserves_placement_and_rejects_other_interventions(self):
-        base, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
-        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "configs/isaac_g1_palm.json")
+        base, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_placement.json")
+        trial, trial_asset, trial_runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_palm.json")
         self.assertEqual((asset, runtime), (trial_asset, trial_runtime))
         self.assertEqual({k: v for k, v in base.items() if k != "scope"},
                          {k: v for k, v in trial.items() if k not in ("scope", "inertial_override")})
@@ -940,7 +940,7 @@ class ControllerAdapterTests(unittest.TestCase):
                 with self.subTest(override=override), self.assertRaises(ValueError): runner.load_plan(path)
         with mock.patch.object(wbc, "prepare_model", side_effect=AssertionError("model access")), \
                 mock.patch.object(runner, "run_stage", side_effect=AssertionError("GPU launch")), mock.patch("builtins.print"):
-            self.assertEqual(runner.main(["--profile", str(ROOT / "configs/isaac_g1_palm.json"), "--stage", "dynamics", "--dry-run"]), 0)
+            self.assertEqual(runner.main(["--profile", str(ROOT / "tests/fixtures/configs/isaac_g1_palm.json"), "--stage", "dynamics", "--dry-run"]), 0)
 
     def test_palm_tensor_preserves_mirrored_offdiagonals_and_proper_axes(self):
         reference = wbc.palm_inertial_reference(self.contract)
@@ -1489,7 +1489,7 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertEqual(len(snapshot["observation"]), 516)
             self.assertEqual(Simulation.steps, steps_before)
             Policy.output = np.zeros(15)
-            diagnostic_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_diagnostics.json")
+            diagnostic_profile, _, _ = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_diagnostics.json")
             diagnostic_profile.update(control_steps=4, camera=profile["camera"])
             diagnostic = directory / "diagnostic"
             diagnostic.mkdir()
@@ -1506,7 +1506,7 @@ class ControllerLaunchTests(unittest.TestCase):
             self.assertTrue(instantiated[-1].robot.spawn.activate_contact_sensors)
             self.assertTrue(instantiated[-1].feet_contact.track_friction_forces)
             self.assertEqual(instantiated[-1].feet_contact.history_length, 1)
-            placement_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_placement.json")
+            placement_profile, _, _ = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_placement.json")
             placement_profile.update(control_steps=4, camera=profile["camera"])
             placed = directory / "placed"
             placed.mkdir()
@@ -1638,7 +1638,7 @@ class ControllerLaunchTests(unittest.TestCase):
 
 
             # Reuse the same runner doubles for the coherent 29-DOF branch.
-            deployment_profile, asset, runtime = runner.load_plan(ROOT / "configs/isaac_g1_deployment.json")
+            deployment_profile, asset, runtime = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_deployment.json")
             deployment_profile = {**deployment_profile, "camera": {"width":64,"height":64,"capture_every_control_steps":2}}
             contract, reference = runner.trial_contract(deployment_profile)
             names[:] = [n for n in names if n in reference.limits]
@@ -1683,7 +1683,7 @@ class ControllerLaunchTests(unittest.TestCase):
                 runner.validate_stage("balance",deployment_dir,deployment_profile)
 
             # Source contact reuses the same doubles; verification must finish before control.
-            contact_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_contact.json")
+            contact_profile, _, _ = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_contact.json")
             contact_profile = {**contact_profile, "camera": deployment_profile["camera"]}
             authored, _, _ = contact_fixture()
             del authored["materials"]
@@ -1702,10 +1702,10 @@ class ControllerLaunchTests(unittest.TestCase):
             def record_simulation(self, config):
                 created.append(config); initialize(self, config)
             # The implicit arm hold changes only the arm actuator model and its PhysX drive gains.
-            arm_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_arm_hold.json")
+            arm_profile, _, _ = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_arm_hold.json")
             arm_profile = {**arm_profile, "camera": deployment_profile["camera"]}
             arm_contract, _ = runner.trial_contract(arm_profile)
-            crouch_profile, _, _ = runner.load_plan(ROOT / "configs/isaac_g1_crouch_start.json")
+            crouch_profile, _, _ = runner.load_plan(ROOT / "tests/fixtures/configs/isaac_g1_crouch_start.json")
             crouch_profile = {**crouch_profile, "camera": deployment_profile["camera"]}
             def read_arm_dynamics(robot,rotation,usd_path,*,directory=None,filename="dynamics-runtime.json"):
                 snapshot = dynamics_fixture(arm_contract,reference,asset,body_names=robot.body_names,joint_names=names,

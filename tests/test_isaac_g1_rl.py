@@ -66,7 +66,7 @@ class BatchAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rl.json"
             for data in ({**raw, "num_envs": 0}, {**raw, "env_spacing_m": 1.0}, {**raw, "extra": 1},
-                         {**raw, "push_profile": "configs/isaac_g1_crouch_start_forward.json"}):
+                         {**raw, "push_profile": "tests/fixtures/configs/isaac_g1_crouch_start_forward.json"}):
                 path.write_text(json.dumps(data))
                 with self.subTest(data=data), self.assertRaises(ValueError):
                     rl.load_config(path)

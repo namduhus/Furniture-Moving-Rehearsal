@@ -1,0 +1,31 @@
+{
+  "base_profile": "configs/isaac_g1_balance.json",
+  "diagnostics": {
+    "foot_body_names": [
+      "left_ankle_roll_link",
+      "right_ankle_roll_link"
+    ],
+    "minimum_normal_force_n": 1.0
+  },
+  "initialization": {
+    "mode": "collision_clearance",
+    "minimum_clearance_m": 0.001,
+    "maximum_vertical_shift_m": 0.1
+  },
+  "inertial_override": {
+    "body": "left_hand_palm_link",
+    "source": "pinned_urdf"
+  },
+  "contact_override": {
+    "source": "assets/references/g1_wbc_contact.json"
+  },
+  "arm_hold": "implicit",
+  "scope": "Implicit arm-hold source-contact deployment starting in the policy's default crouch, lifted to 1 mm foot clearance instead of the source zero-angle pose; all controller, contact and inertial settings are unchanged.",
+  "deployment": "assets/references/g1_wbc_deployment.json",
+  "command": [
+    0,
+    0,
+    0.2
+  ],
+  "functional_case": "turn"
+}

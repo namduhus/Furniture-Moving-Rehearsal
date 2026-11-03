@@ -145,9 +145,11 @@ class RoomTaskTests(unittest.TestCase):
 
         self.assertEqual(shared(carry_raw), shared(raw))
         # The carry A/B variants change only what their scopes name.
-        for name, changed in (("resume", {"init_checkpoint"}), ("strong", {"residual_scale", "reward"})):
-            variant = json.loads((ROOT / f"configs/isaac_g1_room_carry_{name}.json").read_text())
-            room.load_config(ROOT / f"configs/isaac_g1_room_carry_{name}.json")
+        for name, path, changed in (
+                ("resume", ROOT / "tests/fixtures/configs/isaac_g1_room_carry_resume.json", {"init_checkpoint"}),
+                ("strong", CARRY.with_name("isaac_g1_room_carry_strong.json"), {"residual_scale", "reward"})):
+            variant = json.loads(path.read_text())
+            room.load_config(path)
             self.assertEqual({k for k in variant if variant[k] != carry_raw[k]}, changed | {"scope"})
             if name == "strong":
                 self.assertEqual({k for k in variant["reward"] if variant["reward"][k] != carry_raw["reward"][k]}, {"overspeed"})

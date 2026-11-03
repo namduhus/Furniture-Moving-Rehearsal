@@ -138,7 +138,7 @@ class TaskStepTests(unittest.TestCase):
                  {**raw, "reward": {**raw["reward"], "speed_limit_mps": 0.05}},
                  {**raw, "action_bounds": {**raw["action_bounds"], "lean_pitch_rad": [-0.5, 0.3]}},
                  {**raw, "action_bounds": {**raw["action_bounds"], "lean_pitch_rad": [0.1, 0.3]}},
-                 {**raw, "push_profile": "configs/isaac_g1_crouch_start_forward.json"}]
+                 {**raw, "push_profile": "tests/fixtures/configs/isaac_g1_crouch_start_forward.json"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "carry.json"
             for data in cases:

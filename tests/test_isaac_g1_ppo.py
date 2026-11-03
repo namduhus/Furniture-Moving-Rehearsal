@@ -81,7 +81,7 @@ class TaskFunctionTests(unittest.TestCase):
                  {**raw, "action_bounds": {**raw["action_bounds"], "forward_mps": [0.0, 0.4]}},
                  {**raw, "randomization": {**raw["randomization"], "gap_m": [0.02, 0.12]}},
                  {**raw, "scripted_action": {**raw["scripted_action"], "forward_mps": 0.5}},
-                 {**raw, "push_profile": "configs/isaac_g1_crouch_start_forward.json"}]
+                 {**raw, "push_profile": "tests/fixtures/configs/isaac_g1_crouch_start_forward.json"}]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ppo.json"
             for data in cases:
