@@ -14,8 +14,10 @@
     html, body { margin: 0; height: 100%; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: #eef0f2; }
     #view { position: fixed; inset: 0; }
     .panel { position: fixed; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
-    header.panel { top: 12px; left: 12px; display: flex; gap: 12px; align-items: center; }
+    header.panel { top: 12px; left: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 380px); }
     header h1 { font-size: 15px; margin: 0 6px 0 0; }
+    .tabs { order: 3; display: flex; gap: 6px; flex: 1 1 100%; max-width: 100%; overflow-x: auto; padding-bottom: 3px; }
+    .tabs button { flex-shrink: 0; }
     .tabs button { font: inherit; border: 1px solid var(--line); background: #fff; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
     .tabs button.on { border-color: var(--accent); color: var(--accent); }
     aside.panel { top: 12px; right: 12px; width: 340px; max-height: calc(100% - 84px); overflow: auto; font-size: 13px; }
@@ -73,7 +75,7 @@
     #meta-view canvas { display: block; border-radius: 6px; }
     #meta-caption { font-size: 13px; margin: 8px 0; max-width: 86vw; }
     #meta-close { font: inherit; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-    @media (max-width: 900px) { figure.panel { display: none; } aside.panel { width: 260px; } }
+    @media (max-width: 900px) { figure.panel { display: none; } aside.panel { width: 260px; } header.panel { max-width: calc(100vw - 296px); } }
   </style>
   <script type="importmap">
     {"imports": {"three": "./vendor/three/build/three.module.js", "three/addons/": "./vendor/three/examples/jsm/"}}
