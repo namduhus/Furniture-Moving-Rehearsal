@@ -1,5 +1,7 @@
 # Furniture-Moving Rehearsal
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **A simulated humanoid tries the furniture move first.**
 
 For people who cannot move furniture themselves, this project explores three questions: **Can it be moved? How can it be moved? Can the result be explained simply?** A room photo and reference dimension become an editable 3D scene. The user selects furniture and a destination by clicking or speaking, confirms the preview, and a Unitree G1 rehearses the move in Isaac Sim. Muse Spark explains the result in plain English or Korean.
@@ -159,7 +161,9 @@ Hardware/SDK-dependent checks may skip in the local environment. GPU execution a
 | [Rehearsal](scripts/isaac_g1_rehearsal.py), [sequences](scripts/rehearsal_sequence.py), [server](scripts/rehearsal_server.py), [WebGL UI](web/), [replay export](scripts/export_replay.py), [mesh fetcher](scripts/fetch_g1_meshes.py), recorded demos and [looping previews](assets/videos/) | three.js and G1 visual meshes; Isaac Sim rendering |
 | [Modal launcher](scripts/modal_dev.py), [preflight](scripts/isaac_preflight.py), [asset inventory](scripts/isaac_g1_asset.py), [recording](scripts/isaac_video.py), [observer](scripts/isaac_observe.py), tests and documentation | Modal SDK, NumPy, FFmpeg/libx264, Ubuntu/libXt, OpenSSH, Git and uv |
 
-## Assets and licenses
+## License and third-party terms
+
+The original project source code, documentation and three project-trained policy checkpoints are open source under the [MIT License](LICENSE). Imported code, robot assets, upstream model weights and Meta services retain their own licenses and terms below; the MIT license does not replace them. GR00T weights are downloaded separately and are not included in the three project-trained checkpoints.
 
 | Component | Source and terms |
 | --- | --- |
