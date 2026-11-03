@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "description": "Project-rendered Isaac Sim rehearsal recordings at 2x speed. Original video frames retained without re-encoding. No audio, generated motion or interpolated frames added.",
+  "videos": [
+    {
+      "file": "pedestal-carry-2x.mp4",
+      "sha256": "2f51bd5b4434afa3c59835a51c2c05ff3bf3aa36eb663c5b142be571b0b802ae",
+      "bytes": 353520,
+      "playback_speed": 2,
+      "duration_seconds": 21.45,
+      "codec": "H.264",
+      "width": 640,
+      "height": 360,
+      "decoded_frames": 429,
+      "sources": [
+        {
+          "run_id": "20261101T142242.110139Z-rehearsal",
+          "sha256": "d2594664ca7da2096b491dc0a8a1b9c3839dc173049c94b3fe31a31b5e28a87a",
+          "duration_seconds": 42.9,
+          "frames": 429,
+          "output_start_seconds": 0
+        }
+      ]
+    },
+    {
+      "file": "two-moves-2x.mp4",
+      "sha256": "b6260bc75c8a9d56900131fce88d168b49604cce6998719f4d2c993cfee351b7",
+      "bytes": 728079,
+      "playback_speed": 2,
+      "duration_seconds": 46.45,
+      "codec": "H.264",
+      "width": 640,
+      "height": 360,
+      "decoded_frames": 929,
+      "sources": [
+        {
+          "run_id": "20261102T005739.951518Z-rehearsal",
+          "sha256": "95f4db18cb8aca13bff9dbe04f80ca0243763c5ecb46716397e7c6084c1ad5f6",
+          "duration_seconds": 46.0,
+          "frames": 460,
+          "output_start_seconds": 0
+        },
+        {
+          "run_id": "20261102T010002.234868Z-rehearsal",
+          "sha256": "7ec3d99f03c382c7d7ae61f9668da6c6da8b57aa036d521540fac45be0a6f046",
+          "duration_seconds": 46.9,
+          "frames": 469,
+          "output_start_seconds": 23.0
+        }
+      ],
+      "sequence_run_id": "20261102T005739.773949Z-sequence",
+      "scope": "The two completed moves, joined in order. The third wall-side item was not moved and is not included in this clip."
+    }
+  ]
+}

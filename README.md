@@ -6,6 +6,20 @@ For people who cannot move furniture themselves, this project explores three que
 
 Built for **Push the Frontier** at the Meta Global AI Developer Hackathon. This is a **VLM-guided humanoid controller**: all robot motion is simulated, with no physical robot involved.
 
+## Watch the rehearsals
+
+Both recordings play at **2× speed**.
+
+**Lift and carry · 21 s** — approach, grasp, lift, carry and set down.
+
+[MP4](assets/videos/pedestal-carry-2x.mp4)
+
+**Two moves in one room · 46 s** — two completed moves, joined in order; final placement errors of **1.1 and 1.4 cm**.
+
+[MP4](assets/videos/two-moves-2x.mp4)
+
+These are Isaac Sim recordings. The second clip includes the two completed moves only; a third item by the wall remained unmoved. [Recording provenance](assets/videos/manifest.json).
+
 ## Meta AI in Furniture-Moving Rehearsal
 
 | Meta model or package | What it does here |
@@ -142,7 +156,7 @@ Hardware/SDK-dependent checks may skip in the local environment. GPU execution a
 | [GR00T-to-Isaac adapter](scripts/g1_wbc.py), [controller runner](scripts/isaac_g1_wbc.py), contact/dynamics checks | GR00T-WBC Balance/Walk weights, G1 URDF and derived deployment/contact reference data |
 | [Parallel environments](scripts/isaac_g1_rl.py), [push PPO](scripts/isaac_g1_ppo.py), [lift](scripts/isaac_g1_lift.py), [corridor carry](scripts/isaac_g1_carry.py), [room policies](scripts/isaac_g1_room.py), evaluation scripts and [geometry](scripts/room_geometry.py) | Isaac Sim, Isaac Lab, RSL-RL, PyTorch, G1 USD assets |
 | Bundled [approach](models/approach.pt), [carry](models/carry.pt) and [push](models/push.pt) checkpoints, trained during the hackathon; [evaluation evidence](models/evaluation.json) | Frozen GR00T-WBC low-level policies and the training stack; GR00T weights are downloaded separately |
-| [Rehearsal](scripts/isaac_g1_rehearsal.py), [sequences](scripts/rehearsal_sequence.py), [server](scripts/rehearsal_server.py), [WebGL UI](web/), [replay export](scripts/export_replay.py), [mesh fetcher](scripts/fetch_g1_meshes.py) and recorded demos | three.js and G1 visual meshes |
+| [Rehearsal](scripts/isaac_g1_rehearsal.py), [sequences](scripts/rehearsal_sequence.py), [server](scripts/rehearsal_server.py), [WebGL UI](web/), [replay export](scripts/export_replay.py), [mesh fetcher](scripts/fetch_g1_meshes.py), recorded demos and [MP4 previews](assets/videos/) | three.js and G1 visual meshes; Isaac Sim rendering |
 | [Modal launcher](scripts/modal_dev.py), [preflight](scripts/isaac_preflight.py), [asset inventory](scripts/isaac_g1_asset.py), [recording](scripts/isaac_video.py), [observer](scripts/isaac_observe.py), tests and documentation | Modal SDK, NumPy, FFmpeg/libx264, Ubuntu/libXt, OpenSSH, Git and uv |
 
 ## Assets and licenses
@@ -158,6 +172,7 @@ Hardware/SDK-dependent checks may skip in the local environment. GPU execution a
 | Training stack | [Isaac Lab](https://github.com/isaac-sim/IsaacLab/tree/v3.0.0) and [RSL-RL](https://pypi.org/project/rsl-rl-lib/5.5.1/) use BSD-3-Clause; [PyTorch](https://github.com/pytorch/pytorch/blob/main/LICENSE)/Torchvision use BSD-style notices; Warp uses Apache-2.0 and bundled notices. |
 | Local tools and infrastructure | NumPy and its bundled notices; [Modal SDK](https://github.com/modal-labs/modal-client) Apache-2.0; [uv](https://github.com/astral-sh/uv) MIT/Apache-2.0; OpenSSH component licenses; Git GPL-2.0; Ubuntu package notices and libXt MIT/X11-style notices. |
 | Video encoding | [FFmpeg](https://github.com/FFmpeg/FFmpeg/blob/n6.1.1/LICENSE.md) with libx264 is invoked as a separate process; the selected build includes GPL terms. Retain distribution copyright and linked-library notices. |
+| README videos | Rendered from this project's Isaac Sim rehearsals during the hackathon, using the G1 assets credited above. MP4 previews retain the original frames at 2× speed. [Source runs and hashes](assets/videos/manifest.json). |
 
 Dependency versions and hashes live in the root and Modal `uv.lock` files and the pinned Isaac runtime configuration. Retain installed distributions' license files when redistributing binaries. Keys belong in environment variables or the ignored `.env`. Only the three selected project-trained checkpoints and their manifest/evaluation records are included; downloaded upstream weights, other training checkpoints, API caches and experiment outputs stay out of Git.
 
