@@ -13,6 +13,8 @@
                                      to web/demos/<job>/ for replay)
 - POST /api/voice                    {scene, audio_base64}: a spoken move (WAV) -> Muse Voice Transcribe text -> Muse Spark
                                      picks the item and where it goes relative to another item -> a spot in the room
+- GET /api/upload-options            call/cost estimate and door-reference defaults for browser image conversion
+- POST /api/convert-room             confirmed image + reference -> a locally registered, editable 3D room estimate
 
 The Meta API key never leaves the Mac except as the remote run's standard input, so it is not in any command line or
 log. Bind to localhost only.
@@ -27,6 +29,8 @@ from functools import partial
 import http.server
 import json
 from pathlib import Path
+import re
+import shlex
 import subprocess
 from urllib.parse import parse_qs, urlparse
 
@@ -35,6 +39,7 @@ import isaac_g1_rehearsal as rehearsal
 import meta_models
 import rehearsal_advisor as advisor
 import rehearsal_sequence as sequence
+import room_upload
 
 ROOT = Path(__file__).resolve().parents[1]
 REMOTE_REPO = "/workspace/repo/Furniture-Moving-Rehearsal"
@@ -70,7 +75,7 @@ class Remote:
 
 
 def scene_path(scene_id):
-    if not scene_id or "/" in scene_id or scene_id.startswith("."):
+    if not isinstance(scene_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", scene_id):
         raise ValueError(f"Bad scene id: {scene_id}")
     path = ROOT / "configs/scenes" / f"{scene_id}.json"
     if not path.is_file():
@@ -102,7 +107,8 @@ def scene_view(scene_id, config, trainings):
             "detections": [{k: d[k] for k in ("id", "phrase", "box_px", "image_px", "confidence")} for d in scene.get("detections", [])],
             "door": spec["door"], "reference": scene.get("reference"),
             "detection_ids": {f["id"]: f["detection_id"] for f in spec["furniture"]},
-            "appearance": export_replay.appearance(scene, meta_models.MetaModels(transport=export_replay.cache_only))}
+            "notes": spec.get("notes", ""), "warnings": scene.get("checks_failed", []), "uploaded": scene_id.startswith("upload-"),
+            "appearance": scene.get("appearance") or export_replay.appearance(scene, meta_models.MetaModels(transport=export_replay.cache_only))}
 
 
 def choose_strategy(request, scene, config, trainings):
@@ -307,6 +313,18 @@ class Jobs:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(request, indent=1) + "\n")
         relative = f"configs/requests/{job}.json"
+        # Uploaded scenes are local/ignored; send their immutable spec and photo with the requested rehearsal.
+        scene_relative = request.get("scene", "")
+        if re.fullmatch(r"configs/scenes/upload-[a-f0-9]{32}\.json", scene_relative):
+            uploaded = ROOT / scene_relative
+            spec = json.loads(uploaded.read_text())
+            image_relative = spec["image"]
+            if not re.fullmatch(r"outputs/uploads/upload-[a-f0-9]{32}/photo\.png", image_relative):
+                raise ValueError("Invalid uploaded scene image")
+            for name in (scene_relative, image_relative):
+                parent = shlex.quote(f"{REMOTE_REPO}/{Path(name).parent}")
+                destination = shlex.quote(f"{REMOTE_REPO}/{name}")
+                self.remote(f"mkdir -p {parent} && cat > {destination}", (ROOT / name).read_bytes())
         self.remote(f"mkdir -p {REMOTE_REPO}/configs/requests && cat > {REMOTE_REPO}/{relative}", path.read_bytes())
         runner = (f"scripts/rehearsal_sequence.py --sequence {relative}" if moves is not None else
                   f"scripts/isaac_g1_rehearsal.py --request {relative}")
@@ -381,12 +399,25 @@ def handler(config, trainings, jobs):
         def api(self, method):
             url = urlparse(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}") if method == "POST" else {}
             try:
+                size = int(self.headers.get("Content-Length", 0))
+                if size < 0 or size > (9 * 1024 * 1024 if url.path == "/api/convert-room" else 40 * 1024 * 1024):
+                    return self.reply({"error": "Request is too large"}, 413)
+                if url.path == "/api/convert-room" and self.headers.get("Origin"):
+                    origin = urlparse(self.headers["Origin"])
+                    if origin.scheme != "http" or origin.netloc != self.headers.get("Host"):
+                        return self.reply({"error": "Open the upload form on this local server"}, 403)
+                body = json.loads(self.rfile.read(size) or b"{}") if method == "POST" else {}
+                if not isinstance(body, dict):
+                    raise ValueError("Expected a JSON object")
                 if url.path == "/api/scenes":
                     return self.reply([p.stem for p in sorted((ROOT / "configs/scenes").glob("*.json"))])
                 if url.path == "/api/scene":
                     return self.reply(scene_view(query.get("id"), config, trainings))
+                if url.path == "/api/upload-options" and method == "GET":
+                    return self.reply(room_upload.estimate())
+                if url.path == "/api/convert-room" and method == "POST":
+                    return self.reply(room_upload.convert(body))
                 if url.path == "/api/feasible" and method == "POST":
                     return self.reply(feasible(body, config, trainings))
                 if url.path == "/api/check" and method == "POST":
@@ -398,7 +429,7 @@ def handler(config, trainings, jobs):
                 if url.path == "/api/job":
                     return self.reply(jobs.status(query.get("id")))
                 return self.reply({"error": "not found"}, 404)
-            except (ValueError, RuntimeError, FileNotFoundError, subprocess.CalledProcessError) as error:
+            except (ValueError, RuntimeError, OSError, subprocess.CalledProcessError) as error:
                 return self.reply({"error": str(error)}, 400)
 
         def do_GET(self):

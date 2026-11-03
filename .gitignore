@@ -31,6 +31,7 @@ wandb/
 data/
 web/vendor/g1/meshes/
 configs/requests/
+configs/scenes/upload-*.json
 /models/*
 *.pt
 *.pth

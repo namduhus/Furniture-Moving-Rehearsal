@@ -144,7 +144,7 @@ Hardware/SDK-dependent checks may skip in the local environment. GPU execution a
 | [web/](web/) | Interactive viewer, recorded demos and vendored browser dependencies |
 | [scripts/rehearsal_server.py](scripts/rehearsal_server.py) | Local API, move queue and remote job orchestration |
 | [scripts/isaac_g1_rehearsal.py](scripts/isaac_g1_rehearsal.py), [sequence runner](scripts/rehearsal_sequence.py) | Single and sequential physics rehearsals |
-| [scripts/meta_models.py](scripts/meta_models.py), [advisor](scripts/rehearsal_advisor.py), [scene conversion](scripts/scene_from_image.py) | Meta calls, strategy/diagnosis and photo-to-scene conversion |
+| [scripts/meta_models.py](scripts/meta_models.py), [advisor](scripts/rehearsal_advisor.py), [scene conversion](scripts/scene_from_image.py), [room uploads](scripts/room_upload.py) | Meta calls, strategy/diagnosis, browser upload and photo-to-scene conversion |
 | [configs/](configs/) | Runtime, controller, training, scene and request settings |
 | [models/](models/) | Three bundled project-trained policies, hashes and evaluation evidence |
 | [tests/](tests/), [test fixtures](tests/fixtures/), [assets/references/](assets/references/) | Offline checks, historical regression profiles and pinned robot/reference data |
@@ -154,7 +154,7 @@ Hardware/SDK-dependent checks may skip in the local environment. GPU execution a
 
 | Built during the hackathon | Imported components |
 | --- | --- |
-| [Meta client](scripts/meta_models.py), [scene conversion](scripts/scene_from_image.py), [advisor](scripts/rehearsal_advisor.py), [image prompts](configs/home_images.json) | Meta Model API: SAM 3.1, Muse Spark, Muse Voice Transcribe, Muse Image; meta-sam-parser |
+| [Meta client](scripts/meta_models.py), [scene conversion](scripts/scene_from_image.py), [browser upload pipeline](scripts/room_upload.py), [advisor](scripts/rehearsal_advisor.py), [image prompts](configs/home_images.json) | Meta Model API: SAM 3.1, Muse Spark, Muse Voice Transcribe, Muse Image; meta-sam-parser |
 | [GR00T-to-Isaac adapter](scripts/g1_wbc.py), [controller runner](scripts/isaac_g1_wbc.py), contact/dynamics checks | GR00T-WBC Balance/Walk weights, G1 URDF and derived deployment/contact reference data |
 | [Parallel environments](scripts/isaac_g1_rl.py), [push PPO](scripts/isaac_g1_ppo.py), [lift](scripts/isaac_g1_lift.py), [corridor carry](scripts/isaac_g1_carry.py), [room policies](scripts/isaac_g1_room.py), evaluation scripts and [geometry](scripts/room_geometry.py) | Isaac Sim, Isaac Lab, RSL-RL, PyTorch, G1 USD assets |
 | Bundled [approach](models/approach.pt), [carry](models/carry.pt) and [push](models/push.pt) checkpoints, trained during the hackathon; [evaluation evidence](models/evaluation.json) | Frozen GR00T-WBC low-level policies and the training stack; GR00T weights are downloaded separately |
