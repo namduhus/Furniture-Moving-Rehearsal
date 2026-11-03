@@ -4,7 +4,7 @@
 
 **A simulated humanoid tries the furniture move first.**
 
-For people who cannot move furniture themselves, this project explores three questions: **Can it be moved? How can it be moved? Can the result be explained simply?** A room photo and reference dimension become an editable 3D scene. The user selects furniture and a destination by clicking or speaking, confirms the preview, and a Unitree G1 rehearses the move in Isaac Sim. Muse Spark explains the result in plain English or Korean.
+For people who cannot move furniture themselves, this project explores three questions: **Can it be moved? How can it be moved? Can the result be explained simply?** Upload a room image and enter a door's known dimensions to build an editable 3D room estimate. Select furniture and a destination by clicking or speaking, confirm the preview, and a Unitree G1 rehearses the move in Isaac Sim. Muse Spark explains the result in plain English or Korean.
 
 Built for **Push the Frontier** at the Meta Global AI Developer Hackathon. This is a **VLM-guided humanoid controller**: all robot motion is simulated, with no physical robot involved.
 
@@ -34,15 +34,16 @@ These are Isaac Sim recordings. The second clip includes the two completed moves
 
 Model calls share the cached [Meta client](scripts/meta_models.py); the [scene config](configs/scene_from_image.json) and [advisor config](configs/rehearsal_advisor.json) pin the Spark model. Meta supplies scene interpretation, intent and strategy; Isaac Sim and the controller execute the motion and measure the outcome. Recorded playback reuses saved results without calling the models.
 
-## What the demo shows
+## What you can try
 
-| Demo | Recorded result |
+| Experience | Result |
 | --- | --- |
+| Upload your room image | SAM 3.1 + Muse Spark produce an editable 3D room estimate using the door dimensions you enter; no GPU needed for conversion |
 | Light pedestal | Approach, grasp, lift, carry and set down |
 | Heavy bookcase | Failed lift → Muse Spark diagnosis → push on furniture sliders |
 | Two moves in one room | Placement errors of 1.1 and 1.4 cm; a third item by the wall remained unmoved after wall contact |
 
-The WebGL viewer replays recorded robot link poses and furniture motion. Its **How Meta built this room** view overlays SAM masks and estimated dimensions on the source photo. **Try it** lets users correct furniture, preview destinations, queue moves and request a new rehearsal.
+The WebGL viewer replays recorded robot link poses and furniture motion. Its **How Meta built this room** view overlays SAM masks and estimated dimensions on the source photo. **Upload room image** opens your converted scene directly; **Try it** opens a prepared room. In either room, correct furniture, preview destinations, queue moves and request a new rehearsal.
 
 The placement numbers describe the included recordings, not a general success guarantee. Grasping uses rigid hand–object attachments; the carry demo uses corrected dimensions and mass, and the push demo assumes furniture sliders. The submitted scene flow covers room rearrangement; it does not demonstrate arbitrary homes or hallway/corner passage.
 
@@ -83,7 +84,7 @@ uv run --locked python scripts/fetch_g1_meshes.py
 python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
-Open **http://127.0.0.1:8000/web/**. The mesh fetcher downloads and verifies about 31 MB of G1 visual assets on first use. The three recorded demos need neither an API key nor a GPU. The static server does not run new rehearsals.
+Open **http://127.0.0.1:8000/web/**. The mesh fetcher downloads and verifies about 31 MB of G1 visual assets on first use. The three recorded demos need neither an API key nor a GPU. Upload, voice and new-rehearsal features require the local API server below.
 
 ## Try a new move
 
