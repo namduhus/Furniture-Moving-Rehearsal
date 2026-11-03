@@ -51,5 +51,33 @@
       "sequence_run_id": "20261102T005739.773949Z-sequence",
       "scope": "The two completed moves, joined in order. The third wall-side item was not moved and is not included in this clip."
     }
+  ],
+  "animated_previews": [
+    {
+      "bytes": 1393119,
+      "duration_seconds": 21.45,
+      "file": "pedestal-carry-2x.gif",
+      "fps": 10,
+      "frames": 215,
+      "height": 270,
+      "loop_count": 0,
+      "width": 480,
+      "sha256": "45617c301beb0f4808382414c67df432cf3f6640e96cdd2f99ed965f8147d926",
+      "source_file": "pedestal-carry-2x.mp4",
+      "playback_speed": 2
+    },
+    {
+      "bytes": 3015402,
+      "duration_seconds": 46.45,
+      "file": "two-moves-2x.gif",
+      "fps": 10,
+      "frames": 465,
+      "height": 270,
+      "loop_count": 0,
+      "width": 480,
+      "sha256": "196247a77ea62348070f31257dd7ce71fe01eb881c5d2640ed28432d9c5f248d",
+      "source_file": "two-moves-2x.mp4",
+      "playback_speed": 2
+    }
   ]
 }
